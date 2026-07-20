@@ -1,0 +1,9 @@
+﻿node_modules
+dist
+.turbo
+.env
+.env.*
+coverage
+*.db
+*.db-journal
+.vscode
