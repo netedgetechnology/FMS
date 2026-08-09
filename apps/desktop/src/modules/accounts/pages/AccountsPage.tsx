@@ -1,0 +1,349 @@
+﻿import {
+    CreditCard,
+    Landmark,
+    WalletCards,
+} from "lucide-react";
+
+import { useState } from "react";
+
+import {
+    EmptyState,
+    PageHeader,
+} from "@/components/common";
+
+import {
+    AccountTable,
+    AddAccountDialog,
+    EditAccountDialog,
+    ViewAccountDialog,
+} from "../components";
+
+import { useAccounts } from "../hooks";
+import { AccountService } from "../services";
+import { Account } from "../types";
+import { AccountType } from "../types/AccountType";
+export default function AccountsPage() {
+
+    const {
+        accounts,
+        loading,
+        error,
+        refresh,
+    } = useAccounts();
+    const [viewingAccount, setViewingAccount] = useState<Account | null>(null);
+    const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+
+    async function handleDeleteAccount(account: Account) {
+        const confirmed = window.confirm(
+            `Delete account "${account.name}"?`
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        const service = new AccountService();
+        await service.delete(account.id);
+        await refresh();
+    }
+
+
+    const activeAccounts = accounts.filter(
+        account => account.isActive
+    ).length;
+
+
+    const bankAccounts = accounts.filter(
+        account =>
+            account.type === AccountType.SAVINGS ||
+            account.type === AccountType.CURRENT
+    ).length;
+
+
+    const creditCards = accounts.filter(
+        account => account.type === AccountType.CREDIT_CARD
+    ).length;
+const loans = accounts.filter(
+    account => account.type === AccountType.LOAN
+).length;
+
+const investments = accounts.filter(
+    account => account.type === AccountType.INVESTMENT
+).length;
+
+
+    const totalBalance = accounts.reduce(
+        (total, account) =>
+            total + Number(account.openingBalance ?? 0),
+        0
+    );
+
+
+    const formattedBalance = new Intl.NumberFormat(
+        "en-IN",
+        {
+            style: "currency",
+            currency: "INR",
+            maximumFractionDigits: 2,
+        }
+    ).format(totalBalance);
+
+
+    return (
+        <div className="min-h-full bg-slate-50">
+
+            <div className="w-full space-y-6">
+
+                <PageHeader
+                    title="Accounts"
+                    subtitle="Manage your bank accounts, cards, wallets and investments."
+                    actions={
+                        <AddAccountDialog
+                            onSuccess={refresh}
+                        />
+                    }
+                />
+
+
+                            <section className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-5">
+
+                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-start justify-between">
+                        <div>
+                            <div className="text-caption font-medium text-slate-500">
+                                Total Balance
+                            </div>
+                            <div className="mt-3 text-card-value amount leading-none tracking-[-0.02em] text-[#0F172A]">
+                                {formattedBalance}
+                            </div>
+                        </div>
+
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EEF4FF] shadow-sm">
+                            <WalletCards size={20} className="text-[#2563EB]" />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-start justify-between">
+                        <div>
+                            <div className="text-caption font-medium text-slate-500">
+                                Bank Accounts
+                            </div>
+                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                                {bankAccounts}
+                            </div>
+                            <div className="mt-4 text-small text-slate-400">
+                                {activeAccounts} active accounts
+                            </div>
+                        </div>
+
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#ECFDF3] shadow-sm">
+                            <Landmark size={20} className="text-[#16A34A]" />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-start justify-between">
+                        <div>
+                            <div className="text-caption font-medium text-slate-500">
+                                Credit Cards
+                            </div>
+                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                                {creditCards}
+                            </div>
+                            <div className="mt-4 text-small text-slate-400">
+                                Active financial accounts
+                            </div>
+                        </div>
+
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3E8FF] shadow-sm">
+                            <CreditCard size={20} className="text-[#7C3AED]" />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-start justify-between">
+                        <div>
+                            <div className="text-caption font-medium text-slate-500">
+                                Loans
+                            </div>
+                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                                {loans}
+                            </div>
+                            <div className="mt-4 text-small text-slate-400">
+                                Active loans
+                            </div>
+                        </div>
+
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF7ED] shadow-sm">
+                            <Landmark size={20} className="text-[#EA580C]" />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-start justify-between">
+                        <div>
+                            <div className="text-caption font-medium text-slate-500">
+                                Investments
+                            </div>
+                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                                {investments}
+                            </div>
+                            <div className="mt-4 text-small text-slate-400">
+                                Investment accounts
+                            </div>
+                        </div>
+
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EFF6FF] shadow-sm">
+                            <WalletCards size={20} className="text-[#2563EB]" />
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+
+
+                <section className="rounded-[28px] border border-slate-100 bg-white p-7 shadow-sm transition-all duration-200">
+
+                    <div className="mb-6 flex items-start justify-between">
+
+                        <div>
+                            <h2 className="text-[22px] font-bold text-slate-900">
+                                Accounts
+                            </h2>
+
+                            <p className="mt-1 text-[15px] text-slate-500">
+                                All your financial accounts in one place.
+                            </p>
+                        </div>
+
+
+                        <div
+                            className="
+                                flex
+                                h-11
+                                w-[315px]
+                                items-center
+                                rounded-2xl
+                                border
+                                border-slate-200
+                                bg-slate-50
+                                px-4
+                                transition-all
+                                duration-200
+                                focus-within:border-slate-300
+                                focus-within:bg-white
+                                focus-within:shadow-sm
+                            "
+                        >
+                            <input
+                                type="search"
+                                placeholder="Search accounts..."
+                                className="
+                                    w-full
+                                    bg-transparent
+                                    text-sm
+                                    text-slate-700
+                                    outline-none
+                                    placeholder:text-slate-400
+                                "
+                            />
+                        </div>
+
+                    </div>
+
+
+                    {loading && (
+                        <div className="flex min-h-[240px] items-center justify-center">
+                            <p className="text-sm text-slate-400">
+                                Loading accounts...
+                            </p>
+                        </div>
+                    )}
+
+
+                    {!loading && error && (
+                        <div className="flex min-h-[240px] items-center justify-center">
+                            <p className="text-sm text-red-500">
+                                {error}
+                            </p>
+                        </div>
+                    )}
+
+
+                    {!loading &&
+                        !error &&
+                        accounts.length === 0 && (
+                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 px-6 py-12">
+                                <EmptyState
+                                    title="No accounts yet"
+                                    description="Add your first bank account, credit card, wallet or investment account to start managing your finances."
+                                />
+                            </div>
+                        )}
+
+
+                    {!loading &&
+                        !error &&
+                        accounts.length > 0 && (
+                            <div
+                                className="
+                                    overflow-hidden
+                                    rounded-2xl
+                                    border
+                                    border-slate-100
+                                    [&_tbody_tr]:transition-colors
+                                    [&_tbody_tr:hover]:bg-slate-50
+                                "
+                            >
+                                <AccountTable
+                                accounts={accounts}
+                                onView={setViewingAccount}
+                                onEdit={setEditingAccount}
+                                onDelete={handleDeleteAccount}
+                            />
+                            </div>
+                        )}
+
+                </section>
+
+            </div>
+
+                <ViewAccountDialog
+                account={viewingAccount}
+                open={viewingAccount !== null}
+                onOpenChange={open => {
+                    if (!open) {
+                        setViewingAccount(null);
+                    }
+                }}
+            />
+
+            <EditAccountDialog
+                account={editingAccount}
+                open={editingAccount !== null}
+                onOpenChange={open => {
+                    if (!open) {
+                        setEditingAccount(null);
+                    }
+                }}
+                onSuccess={async () => {
+                    setEditingAccount(null);
+                    await refresh();
+                }}
+            />
+    </div>
+    );
+}
+
+
+
+
+
+
+
+
