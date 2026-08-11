@@ -1,0 +1,35 @@
+import {
+    InvestmentStatus,
+} from "./InvestmentStatus";
+
+export interface CreateInvestmentRequest {
+    accountId?: string | null;
+
+    name: string;
+
+    investmentType: string;
+
+    symbol?: string | null;
+
+    isin?: string | null;
+
+    currencyId: string;
+
+    brokerInstitutionId?: string | null;
+
+    brokerInstitutionName?: string | null;
+
+    quantity: number;
+
+    averageCost: number;
+
+    currentPrice: number;
+
+    currentValue: number;
+
+    purchaseDate?: string | null;
+
+    status: InvestmentStatus;
+
+    notes?: string;
+}

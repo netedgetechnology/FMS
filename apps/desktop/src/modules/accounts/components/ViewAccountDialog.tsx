@@ -41,12 +41,13 @@ function Detail({
     value?: string | null;
 }) {
     return (
-        <div>
+        <div className="min-w-0">
             <div className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-400">
                 {label}
             </div>
-            <div className="mt-1 text-sm font-medium text-slate-700">
-                {value || "—"}
+
+            <div className="mt-1.5 break-words text-sm font-medium text-slate-800">
+                {value || "â€”"}
             </div>
         </div>
     );
@@ -71,85 +72,110 @@ export function ViewAccountDialog({
                     gap-0
                     overflow-hidden
                     rounded-[28px]
-                    border border-slate-100
+                    border-0
                     bg-white
                     p-0
-                    shadow-lg
+                    shadow-xl
+                    ring-0
                 "
             >
                 <DialogHeader className="px-7 pb-5 pt-6">
-                    <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        {account.name}
-                    </DialogTitle>
+                    <div className="pr-8">
+                        <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
+                            {account.name}
+                        </DialogTitle>
 
-                    <DialogDescription className="mt-1 text-sm text-slate-500">
-                        Account details
-                    </DialogDescription>
+                        <DialogDescription className="mt-1.5 text-sm text-slate-500">
+                            Account details and information
+                        </DialogDescription>
+                    </div>
                 </DialogHeader>
 
-                <div className="border-t border-slate-100 px-7 py-6">
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-5">
-                        <Detail
-                            label="Account Type"
-                            value={formatType(account.type)}
-                        />
+                <div className="space-y-6 bg-white px-7 pb-7">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="rounded-2xl bg-slate-50 px-5 py-4">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-400">
+                                Balance
+                            </div>
 
-                        <Detail
-                            label="Institution"
-                            value={account.institutionName}
-                        />
+                            <div className="mt-2 text-xl font-semibold tracking-tight text-slate-900">
+                                {formatCurrency(
+                                    Number(account.openingBalance ?? 0),
+                                    account.currencyId
+                                )}
+                            </div>
+                        </div>
 
-                        <Detail
-                            label="Currency"
-                            value={account.currencyId}
-                        />
+                        <div className="rounded-2xl bg-slate-50 px-5 py-4">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-400">
+                                Status
+                            </div>
 
-                        <Detail
-                            label="Balance"
-                            value={formatCurrency(
-                                Number(account.openingBalance ?? 0),
-                                account.currencyId
-                            )}
-                        />
+                            <div className="mt-2">
+                                <span
+                                    className={
+                                        account.isActive
+                                            ? "inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"
+                                            : "inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+                                    }
+                                >
+                                    {account.isActive ? "Active" : "Inactive"}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
 
-                        <Detail
-                            label="Account Number"
-                            value={account.accountNumber || null}
-                        />
+                    <div className="rounded-2xl border border-slate-100 bg-white p-5">
+                        <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+                            <Detail
+                                label="Account Type"
+                                value={formatType(account.type)}
+                            />
 
-                        <Detail
-                            label="Status"
-                            value={account.isActive ? "Active" : "Inactive"}
-                        />
+                            <Detail
+                                label="Institution"
+                                value={account.institutionName}
+                            />
 
-                        <Detail
-                            label="Branch"
-                            value={account.branchName}
-                        />
+                            <Detail
+                                label="Currency"
+                                value={account.currencyId}
+                            />
 
-                        <Detail
-                            label="IFSC"
-                            value={account.ifscCode}
-                        />
+                            <Detail
+                                label="Account Number"
+                                value={account.accountNumber}
+                            />
 
-                        <Detail
-                            label="SWIFT"
-                            value={account.swiftCode}
-                        />
+                            <Detail
+                                label="Branch"
+                                value={account.branchName}
+                            />
 
-                        <Detail
-                            label="IBAN"
-                            value={account.iban}
-                        />
+                            <Detail
+                                label="IFSC"
+                                value={account.ifscCode}
+                            />
+
+                            <Detail
+                                label="SWIFT"
+                                value={account.swiftCode}
+                            />
+
+                            <Detail
+                                label="IBAN"
+                                value={account.iban}
+                            />
+                        </div>
                     </div>
 
                     {account.description && (
-                        <div className="mt-6 border-t border-slate-100 pt-5">
+                        <div className="border-t border-slate-100 pt-5">
                             <div className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-400">
                                 Description
                             </div>
 
-                            <p className="mt-1.5 text-sm leading-6 text-slate-600">
+                            <p className="mt-2 text-sm leading-6 text-slate-600">
                                 {account.description}
                             </p>
                         </div>
@@ -159,6 +185,3 @@ export function ViewAccountDialog({
         </Dialog>
     );
 }
-
-
-

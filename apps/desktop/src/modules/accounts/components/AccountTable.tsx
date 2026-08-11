@@ -82,7 +82,7 @@ export function AccountTable({
 
                                 {account.accountNumber && (
                                     <div className="mt-0.5 text-[11px] text-slate-400">
-                                        •••• {account.accountNumber.slice(-4)}
+                                        {account.accountNumber}
                                     </div>
                                 )}
                             </td>
@@ -92,7 +92,7 @@ export function AccountTable({
                             </td>
 
                             <td className="px-4 py-3 text-sm text-slate-600">
-                                {account.institutionName || "—"}
+                                {account.institutionName || "ï¿½"}
                             </td>
 
                             <td className="px-4 py-3 text-sm text-slate-500">
@@ -158,3 +158,5 @@ export function AccountTable({
         </div>
     );
 }
+
+

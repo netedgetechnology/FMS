@@ -1,10 +1,24 @@
-﻿import {
+import {
     CreditCard,
+    Eye,
     Landmark,
+    Plus,
     WalletCards,
 } from "lucide-react";
 
 import { useState } from "react";
+import { toast } from "sonner";
+
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 import {
     EmptyState,
@@ -32,23 +46,38 @@ export default function AccountsPage() {
     } = useAccounts();
     const [viewingAccount, setViewingAccount] = useState<Account | null>(null);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+    const [selectedAccountFilter, setSelectedAccountFilter] = useState<
+        "BANK" | AccountType.CREDIT_CARD | AccountType.LOAN | AccountType.INVESTMENT | null
+    >(null);
 
-    async function handleDeleteAccount(account: Account) {
-        const confirmed = window.confirm(
-            `Delete account "${account.name}"?`
-        );
+const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
+const [deleting, setDeleting] = useState(false);
+    function handleDeleteAccount(account: Account) {
+        setDeletingAccount(account);
+    }
 
-        if (!confirmed) {
+    async function confirmDeleteAccount() {
+        if (!deletingAccount || deleting) {
             return;
         }
 
-        const service = new AccountService();
-        await service.delete(account.id);
-        await refresh();
+        setDeleting(true);
+
+        try {
+            const service = new AccountService();
+            await service.delete(deletingAccount.id);
+            await refresh();
+
+            toast.success("Account deleted successfully.");
+            setDeletingAccount(null);
+        } catch (error) {
+            console.error("Failed to delete account:", error);
+            toast.error("Unable to delete the account. Please try again.");
+        } finally {
+            setDeleting(false);
+        }
     }
-
-
-    const activeAccounts = accounts.filter(
+const activeAccounts = accounts.filter(
         account => account.isActive
     ).length;
 
@@ -72,7 +101,20 @@ const investments = accounts.filter(
 ).length;
 
 
-    const totalBalance = accounts.reduce(
+    const filteredAccounts =
+    selectedAccountFilter === null
+        ? accounts
+        : selectedAccountFilter === "BANK"
+            ? accounts.filter(
+                account =>
+                    account.type === AccountType.SAVINGS ||
+                    account.type === AccountType.CURRENT
+            )
+            : accounts.filter(
+                account => account.type === selectedAccountFilter
+            );
+
+const totalBalance = accounts.reduce(
         (total, account) =>
             total + Number(account.openingBalance ?? 0),
         0
@@ -106,108 +148,227 @@ const investments = accounts.filter(
 
 
                             <section className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-5">
+<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+        <div className="flex items-start justify-between">
+            <div>
+                <div className="text-caption font-medium text-slate-500">
+                    Total Balance
+                </div>
+                <div className="mt-3 text-card-value amount leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {formattedBalance}
+                </div>
+            </div>
 
-                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
-                    <div className="flex items-start justify-between">
-                        <div>
-                            <div className="text-caption font-medium text-slate-500">
-                                Total Balance
-                            </div>
-                            <div className="mt-3 text-card-value amount leading-none tracking-[-0.02em] text-[#0F172A]">
-                                {formattedBalance}
-                            </div>
-                        </div>
-
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EEF4FF] shadow-sm">
-                            <WalletCards size={20} className="text-[#2563EB]" />
-                        </div>
-                    </div>
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EEF4FF] shadow-sm">
+                <WalletCards size={20} className="text-[#2563EB]" />
+            </div>
+        </div>
+    </div>
+<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+        <div className="flex items-start justify-between">
+            <div>
+                <div className="text-caption font-medium text-slate-500">
+                    Bank Accounts
                 </div>
 
-                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
-                    <div className="flex items-start justify-between">
-                        <div>
-                            <div className="text-caption font-medium text-slate-500">
-                                Bank Accounts
-                            </div>
-                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
-                                {bankAccounts}
-                            </div>
-                            <div className="mt-4 text-small text-slate-400">
-                                {activeAccounts} active accounts
-                            </div>
-                        </div>
-
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#ECFDF3] shadow-sm">
-                            <Landmark size={20} className="text-[#16A34A]" />
-                        </div>
-                    </div>
+                <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {bankAccounts}
                 </div>
 
-                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
-                    <div className="flex items-start justify-between">
-                        <div>
-                            <div className="text-caption font-medium text-slate-500">
-                                Credit Cards
-                            </div>
-                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
-                                {creditCards}
-                            </div>
-                            <div className="mt-4 text-small text-slate-400">
-                                Active financial accounts
-                            </div>
-                        </div>
+                <div className="mt-4 text-small text-slate-400">
+                    {activeAccounts} active accounts
+                </div>
+            </div>
 
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3E8FF] shadow-sm">
-                            <CreditCard size={20} className="text-[#7C3AED]" />
-                        </div>
-                    </div>
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#ECFDF3] shadow-sm">
+                <Landmark size={20} className="text-[#16A34A]" />
+            </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+                type="button"
+                onClick={() => setSelectedAccountFilter("BANK")}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            >
+                <Eye size={14} />
+            </button>
+
+            <AddAccountDialog
+                defaultValues={{ type: AccountType.SAVINGS }}
+                onSuccess={refresh}
+                trigger={
+                    <button
+                        type="button"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                        title="Add bank account"
+                        aria-label="Add bank account"
+                    >
+                        <Plus size={16} />
+                    </button>
+                }
+            />
+        </div>
+    </div>
+<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+        <div className="flex items-start justify-between">
+            <div>
+                <div className="text-caption font-medium text-slate-500">
+                    Credit Cards
                 </div>
 
-                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
-                    <div className="flex items-start justify-between">
-                        <div>
-                            <div className="text-caption font-medium text-slate-500">
-                                Loans
-                            </div>
-                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
-                                {loans}
-                            </div>
-                            <div className="mt-4 text-small text-slate-400">
-                                Active loans
-                            </div>
-                        </div>
-
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF7ED] shadow-sm">
-                            <Landmark size={20} className="text-[#EA580C]" />
-                        </div>
-                    </div>
+                <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {creditCards}
                 </div>
 
-                <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
-                    <div className="flex items-start justify-between">
-                        <div>
-                            <div className="text-caption font-medium text-slate-500">
-                                Investments
-                            </div>
-                            <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
-                                {investments}
-                            </div>
-                            <div className="mt-4 text-small text-slate-400">
-                                Investment accounts
-                            </div>
-                        </div>
+                <div className="mt-4 text-small text-slate-400">
+                    Active financial accounts
+                </div>
+            </div>
 
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EFF6FF] shadow-sm">
-                            <WalletCards size={20} className="text-[#2563EB]" />
-                        </div>
-                    </div>
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F3E8FF] shadow-sm">
+                <CreditCard size={20} className="text-[#7C3AED]" />
+            </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+                type="button"
+                onClick={() => setSelectedAccountFilter(AccountType.CREDIT_CARD)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            >
+                <Eye size={14} />
+            </button>
+
+            <AddAccountDialog
+                defaultValues={{ type: AccountType.CREDIT_CARD }}
+                onSuccess={refresh}
+                trigger={
+                    <button
+                        type="button"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                        title="Add credit card"
+                        aria-label="Add credit card"
+                    >
+                        <Plus size={16} />
+                    </button>
+                }
+            />
+        </div>
+    </div>
+<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+        <div className="flex items-start justify-between">
+            <div>
+                <div className="text-caption font-medium text-slate-500">
+                    Loans
                 </div>
 
-            </section>
+                <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {loans}
+                </div>
+
+                <div className="mt-4 text-small text-slate-400">
+                    Active loans
+                </div>
+            </div>
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF7ED] shadow-sm">
+                <Landmark size={20} className="text-[#EA580C]" />
+            </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+                type="button"
+                onClick={() => setSelectedAccountFilter(AccountType.LOAN)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            >
+                <Eye size={14} />
+            </button>
+
+            <AddAccountDialog
+                defaultValues={{ type: AccountType.LOAN }}
+                onSuccess={refresh}
+                trigger={
+                    <button
+                        type="button"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                        title="Add loan"
+                        aria-label="Add loan"
+                    >
+                        <Plus size={16} />
+                    </button>
+                }
+            />
+        </div>
+    </div>
+<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+        <div className="flex items-start justify-between">
+            <div>
+                <div className="text-caption font-medium text-slate-500">
+                    Investments
+                </div>
+
+                <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {investments}
+                </div>
+
+                <div className="mt-4 text-small text-slate-400">
+                    Investment accounts
+                </div>
+            </div>
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EFF6FF] shadow-sm">
+                <WalletCards size={20} className="text-[#2563EB]" />
+            </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+                type="button"
+                onClick={() => setSelectedAccountFilter(AccountType.INVESTMENT)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            >
+                <Eye size={14} />
+            </button>
+
+            <AddAccountDialog
+                defaultValues={{ type: AccountType.INVESTMENT }}
+                onSuccess={refresh}
+                trigger={
+                    <button
+                        type="button"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                        title="Add investment"
+                        aria-label="Add investment"
+                    >
+                        <Plus size={16} />
+                    </button>
+                }
+            />
+        </div>
+    </div>
+
+</section>
 
 
                 <section className="rounded-[28px] border border-slate-100 bg-white p-7 shadow-sm transition-all duration-200">
+
+                {selectedAccountFilter !== null && (
+                    <div className="mb-5 flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3">
+                        <div className="text-sm font-medium text-slate-600">
+                            Showing filtered accounts
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={() => setSelectedAccountFilter(null)}
+                            className="text-xs font-semibold text-slate-500 transition-colors hover:text-slate-900"
+                        >
+                            Show All
+                        </button>
+                    </div>
+                )}
 
                     <div className="mb-6 flex items-start justify-between">
 
@@ -301,7 +462,7 @@ const investments = accounts.filter(
                                 "
                             >
                                 <AccountTable
-                                accounts={accounts}
+                                accounts={filteredAccounts}
                                 onView={setViewingAccount}
                                 onEdit={setEditingAccount}
                                 onDelete={handleDeleteAccount}
@@ -336,9 +497,77 @@ const investments = accounts.filter(
                     await refresh();
                 }}
             />
-    </div>
+            <AlertDialog
+            open={deletingAccount !== null}
+            onOpenChange={open => {
+                if (!open && !deleting) {
+                    setDeletingAccount(null);
+                }
+            }}
+        >
+            <AlertDialogContent
+    className="max-w-md gap-0 overflow-hidden rounded-2xl border-0 bg-white p-0 shadow-xl ring-0"
+>
+    <AlertDialogHeader className="px-6 pt-6 pb-5">
+        <AlertDialogTitle className="text-base font-semibold text-slate-900">
+            Delete Account?
+        </AlertDialogTitle>
+
+        <AlertDialogDescription className="mt-2 text-sm leading-6 text-slate-500">
+            Are you sure you want to delete
+            <span className="font-medium text-slate-800">
+                {" "}{deletingAccount?.name}
+            </span>
+            ?
+            <br />
+            This action cannot be undone.
+        </AlertDialogDescription>
+    </AlertDialogHeader>
+
+    <AlertDialogFooter className="border-0 bg-slate-50 px-6 py-4">
+        <AlertDialogCancel
+            disabled={deleting}
+            className="h-9 rounded-lg border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50 hover:text-slate-900"
+        >
+            Cancel
+        </AlertDialogCancel>
+
+        <AlertDialogAction
+            disabled={deleting}
+            onClick={confirmDeleteAccount}
+            className="h-9 rounded-lg bg-red-600 px-4 text-sm font-medium text-white shadow-none hover:bg-red-700"
+        >
+            {deleting ? "Deleting..." : "Delete Account"}
+        </AlertDialogAction>
+    </AlertDialogFooter>
+</AlertDialogContent>
+        </AlertDialog>
+</div>
     );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -11,43 +11,49 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 
-import { AccountForm } from "./AccountForm";
-import { AccountService } from "../services";
-import { AccountFormValues } from "../validation";
+import { LoanForm } from "./LoanForm";
+import { LoanService } from "../services";
+import { EMIScheduleService } from "../services/EMIScheduleService";
+import type { LoanFormValues } from "../validation";
 
-export interface AddAccountDialogProps {
+export interface AddLoanDialogProps {
     onSuccess?: () => Promise<void> | void;
-    defaultValues?: Partial<AccountFormValues>;
+    defaultValues?: Partial<LoanFormValues>;
     trigger?: ReactElement;
 }
 
-export function AddAccountDialog({
+export function AddLoanDialog({
     onSuccess,
     defaultValues,
     trigger,
-}: AddAccountDialogProps) {
-
-    const service = new AccountService();
+}: AddLoanDialogProps) {
+    const service = new LoanService();
+    const emiScheduleService = new EMIScheduleService();
 
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
 
-    async function handleSubmit(values: AccountFormValues) {
+    async function handleSubmit(values: LoanFormValues) {
         try {
             setLoading(true);
 
-            await service.create(values);
+            const loanId = await service.create(values);
+            await emiScheduleService.generateSchedule(loanId);
             await onSuccess?.();
 
-            toast.success("Account created successfully.");
+            toast.success("Loan created successfully.");
+
             setOpen(false);
         } catch (error) {
-            console.error("Failed to create account:", error);
+            console.error(
+                "Failed to create loan:",
+                error
+            );
 
             toast.error(
                 error instanceof Error
                     ? error.message
-                    : "Failed to create account. Please try again."
+                    : "Failed to create loan. Please try again."
             );
         } finally {
             setLoading(false);
@@ -60,28 +66,25 @@ export function AddAccountDialog({
             onOpenChange={setOpen}
         >
             <DialogTrigger
-            render={
-                trigger ?? (
-                    <button
-                        type="button"
-                        className="h-10 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 hover:shadow-md active:scale-[0.98]"
-                    >
-                        Add Account
-                    </button>
-                )
-            }
-        >
-                Add Account
+                render={
+                    trigger ?? (
+                        <button
+                            type="button"
+                            className="h-10 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 hover:shadow-md active:scale-[0.98]"
+                        >
+                            Add Loan
+                        </button>
+                    )
+                }
+            >
+                Add Loan
             </DialogTrigger>
 
             <DialogContent
                 showCloseButton
                 className="
-                    flex
-                    w-[780px]
+                    w-[820px]
                     max-w-[calc(100vw-48px)]
-                    max-h-[calc(100vh-48px)]
-                    flex-col
                     gap-0
                     overflow-hidden
                     rounded-[28px]
@@ -91,21 +94,22 @@ export function AddAccountDialog({
                     shadow-lg
                 "
             >
-                <DialogHeader className="shrink-0 px-7 pb-4 pt-5">
+                <DialogHeader className="px-7 pb-4 pt-5">
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        Add Account
+                        Add Loan
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm text-slate-500">
-                        Add a bank account, credit card, wallet or investment account.
+                        Add a loan, define its terms and track
+                        outstanding balances.
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-4">
-                    <AccountForm
-                    defaultValues={defaultValues}
+                <div className="max-h-[calc(100vh-180px)] overflow-y-auto border-t border-slate-100 px-7 py-5">
+                    <LoanForm
+                        defaultValues={defaultValues}
                         loading={loading}
-                        submitLabel="Create Account"
+                        submitLabel="Create Loan"
                         onSubmit={handleSubmit}
                         onCancel={() => setOpen(false)}
                     />
@@ -114,14 +118,4 @@ export function AddAccountDialog({
         </Dialog>
     );
 }
-
-
-
-
-
-
-
-
-
-
 

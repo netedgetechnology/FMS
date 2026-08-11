@@ -23,6 +23,7 @@ import {
 } from "../validation";
 
 import { ACCOUNT_TYPE_OPTIONS } from "../constants";
+import { AccountType } from "../types";
 
 export interface AccountFormProps {
     defaultValues?: Partial<AccountFormValues>;
@@ -65,6 +66,8 @@ export function AccountForm({
         register,
         control,
         handleSubmit,
+        watch,
+        setValue,
     reset,
     formState: { errors },
     } = useForm<AccountFormInput, unknown, AccountFormValues>({
@@ -80,11 +83,75 @@ export function AccountForm({
             ifscCode: "",
             swiftCode: "",
             iban: "",
+        cardNetwork: "VISA",
+        creditLimit: 0,
+        statementDay: undefined,
+        paymentDueDay: undefined,
+
+        loanType: "",
+        principalAmount: 0,
+        interestRate: 0,
+        interestType: "REDUCING",
+        tenureMonths: undefined,
+        emiAmount: 0,
+        startDate: "",
+        maturityDate: "",
+        outstandingPrincipal: 0,
+        outstandingInterest: 0,
+        loanStatus: "ACTIVE",
             description: "",
             isActive: true,
             ...defaultValues,
         },
     });
+    const accountType = watch("type");
+
+    const tenureMonths = Number(watch("tenureMonths"));
+    const startDate = watch("startDate");
+
+    useEffect(() => {
+        if (
+            accountType !== AccountType.LOAN ||
+            !startDate ||
+            !tenureMonths ||
+            !Number.isFinite(tenureMonths) ||
+            tenureMonths <= 0
+        ) {
+            return;
+        }
+
+        const date = new Date(`${startDate}T00:00:00Z`);
+
+        if (Number.isNaN(date.getTime())) {
+            return;
+        }
+
+        date.setUTCMonth(
+            date.getUTCMonth() + Math.trunc(tenureMonths)
+        );
+
+        const maturityDate =
+            date.toISOString().slice(0, 10);
+
+        setValue("maturityDate", maturityDate, {
+            shouldValidate: true,
+            shouldDirty: true,
+        });
+    }, [
+        accountType,
+        startDate,
+        tenureMonths,
+        setValue,
+    ]);
+    const isBankAccount =
+        accountType === AccountType.SAVINGS ||
+        accountType === AccountType.CURRENT;
+
+    const isCreditCard =
+        accountType === AccountType.CREDIT_CARD;
+
+    const isLoan =
+        accountType === AccountType.LOAN;
 
     useEffect(() => {
         if (defaultValues) {
@@ -99,6 +166,11 @@ export function AccountForm({
                 ifscCode: defaultValues.ifscCode ?? "",
                 swiftCode: defaultValues.swiftCode ?? "",
                 iban: defaultValues.iban ?? "",
+            cardNetwork: defaultValues.cardNetwork ?? "VISA",
+            creditLimit: defaultValues.creditLimit ?? 0,
+            statementDay: defaultValues.statementDay ?? undefined,
+            paymentDueDay: defaultValues.paymentDueDay ?? undefined,
+
                 description: defaultValues.description ?? "",
                 isActive: defaultValues.isActive ?? true,
             });
@@ -186,7 +258,7 @@ export function AccountForm({
                     </FormField>
 
                     <FormField
-                    label="Institution"
+                    label="Bank"
                     htmlFor="institutionName"
                     error={errors.institutionName?.message}
                 >
@@ -238,6 +310,7 @@ export function AccountForm({
                 </div>
             </Section>
 
+            {isBankAccount && (
             <Section title="Banking Details">
                 <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
 
@@ -254,7 +327,7 @@ export function AccountForm({
                     </FormField>
 
                     <FormField
-                        label="Branch Name"
+                        label="Branch"
                         htmlFor="branchName"
                         error={errors.branchName?.message}
                     >
@@ -266,7 +339,7 @@ export function AccountForm({
                     </FormField>
 
                     <FormField
-                        label="IFSC Code"
+                        label="IFSC"
                         htmlFor="ifscCode"
                         error={errors.ifscCode?.message}
                     >
@@ -278,7 +351,7 @@ export function AccountForm({
                     </FormField>
 
                     <FormField
-                        label="SWIFT / BIC"
+                        label="SWIFT"
                         htmlFor="swiftCode"
                         error={errors.swiftCode?.message}
                     >
@@ -300,10 +373,330 @@ export function AccountForm({
                             {...register("iban")}
                         />
                     </FormField>
+
                 </div>
             </Section>
+        )}
+    {isCreditCard && (
+        <Section title="Card Details">
+            <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
 
-            <Section title="Financial">
+                <FormField
+                    label="Card Number"
+                    htmlFor="accountNumber"
+                    error={errors.accountNumber?.message}
+                >
+                    <Input
+                        id="accountNumber"
+                        placeholder="Card number"
+                        {...register("accountNumber")}
+                    />
+                </FormField>
+
+                <FormField
+                    label="Card Network"
+                    htmlFor="cardNetwork"
+                    error={errors.cardNetwork?.message}
+                >
+                    <Controller
+                        control={control}
+                        name="cardNetwork"
+                        render={({ field }) => (
+                            <Select
+                                value={field.value}
+                                onValueChange={field.onChange}
+                            >
+                                <SelectTrigger id="cardNetwork">
+                                    <SelectValue placeholder="Select card network" />
+                                </SelectTrigger>
+
+                                <SelectContent>
+                                    <SelectItem value="VISA">
+                                        Visa
+                                    </SelectItem>
+                                    <SelectItem value="MASTERCARD">
+                                        Mastercard
+                                    </SelectItem>
+                                    <SelectItem value="AMEX">
+                                        American Express
+                                    </SelectItem>
+                                    <SelectItem value="RUPAY">
+                                        RuPay
+                                    </SelectItem>
+                                    <SelectItem value="OTHER">
+                                        Other
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                        )}
+                    />
+                </FormField>
+
+                <FormField
+                    label="Credit Limit"
+                    htmlFor="creditLimit"
+                    error={errors.creditLimit?.message}
+                >
+                    <Input
+                        id="creditLimit"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0.00"
+                        {...register("creditLimit", {
+                            valueAsNumber: true,
+                        })}
+                    />
+                </FormField>
+
+                <FormField
+                    label="Statement Date"
+                    htmlFor="statementDay"
+                    error={errors.statementDay?.message}
+                >
+                    <Input
+                        id="statementDay"
+                        type="number"
+                        min="1"
+                        max="31"
+                        placeholder="Day of month (1-31)"
+                        {...register("statementDay", {
+                            valueAsNumber: true,
+                        })}
+                    />
+                </FormField>
+
+                <FormField
+                    label="Payment Due Date"
+                    htmlFor="paymentDueDay"
+                    error={errors.paymentDueDay?.message}
+                >
+                    <Input
+                        id="paymentDueDay"
+                        type="number"
+                        min="1"
+                        max="31"
+                        placeholder="Day of month (1-31)"
+                        {...register("paymentDueDay", {
+                            valueAsNumber: true,
+                        })}
+                    />
+                </FormField>
+
+            </div>
+        </Section>
+    )}
+{isLoan && (
+    <Section title="Loan Details">
+        <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
+
+            <FormField
+                label="Loan Type"
+                htmlFor="loanType"
+                error={errors.loanType?.message}
+            >
+                <Input
+                    id="loanType"
+                    placeholder="e.g. Home Loan, Personal Loan"
+                    {...register("loanType")}
+                />
+            </FormField>
+
+            <FormField
+                label="Principal Amount"
+                htmlFor="principalAmount"
+                error={errors.principalAmount?.message}
+            >
+                <Input
+                    id="principalAmount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...register("principalAmount", {
+                        valueAsNumber: true,
+                    })}
+                />
+            </FormField>
+
+            <FormField
+                label="Interest Rate"
+                htmlFor="interestRate"
+                error={errors.interestRate?.message}
+            >
+                <Input
+                    id="interestRate"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="e.g. 8.50"
+                    {...register("interestRate", {
+                        valueAsNumber: true,
+                    })}
+                />
+            </FormField>
+
+            <FormField
+                label="Interest Type"
+                htmlFor="interestType"
+                error={errors.interestType?.message}
+            >
+                <Controller
+                    control={control}
+                    name="interestType"
+                    render={({ field }) => (
+                        <Select
+                            value={field.value}
+                            onValueChange={field.onChange}
+                        >
+                            <SelectTrigger id="interestType">
+                                <SelectValue placeholder="Select interest type" />
+                            </SelectTrigger>
+
+                            <SelectContent>
+                                <SelectItem value="REDUCING">
+                                    Reducing Balance
+                                </SelectItem>
+                                <SelectItem value="FLAT">
+                                    Flat Rate
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                    )}
+                />
+            </FormField>
+
+            <FormField
+                label="Tenure"
+                htmlFor="tenureMonths"
+                error={errors.tenureMonths?.message}
+            >
+                <Input
+                    id="tenureMonths"
+                    type="number"
+                    min="1"
+                    placeholder="Months"
+                    {...register("tenureMonths", {
+                        valueAsNumber: true,
+                    })}
+                />
+            </FormField>
+
+            <FormField
+                label="EMI Amount"
+                htmlFor="emiAmount"
+                error={errors.emiAmount?.message}
+            >
+                <Input
+                    id="emiAmount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...register("emiAmount", {
+                        valueAsNumber: true,
+                    })}
+                />
+            </FormField>
+
+            <FormField
+                label="Start Date"
+                htmlFor="startDate"
+                error={errors.startDate?.message}
+            >
+                <Input
+                    id="startDate"
+                    type="date"
+                    {...register("startDate")}
+                />
+            </FormField>
+
+            <FormField
+                label="Maturity Date"
+                htmlFor="maturityDate"
+                error={errors.maturityDate?.message}
+            >
+                <Input
+                    id="maturityDate"
+                    type="date"
+                    {...register("maturityDate")}
+                />
+            </FormField>
+
+            <FormField
+                label="Outstanding Principal"
+                htmlFor="outstandingPrincipal"
+                error={errors.outstandingPrincipal?.message}
+            >
+                <Input
+                    id="outstandingPrincipal"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...register("outstandingPrincipal", {
+                        valueAsNumber: true,
+                    })}
+                />
+            </FormField>
+
+            <FormField
+                label="Outstanding Interest"
+                htmlFor="outstandingInterest"
+                error={errors.outstandingInterest?.message}
+            >
+                <Input
+                    id="outstandingInterest"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    {...register("outstandingInterest", {
+                        valueAsNumber: true,
+                    })}
+                />
+            </FormField>
+
+            <FormField
+                label="Loan Status"
+                htmlFor="loanStatus"
+                error={errors.loanStatus?.message}
+            >
+                <Controller
+                    control={control}
+                    name="loanStatus"
+                    render={({ field }) => (
+                        <Select
+                            value={field.value}
+                            onValueChange={field.onChange}
+                        >
+                            <SelectTrigger id="loanStatus">
+                                <SelectValue placeholder="Select loan status" />
+                            </SelectTrigger>
+
+                            <SelectContent>
+                                <SelectItem value="ACTIVE">
+                                    Active
+                                </SelectItem>
+                                <SelectItem value="CLOSED">
+                                    Closed
+                                </SelectItem>
+                                <SelectItem value="ON_HOLD">
+                                    On Hold
+                                </SelectItem>
+                                <SelectItem value="DEFAULTED">
+                                    Defaulted
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                    )}
+                />
+            </FormField>
+
+        </div>
+    </Section>
+)}
+<Section title="Financial">
                 <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
 
                     <FormField
@@ -397,6 +790,32 @@ export function AccountForm({
         </form>
     );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
