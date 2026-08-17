@@ -5,6 +5,7 @@ import Dashboard from "@/modules/dashboard/Dashboard";
 import AccountsPage from "@/modules/accounts";
 import { LoansPage } from "@/modules/loans";
 import { InvestmentsPage } from "@/modules/investments";
+import ReportsPage from "@/modules/reports";
 
 export default function AppRoutes() {
   return (
@@ -18,10 +19,12 @@ export default function AppRoutes() {
 
         <Route path="/loans" element={<LoansPage />} />
         <Route path="/investments" element={<InvestmentsPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
       </Route>
     </Routes>
   );
 }
+
 
 
 

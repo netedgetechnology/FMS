@@ -1,4 +1,4 @@
-import * as React from "react";
+﻿import * as React from "react";
 
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -34,10 +34,11 @@ export function FormField({
             {children}
 
             {error && (
-                <p className="text-destructive text-sm">
+                <p className="text-xs leading-4 text-red-600">
                     {error}
                 </p>
             )}
         </div>
     );
 }
+

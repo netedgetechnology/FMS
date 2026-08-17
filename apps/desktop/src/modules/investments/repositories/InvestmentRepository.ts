@@ -164,6 +164,31 @@ export class InvestmentRepository extends Repository {
         );
     }
 
+    async updatePortfolioValues(
+        id: string,
+        quantity: number,
+        averageCost: number,
+        currentValue: number
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE investments
+            SET
+                quantity = ?,
+                average_cost = ?,
+                current_value = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND deleted_at IS NULL
+            `,
+            [
+                quantity,
+                averageCost,
+                currentValue,
+                id,
+            ]
+        );
+    }
     async delete(
         id: string
     ): Promise<void> {
@@ -179,3 +204,4 @@ export class InvestmentRepository extends Repository {
         );
     }
 }
+

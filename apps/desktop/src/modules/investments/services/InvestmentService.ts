@@ -8,12 +8,19 @@ import {
     UpdateInvestmentRequest,
 } from "../types";
 
+import {
+    InvestmentTransactionService,
+} from "./InvestmentTransactionService";
+
 export class InvestmentService {
     private readonly repository =
         new InvestmentRepository();
 
     private readonly institutionRepository =
         new InstitutionRepository();
+
+    private readonly transactionService =
+        new InvestmentTransactionService();
 
     private async resolveBrokerInstitutionId(
         institutionName?: string | null,
@@ -30,7 +37,9 @@ export class InvestmentService {
         }
 
         const existing =
-            await this.institutionRepository.getByName(name);
+            await this.institutionRepository.getByName(
+                name
+            );
 
         if (existing) {
             return existing.id;
@@ -75,9 +84,10 @@ export class InvestmentService {
             id: crypto.randomUUID(),
 
             accountId:
-                request.accountId ?? null,
+                request.accountId?.trim() || null,
 
-            name: request.name,
+            name:
+                request.name,
 
             investmentType:
                 request.investmentType,
@@ -114,14 +124,45 @@ export class InvestmentService {
             notes:
                 request.notes,
 
-            createdAt: now,
+            createdAt:
+                now,
 
-            updatedAt: now,
+            updatedAt:
+                now,
         };
 
         await this.repository.create(
             investment
         );
+
+        /*
+         * The initial quantity/cost entered while creating
+         * an investment represents the position that already
+         * existed before FinanceOS started tracking transactions.
+         *
+         * Store that position as an OPENING_BALANCE transaction
+         * so all future portfolio calculations are transaction-driven.
+         */
+        if (
+            investment.quantity > 0 &&
+            investment.averageCost >= 0
+        ) {
+            try {
+                await this.transactionService.createOpeningBalance(
+                    investment.id,
+                    investment.quantity,
+                    investment.averageCost,
+                    investment.purchaseDate ??
+                        now.slice(0, 10)
+                );
+            } catch (error) {
+                await this.repository.delete(
+                    investment.id
+                );
+
+                throw error;
+            }
+        }
 
         return investment.id;
     }
@@ -137,6 +178,8 @@ export class InvestmentService {
 
         await this.repository.update({
             ...request,
+            accountId:
+                request.accountId?.trim() || null,
             brokerInstitutionId,
         });
     }
@@ -147,3 +190,5 @@ export class InvestmentService {
         await this.repository.delete(id);
     }
 }
+
+

@@ -11,51 +11,98 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 
-import { InvestmentForm } from "./InvestmentForm";
-import { InvestmentService } from "../services";
-import type { InvestmentFormValues } from "../validation";
+import { InvestmentTransactionForm } from "./InvestmentTransactionForm";
 
-export interface AddInvestmentDialogProps {
+import {
+    InvestmentTransactionService,
+} from "../services";
+
+import type {
+    InvestmentTransaction,
+} from "../types";
+
+import type {
+    InvestmentTransactionFormValues,
+} from "../validation";
+
+export interface EditInvestmentTransactionDialogProps {
+    transaction: InvestmentTransaction;
     onSuccess?: () => Promise<void> | void;
-    defaultValues?: Partial<InvestmentFormValues>;
     trigger?: ReactElement;
 }
 
-export function AddInvestmentDialog({
+export function EditInvestmentTransactionDialog({
+    transaction,
     onSuccess,
-    defaultValues,
     trigger,
-}: AddInvestmentDialogProps) {
-    const service = new InvestmentService();
+}: EditInvestmentTransactionDialogProps) {
+    const service =
+        new InvestmentTransactionService();
 
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
 
+    const defaultValues:
+        Partial<InvestmentTransactionFormValues> = {
+        transactionType:
+            transaction.transactionType,
+
+        transactionDate:
+            transaction.transactionDate,
+
+        quantity:
+            transaction.quantity,
+
+        price:
+            transaction.price,
+
+        amount:
+            transaction.amount,
+
+        fees:
+            transaction.fees,
+
+        taxes:
+            transaction.taxes,
+
+        referenceNumber:
+            transaction.referenceNumber ?? "",
+
+        notes:
+            transaction.notes ?? "",
+    };
+
     async function handleSubmit(
-        values: InvestmentFormValues
+        values: InvestmentTransactionFormValues
     ) {
         try {
             setLoading(true);
 
-            await service.create(values);
+            await service.update({
+                id: transaction.id,
+                ...values,
+            });
+
             await onSuccess?.();
 
             toast.success(
-                "Investment created successfully."
+                "Investment transaction updated successfully."
             );
 
             setOpen(false);
         } catch (error) {
             console.error(
-                "Failed to create investment:",
+                "Failed to update investment transaction:",
                 error
             );
 
             toast.error(
                 error instanceof Error
                     ? error.message
-                    : "Failed to create investment. Please try again."
+                    : "Failed to update investment transaction. Please try again."
             );
+
+            throw error;
         } finally {
             setLoading(false);
         }
@@ -64,21 +111,25 @@ export function AddInvestmentDialog({
     return (
         <Dialog
             open={open}
-            onOpenChange={setOpen}
+            onOpenChange={(nextOpen) => {
+                if (!loading) {
+                    setOpen(nextOpen);
+                }
+            }}
         >
             <DialogTrigger
                 render={
                     trigger ?? (
                         <button
                             type="button"
-                            className="h-10 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 hover:shadow-md active:scale-[0.98]"
+                            className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                         >
-                            Add Investment
+                            Edit
                         </button>
                     )
                 }
             >
-                Add Investment
+                {trigger ? null : "Edit"}
             </DialogTrigger>
 
             <DialogContent
@@ -100,20 +151,20 @@ export function AddInvestmentDialog({
             >
                 <DialogHeader className="shrink-0 px-7 pb-4 pt-5">
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        Add Investment
+                        Edit Investment Transaction
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm text-slate-500">
-                        Add an investment and track its
-                        holding, cost and current value.
+                        Update the transaction details and save the changes.
                     </DialogDescription>
                 </DialogHeader>
 
                 <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-5">
-                    <InvestmentForm
+                    <InvestmentTransactionForm
+                        key={transaction.id}
                         defaultValues={defaultValues}
                         loading={loading}
-                        submitLabel="Create Investment"
+                        submitLabel="Save Changes"
                         onSubmit={handleSubmit}
                         onCancel={() => setOpen(false)}
                     />
