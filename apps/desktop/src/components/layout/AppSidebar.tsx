@@ -7,6 +7,7 @@ import {
   IconPigMoney,
   IconChartBar,
   IconReportAnalytics,
+  IconCategory,
   IconSettings,
 } from "@tabler/icons-react";
 
@@ -21,6 +22,7 @@ const menu = [
   { icon: IconPigMoney, label: "Investments", path: "/investments" },
   { icon: IconChartBar, label: "Loans", path: "/loans" },
   { icon: IconReportAnalytics, label: "Reports", path: "/reports" },
+  { icon: IconCategory, label: "Categories", path: "/categories" },
   { icon: IconSettings, label: "Settings", path: "/settings" },
 ];
 
@@ -86,5 +88,6 @@ export default function AppSidebar() {
     </aside>
   );
 }
+
 
 
