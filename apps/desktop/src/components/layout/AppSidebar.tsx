@@ -1,6 +1,7 @@
 import {
   IconDashboard,
   IconBuildingBank,
+  IconBuildingStore,
   IconReceipt,
   IconWallet,
   IconPigMoney,
@@ -14,6 +15,7 @@ import { NavLink } from "react-router-dom";
 const menu = [
   { icon: IconDashboard, label: "Dashboard", path: "/dashboard" },
   { icon: IconBuildingBank, label: "Accounts", path: "/accounts" },
+  { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
   { icon: IconWallet, label: "Budgets", path: "/budgets" },
   { icon: IconPigMoney, label: "Investments", path: "/investments" },
@@ -84,4 +86,5 @@ export default function AppSidebar() {
     </aside>
   );
 }
+
 
