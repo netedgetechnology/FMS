@@ -8,6 +8,7 @@ import { InvestmentsPage } from "@/modules/investments";
 import ReportsPage from "@/modules/reports";
 import CategoriesPage from "@/modules/categories";
 import { BusinessEntitiesPage } from "@/modules/business-entities";
+import TransactionsPage from "@/modules/transactions/pages/TransactionsPage";
 
 export default function AppRoutes() {
   return (
@@ -24,10 +25,12 @@ export default function AppRoutes() {
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/business-entities" element={<BusinessEntitiesPage />} />
+        <Route path="/transactions" element={<TransactionsPage />} />
       </Route>
     </Routes>
   );
 }
+
 
 
 
