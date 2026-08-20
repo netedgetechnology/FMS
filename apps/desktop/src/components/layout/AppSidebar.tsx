@@ -4,6 +4,7 @@ import {
   IconBuildingStore,
   IconReceipt,
   IconWallet,
+  IconTarget,
   IconPigMoney,
   IconChartBar,
   IconReportAnalytics,
@@ -18,8 +19,9 @@ const menu = [
   { icon: IconBuildingBank, label: "Accounts", path: "/accounts" },
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
-    { icon: IconWallet, label: "Budgets", path: "/budgets" },
+  { icon: IconWallet, label: "Budgets", path: "/budgets" },
   { icon: IconWallet, label: "Financial Plans", path: "/financial-plans" },
+  { icon: IconTarget, label: "Financial Goals", path: "/financial-goals" },
   { icon: IconPigMoney, label: "Investments", path: "/investments" },
   { icon: IconChartBar, label: "Loans", path: "/loans" },
   { icon: IconReportAnalytics, label: "Reports", path: "/reports" },
@@ -29,9 +31,9 @@ const menu = [
 
 export default function AppSidebar() {
   return (
-    <aside className="flex h-screen w-[220px] shrink-0 flex-col bg-white border-r border-slate-100">
+    <aside className="flex h-screen w-[220px] shrink-0 flex-col border-r border-slate-100 bg-white">
 
-      <div className="px-8 pt-10 pb-8">
+      <div className="px-8 pb-8 pt-10">
 
         <h1 className="text-[28px] font-extrabold tracking-tight text-[#0F172A]">
           FinanceOS
@@ -89,7 +91,3 @@ export default function AppSidebar() {
     </aside>
   );
 }
-
-
-
-
