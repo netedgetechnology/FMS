@@ -18,7 +18,8 @@ const menu = [
   { icon: IconBuildingBank, label: "Accounts", path: "/accounts" },
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
-  { icon: IconWallet, label: "Budgets", path: "/budgets" },
+    { icon: IconWallet, label: "Budgets", path: "/budgets" },
+  { icon: IconWallet, label: "Financial Plans", path: "/financial-plans" },
   { icon: IconPigMoney, label: "Investments", path: "/investments" },
   { icon: IconChartBar, label: "Loans", path: "/loans" },
   { icon: IconReportAnalytics, label: "Reports", path: "/reports" },
@@ -88,6 +89,7 @@ export default function AppSidebar() {
     </aside>
   );
 }
+
 
 
 

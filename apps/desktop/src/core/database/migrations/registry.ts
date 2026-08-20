@@ -8,6 +8,7 @@ import { PlanningMigration } from "./007_planning";
 import { ApplicationInfrastructureMigration } from "./008_application_infrastructure";
 import { CurrencyExpansionMigration } from "./009_currency_expansion";
 import { CreditCardsMigration } from "./010_credit_cards";
+import { FinancialPlanCategoriesMigration } from "./011_financial_plan_categories";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -19,6 +20,6 @@ export const migrations = [
     PlanningMigration,
     ApplicationInfrastructureMigration,
     CurrencyExpansionMigration,
-CreditCardsMigration,
+    CreditCardsMigration,
+    FinancialPlanCategoriesMigration,
 ];
-
