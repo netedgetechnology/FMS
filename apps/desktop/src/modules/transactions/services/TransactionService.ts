@@ -26,9 +26,28 @@ export class TransactionService {
         return await this.repository.getById(id);
     }
 
+    async findDuplicate(
+        accountId: string,
+        transactionDate: string,
+        type: TransactionType,
+        amount: number,
+        referenceNumber: string | null,
+        payee: string,
+        description: string
+    ): Promise<Transaction | null> {
+        return await this.repository.findDuplicate(
+            accountId,
+            transactionDate,
+            type,
+            amount,
+            referenceNumber,
+            payee,
+            description
+        );
+    }
     async create(
         request: CreateTransactionRequest
-    ): Promise<void> {
+    ): Promise<string> {
         const now =
             new Date().toISOString();
 
@@ -54,6 +73,8 @@ export class TransactionService {
         await this.repository.create(
             transaction
         );
+
+        return transaction.id;
     }
 
     async update(
@@ -78,6 +99,4 @@ export class TransactionService {
         await this.repository.delete(id);
     }
 }
-
-
 

@@ -27,7 +27,7 @@ const negativeData = [
 export interface DashboardStatCardProps {
   title: string;
   value: string;
-  change: string;
+  change?: string | null;
   positive?: boolean;
   icon: LucideIcon;
   iconBackground: string;
@@ -43,8 +43,11 @@ export function DashboardStatCard({
   iconBackground,
   iconColor,
 }: DashboardStatCardProps) {
-  const chartColor = positive ? "#16A34A" : "#EF4444";
-  const data = positive ? positiveData : negativeData;
+  const chartColor =
+    positive ? "#16A34A" : "#EF4444";
+
+  const data =
+    positive ? positiveData : negativeData;
 
   return (
     <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
@@ -79,39 +82,45 @@ export function DashboardStatCard({
 
         <div>
 
-          <div
-            className={
-              positive
-                ? "flex items-center text-caption font-semibold text-emerald-600"
-                : "flex items-center text-caption font-semibold text-red-500"
-            }
-          >
+          {change ? (
+            <>
+              <div
+                className={
+                  positive
+                    ? "flex items-center text-caption font-semibold text-emerald-600"
+                    : "flex items-center text-caption font-semibold text-red-500"
+                }
+              >
 
-            {positive ? (
-              <ArrowUpRight size={14} />
-            ) : (
-              <ArrowDownRight size={14} />
-            )}
+                {positive ? (
+                  <ArrowUpRight size={14} />
+                ) : (
+                  <ArrowDownRight size={14} />
+                )}
 
-            <span className="ml-1">
-              {change}
-            </span>
+                <span className="ml-1">
+                  {change}
+                </span>
 
-          </div>
+              </div>
 
-          <div className="mt-1 text-small text-slate-400">
-            vs last month
-          </div>
+              <div className="mt-1 text-small text-slate-400">
+                vs last month
+              </div>
+            </>
+          ) : (
+            <div className="text-small text-slate-400">
+              Current period
+            </div>
+          )}
 
         </div>
 
         <div className="h-11 w-[66px]">
-
           <Sparkline
             color={chartColor}
             data={data}
           />
-
         </div>
 
       </div>
@@ -119,5 +128,3 @@ export function DashboardStatCard({
     </div>
   );
 }
-
-

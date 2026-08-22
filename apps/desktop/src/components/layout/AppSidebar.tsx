@@ -10,6 +10,7 @@ import {
   IconReportAnalytics,
   IconCategory,
   IconSettings,
+  IconFileImport,
 } from "@tabler/icons-react";
 
 import { NavLink } from "react-router-dom";
@@ -19,6 +20,7 @@ const menu = [
   { icon: IconBuildingBank, label: "Accounts", path: "/accounts" },
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
+  { icon: IconFileImport, label: "Imports", path: "/imports" },
   { icon: IconWallet, label: "Budgets", path: "/budgets" },
   { icon: IconWallet, label: "Financial Plans", path: "/financial-plans" },
   { icon: IconTarget, label: "Financial Goals", path: "/financial-goals" },
@@ -91,3 +93,4 @@ export default function AppSidebar() {
     </aside>
   );
 }
+

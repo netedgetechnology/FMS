@@ -131,6 +131,99 @@ export class TransactionRepository extends Repository {
 
     }
 
+    async findDuplicate(
+        accountId: string,
+        transactionDate: string,
+        type: string,
+        amount: number,
+        referenceNumber: string | null,
+        payee: string,
+        description: string
+    ): Promise<Transaction | null> {
+
+        if (referenceNumber) {
+            const referenceMatches =
+                await this.select<Transaction>(
+                    `
+                    SELECT
+                        id,
+                        account_id AS accountId,
+                        category_id AS categoryId,
+                        payee,
+                        type,
+                        amount,
+                        transaction_date AS transactionDate,
+                        reference_number AS referenceNumber,
+                        notes,
+                        created_at AS createdAt,
+                        updated_at AS updatedAt
+                    FROM transactions
+                    WHERE account_id = ?
+                      AND reference_number = ?
+                      AND deleted_at IS NULL
+                    LIMIT 1
+                    `,
+                    [
+                        accountId,
+                        referenceNumber,
+                    ]
+                );
+
+            if (referenceMatches[0]) {
+                return referenceMatches[0];
+            }
+        }
+
+        const matches =
+            await this.select<Transaction>(
+                `
+                SELECT
+                    id,
+                    account_id AS accountId,
+                    category_id AS categoryId,
+                    payee,
+                    type,
+                    amount,
+                    transaction_date AS transactionDate,
+                    reference_number AS referenceNumber,
+                    notes,
+                    created_at AS createdAt,
+                    updated_at AS updatedAt
+                FROM transactions
+                WHERE account_id = ?
+                  AND transaction_date = ?
+                  AND type = ?
+                  AND amount = ?
+                  AND deleted_at IS NULL
+                  AND (
+                      (
+                          ? <> ''
+                          AND LOWER(TRIM(payee)) =
+                              LOWER(TRIM(?))
+                      )
+                      OR
+                      (
+                          ? <> ''
+                          AND LOWER(TRIM(notes)) =
+                              LOWER(TRIM(?))
+                      )
+                  )
+                LIMIT 1
+                `,
+                [
+                    accountId,
+                    transactionDate,
+                    type,
+                    amount,
+                    payee,
+                    payee,
+                    description,
+                    description,
+                ]
+            );
+
+        return matches[0] ?? null;
+    }
     async delete(id: string): Promise<void> {
 
         await this.execute(
@@ -145,3 +238,5 @@ export class TransactionRepository extends Repository {
     }
 
 }
+
+

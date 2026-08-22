@@ -11,6 +11,8 @@ import { BusinessEntitiesPage } from "@/modules/business-entities";
 import TransactionsPage from "@/modules/transactions/pages/TransactionsPage";
 import { FinancialPlansPage } from "@/modules/financial-plans/pages";
 import { FinancialGoalsPage } from "@/modules/financial-goals/pages";
+import { BudgetsPage } from "@/modules/budgets/pages";
+import { ImportsPage } from "@/modules/imports/pages";
 
 export default function AppRoutes() {
   return (
@@ -51,7 +53,20 @@ export default function AppRoutes() {
           element={<FinancialGoalsPage />}
         />
 
+        <Route
+          path="/budgets"
+          element={<BudgetsPage />}
+        />
+        <Route
+          path="/imports"
+          element={<ImportsPage />}
+        />
+
       </Route>
     </Routes>
   );
 }
+
+
+
+

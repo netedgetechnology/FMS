@@ -10,6 +10,7 @@ import { CurrencyExpansionMigration } from "./009_currency_expansion";
 import { CreditCardsMigration } from "./010_credit_cards";
 import { FinancialPlanCategoriesMigration } from "./011_financial_plan_categories";
 import { FinancialGoalCategoriesMigration } from "./012_financial_goal_categories";
+import { ImportDuplicateCountMigration } from "./013_import_duplicate_count";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -24,5 +25,7 @@ export const migrations = [
     CreditCardsMigration,
     FinancialPlanCategoriesMigration,
     FinancialGoalCategoriesMigration,
+    ImportDuplicateCountMigration,
 ];
+
 
