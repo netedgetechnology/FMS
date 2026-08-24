@@ -1,5 +1,6 @@
 import {
     Transaction,
+    TransactionType,
     CreateTransactionRequest,
     UpdateTransactionRequest,
 } from "../types";
@@ -45,6 +46,7 @@ export class TransactionService {
             description
         );
     }
+
     async create(
         request: CreateTransactionRequest
     ): Promise<string> {
@@ -53,21 +55,75 @@ export class TransactionService {
 
         const transaction: Transaction = {
             id: createId(),
-            accountId: request.accountId,
+
+            accountId:
+                request.accountId,
+
             categoryId:
                 request.categoryId ?? null,
+
+            subcategoryId:
+                request.subcategoryId ?? null,
+
             payee:
                 request.payee?.trim() || "",
-            type: request.type,
-            amount: request.amount,
+
+            type:
+                request.type,
+
+            amount:
+                request.amount,
+
             transactionDate:
                 request.transactionDate,
+
             referenceNumber:
                 request.referenceNumber?.trim() || null,
+
             notes:
                 request.notes?.trim() || null,
-            createdAt: now,
-            updatedAt: now,
+
+            tags:
+                request.tags?.trim() || null,
+
+            status:
+                request.status ?? "CLEARED",
+
+            paymentMethod:
+                request.paymentMethod ?? null,
+
+            upiReference:
+                request.upiReference?.trim() || null,
+
+            bankTransactionReference:
+                request.bankTransactionReference?.trim() || null,
+
+            cardReference:
+                request.cardReference?.trim() || null,
+
+            reconciled:
+                request.reconciled ?? false,
+
+            reconciledAt:
+                request.reconciledAt ?? null,
+
+            isImported:
+                request.isImported ?? false,
+
+            sourceStatement:
+                request.sourceStatement?.trim() || null,
+
+            externalTransactionId:
+                request.externalTransactionId?.trim() || null,
+
+            originalNarration:
+                request.originalNarration?.trim() || null,
+
+            createdAt:
+                now,
+
+            updatedAt:
+                now,
         };
 
         await this.repository.create(
@@ -82,14 +138,57 @@ export class TransactionService {
     ): Promise<void> {
         await this.repository.update({
             ...request,
-            payee:
-                request.payee?.trim() || "",
+
             categoryId:
                 request.categoryId ?? null,
+
+            subcategoryId:
+                request.subcategoryId ?? null,
+
+            payee:
+                request.payee?.trim() || "",
+
             referenceNumber:
-                request.referenceNumber?.trim() || undefined,
+                request.referenceNumber?.trim() || null,
+
             notes:
-                request.notes?.trim() || undefined,
+                request.notes?.trim() || null,
+
+            tags:
+                request.tags?.trim() || null,
+
+            status:
+                request.status ?? "CLEARED",
+
+            paymentMethod:
+                request.paymentMethod ?? null,
+
+            upiReference:
+                request.upiReference?.trim() || null,
+
+            bankTransactionReference:
+                request.bankTransactionReference?.trim() || null,
+
+            cardReference:
+                request.cardReference?.trim() || null,
+
+            reconciled:
+                request.reconciled ?? false,
+
+            reconciledAt:
+                request.reconciledAt ?? null,
+
+            isImported:
+                request.isImported ?? false,
+
+            sourceStatement:
+                request.sourceStatement?.trim() || null,
+
+            externalTransactionId:
+                request.externalTransactionId?.trim() || null,
+
+            originalNarration:
+                request.originalNarration?.trim() || null,
         });
     }
 
@@ -99,4 +198,3 @@ export class TransactionService {
         await this.repository.delete(id);
     }
 }
-

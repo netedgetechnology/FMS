@@ -19,4 +19,16 @@ export abstract class Repository {
             bindValues
         );
     }
+
+    public async beginTransaction(): Promise<void> {
+        await this.database.beginTransaction();
+    }
+
+    public async commit(): Promise<void> {
+        await this.database.commit();
+    }
+
+    public async rollback(): Promise<void> {
+        await this.database.rollback();
+    }
 }

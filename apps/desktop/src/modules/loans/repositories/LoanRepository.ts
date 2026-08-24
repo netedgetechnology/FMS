@@ -111,8 +111,6 @@ export class LoanRepository extends Repository {
                 loan.emiAmount,
                 loan.startDate,
                 loan.maturityDate,
-                loan.outstandingPrincipal,
-                loan.outstandingInterest,
                 loan.currencyId,
                 loan.status,
                 loan.notes ?? null,
@@ -140,8 +138,6 @@ export class LoanRepository extends Repository {
                 emi_amount = ?,
                 start_date = ?,
                 maturity_date = ?,
-                outstanding_principal = ?,
-                outstanding_interest = ?,
                 currency_id = ?,
                 status = ?,
                 notes = ?,
@@ -161,12 +157,36 @@ export class LoanRepository extends Repository {
                 loan.emiAmount,
                 loan.startDate,
                 loan.maturityDate,
-                loan.outstandingPrincipal,
-                loan.outstandingInterest,
                 loan.currencyId,
                 loan.status,
                 loan.notes ?? null,
                 loan.id,
+            ]
+        );
+    }
+
+    async updateAccountingBalances(
+        loanId: string,
+        outstandingPrincipal: number,
+        outstandingInterest: number,
+        status?: Loan["status"]
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE loans
+            SET
+                outstanding_principal = ?,
+                outstanding_interest = ?,
+                status = COALESCE(?, status),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND deleted_at IS NULL
+            `,
+            [
+                outstandingPrincipal,
+                outstandingInterest,
+                status ?? null,
+                loanId,
             ]
         );
     }
@@ -183,5 +203,4 @@ export class LoanRepository extends Repository {
         );
     }
 }
-
 

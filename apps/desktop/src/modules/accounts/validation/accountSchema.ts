@@ -41,32 +41,6 @@ export const accountSchema = z.object({
 
     paymentDueDay: z.coerce.number().int().min(1).max(31).optional(),
 
-    loanType: z.string().trim().optional(),
-
-    principalAmount: z.coerce.number().finite().min(0).optional(),
-
-    interestRate: z.coerce.number().finite().min(0).optional(),
-
-    interestType: z
-        .enum(["REDUCING", "FLAT"])
-        .optional(),
-
-    tenureMonths: z.coerce.number().int().min(1).optional(),
-
-    emiAmount: z.coerce.number().finite().min(0).optional(),
-
-    startDate: z.string().trim().optional(),
-
-    maturityDate: z.string().trim().optional(),
-
-    outstandingPrincipal: z.coerce.number().finite().min(0).optional(),
-
-    outstandingInterest: z.coerce.number().finite().min(0).optional(),
-
-    loanStatus: z
-        .enum(["ACTIVE", "CLOSED", "ON_HOLD", "DEFAULTED"])
-        .optional(),
-
     description: z.string().trim().optional(),
 
     isActive: z.boolean(),
@@ -75,5 +49,4 @@ export const accountSchema = z.object({
 export type AccountFormInput = z.input<typeof accountSchema>;
 
 export type AccountFormValues = z.output<typeof accountSchema>;
-
 

@@ -7,51 +7,47 @@ import {
 
 export class TransactionRepository extends Repository {
 
-    private readonly selectFields = `
-        id,
-        account_id AS accountId,
-        category_id AS categoryId,
-        subcategory_id AS subcategoryId,
-        payee,
-        type,
-        amount,
-        transaction_date AS transactionDate,
-        reference_number AS referenceNumber,
-        notes,
-        tags,
-        status,
-        payment_method AS paymentMethod,
-        upi_reference AS upiReference,
-        bank_transaction_reference AS bankTransactionReference,
-        card_reference AS cardReference,
-        reconciled,
-        reconciled_at AS reconciledAt,
-        is_imported AS isImported,
-        source_statement AS sourceStatement,
-        external_transaction_id AS externalTransactionId,
-        original_narration AS originalNarration,
-        created_at AS createdAt,
-        updated_at AS updatedAt
-    `;
-
     async getAll(): Promise<Transaction[]> {
+
         return await this.select<Transaction>(
             `
             SELECT
-                ${this.selectFields}
+                id,
+                account_id AS accountId,
+                category_id AS categoryId,
+                payee,
+                type,
+                amount,
+                transaction_date AS transactionDate,
+                reference_number AS referenceNumber,
+                notes,
+                created_at AS createdAt,
+                updated_at AS updatedAt
             FROM transactions
             WHERE deleted_at IS NULL
             ORDER BY transaction_date DESC,
                      created_at DESC
             `
         );
+
     }
 
     async getById(id: string): Promise<Transaction | null> {
+
         const rows = await this.select<Transaction>(
             `
             SELECT
-                ${this.selectFields}
+                id,
+                account_id AS accountId,
+                category_id AS categoryId,
+                payee,
+                type,
+                amount,
+                transaction_date AS transactionDate,
+                reference_number AS referenceNumber,
+                notes,
+                created_at AS createdAt,
+                updated_at AS updatedAt
             FROM transactions
             WHERE id = ?
               AND deleted_at IS NULL
@@ -60,9 +56,11 @@ export class TransactionRepository extends Repository {
         );
 
         return rows[0] ?? null;
+
     }
 
     async create(transaction: Transaction): Promise<void> {
+
         await this.execute(
             `
             INSERT INTO transactions
@@ -70,116 +68,67 @@ export class TransactionRepository extends Repository {
                 id,
                 account_id,
                 category_id,
-                subcategory_id,
                 payee,
                 type,
                 amount,
                 transaction_date,
                 reference_number,
                 notes,
-                tags,
-                status,
-                payment_method,
-                upi_reference,
-                bank_transaction_reference,
-                card_reference,
-                reconciled,
-                reconciled_at,
-                is_imported,
-                source_statement,
-                external_transaction_id,
-                original_narration,
                 created_at,
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 transaction.id,
                 transaction.accountId,
                 transaction.categoryId,
-                transaction.subcategoryId,
                 transaction.payee,
                 transaction.type,
                 transaction.amount,
                 transaction.transactionDate,
                 transaction.referenceNumber,
                 transaction.notes,
-                transaction.tags,
-                transaction.status,
-                transaction.paymentMethod,
-                transaction.upiReference,
-                transaction.bankTransactionReference,
-                transaction.cardReference,
-                transaction.reconciled ? 1 : 0,
-                transaction.reconciledAt,
-                transaction.isImported ? 1 : 0,
-                transaction.sourceStatement,
-                transaction.externalTransactionId,
-                transaction.originalNarration,
                 transaction.createdAt,
                 transaction.updatedAt,
             ]
         );
+
     }
 
     async update(
         transaction: UpdateTransactionRequest
     ): Promise<void> {
+
         await this.execute(
             `
             UPDATE transactions
             SET
                 account_id = ?,
                 category_id = ?,
-                subcategory_id = ?,
                 payee = ?,
                 type = ?,
                 amount = ?,
                 transaction_date = ?,
                 reference_number = ?,
                 notes = ?,
-                tags = ?,
-                status = ?,
-                payment_method = ?,
-                upi_reference = ?,
-                bank_transaction_reference = ?,
-                card_reference = ?,
-                reconciled = ?,
-                reconciled_at = ?,
-                is_imported = ?,
-                source_statement = ?,
-                external_transaction_id = ?,
-                original_narration = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             `,
             [
                 transaction.accountId,
                 transaction.categoryId,
-                transaction.subcategoryId ?? null,
                 transaction.payee,
                 transaction.type,
                 transaction.amount,
                 transaction.transactionDate,
-                transaction.referenceNumber ?? null,
-                transaction.notes ?? null,
-                transaction.tags ?? null,
-                transaction.status ?? "CLEARED",
-                transaction.paymentMethod ?? null,
-                transaction.upiReference ?? null,
-                transaction.bankTransactionReference ?? null,
-                transaction.cardReference ?? null,
-                transaction.reconciled ? 1 : 0,
-                transaction.reconciledAt ?? null,
-                transaction.isImported ? 1 : 0,
-                transaction.sourceStatement ?? null,
-                transaction.externalTransactionId ?? null,
-                transaction.originalNarration ?? null,
+                transaction.referenceNumber,
+                transaction.notes,
                 transaction.id,
             ]
         );
+
     }
 
     async findDuplicate(
@@ -197,7 +146,17 @@ export class TransactionRepository extends Repository {
                 await this.select<Transaction>(
                     `
                     SELECT
-                        ${this.selectFields}
+                        id,
+                        account_id AS accountId,
+                        category_id AS categoryId,
+                        payee,
+                        type,
+                        amount,
+                        transaction_date AS transactionDate,
+                        reference_number AS referenceNumber,
+                        notes,
+                        created_at AS createdAt,
+                        updated_at AS updatedAt
                     FROM transactions
                     WHERE account_id = ?
                       AND reference_number = ?
@@ -219,7 +178,17 @@ export class TransactionRepository extends Repository {
             await this.select<Transaction>(
                 `
                 SELECT
-                    ${this.selectFields}
+                    id,
+                    account_id AS accountId,
+                    category_id AS categoryId,
+                    payee,
+                    type,
+                    amount,
+                    transaction_date AS transactionDate,
+                    reference_number AS referenceNumber,
+                    notes,
+                    created_at AS createdAt,
+                    updated_at AS updatedAt
                 FROM transactions
                 WHERE account_id = ?
                   AND transaction_date = ?
@@ -255,8 +224,8 @@ export class TransactionRepository extends Repository {
 
         return matches[0] ?? null;
     }
-
     async delete(id: string): Promise<void> {
+
         await this.execute(
             `
             UPDATE transactions
@@ -265,5 +234,7 @@ export class TransactionRepository extends Repository {
             `,
             [id]
         );
+
     }
+
 }

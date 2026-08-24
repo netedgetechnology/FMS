@@ -29,6 +29,7 @@ export const loanSchema = z.object({
     principalAmount: z.coerce
         .number()
         .finite()
+        .positive("Principal amount must be greater than 0.")
         .min(0, "Principal amount cannot be negative."),
 
     interestRate: z.coerce

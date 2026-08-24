@@ -3,6 +3,19 @@ export type TransactionType =
     | "expense"
     | "transfer";
 
+export type TransactionStatus =
+    | "PENDING"
+    | "CLEARED";
+
+export type PaymentMethod =
+    | "CASH"
+    | "CARD"
+    | "DEBIT_CARD"
+    | "UPI"
+    | "BANK_TRANSFER"
+    | "DIRECT_DEBIT"
+    | "OTHER";
+
 export interface Transaction {
 
     id: string;
@@ -10,6 +23,8 @@ export interface Transaction {
     accountId: string;
 
     categoryId: string | null;
+
+    subcategoryId: string | null;
 
     payee: string;
 
@@ -23,6 +38,30 @@ export interface Transaction {
 
     notes: string | null;
 
+    tags: string | null;
+
+    status: TransactionStatus;
+
+    paymentMethod: PaymentMethod | null;
+
+    upiReference: string | null;
+
+    bankTransactionReference: string | null;
+
+    cardReference: string | null;
+
+    reconciled: boolean;
+
+    reconciledAt: string | null;
+
+    isImported: boolean;
+
+    sourceStatement: string | null;
+
+    externalTransactionId: string | null;
+
+    originalNarration: string | null;
+
     createdAt: string;
 
     updatedAt: string;
@@ -35,6 +74,8 @@ export interface CreateTransactionRequest {
 
     categoryId?: string | null;
 
+    subcategoryId?: string | null;
+
     payee: string;
 
     type: TransactionType;
@@ -43,9 +84,33 @@ export interface CreateTransactionRequest {
 
     transactionDate: string;
 
-    referenceNumber?: string;
+    referenceNumber?: string | null;
 
-    notes?: string;
+    notes?: string | null;
+
+    tags?: string | null;
+
+    status?: TransactionStatus;
+
+    paymentMethod?: PaymentMethod | null;
+
+    upiReference?: string | null;
+
+    bankTransactionReference?: string | null;
+
+    cardReference?: string | null;
+
+    reconciled?: boolean;
+
+    reconciledAt?: string | null;
+
+    isImported?: boolean;
+
+    sourceStatement?: string | null;
+
+    externalTransactionId?: string | null;
+
+    originalNarration?: string | null;
 
 }
 

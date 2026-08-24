@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -28,12 +28,20 @@ function getDefaultValues(
     return {
         accountId: transaction.accountId,
         categoryId: transaction.categoryId ?? "",
+        subcategoryId: transaction.subcategoryId ?? "",
         payee: transaction.payee,
         type: transaction.type,
         amount: Number(transaction.amount ?? 0),
         transactionDate: transaction.transactionDate,
         referenceNumber: transaction.referenceNumber ?? "",
         notes: transaction.notes ?? "",
+        tags: transaction.tags ?? "",
+        status: transaction.status ?? "CLEARED",
+        paymentMethod: transaction.paymentMethod ?? null,
+        upiReference: transaction.upiReference ?? "",
+        bankTransactionReference:
+            transaction.bankTransactionReference ?? "",
+        cardReference: transaction.cardReference ?? "",
     };
 }
 

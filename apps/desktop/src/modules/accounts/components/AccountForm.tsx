@@ -67,7 +67,6 @@ export function AccountForm({
         control,
         handleSubmit,
         watch,
-        setValue,
     reset,
     formState: { errors },
     } = useForm<AccountFormInput, unknown, AccountFormValues>({
@@ -87,71 +86,22 @@ export function AccountForm({
         creditLimit: 0,
         statementDay: undefined,
         paymentDueDay: undefined,
-
-        loanType: "",
-        principalAmount: 0,
-        interestRate: 0,
-        interestType: "REDUCING",
-        tenureMonths: undefined,
-        emiAmount: 0,
-        startDate: "",
-        maturityDate: "",
-        outstandingPrincipal: 0,
-        outstandingInterest: 0,
-        loanStatus: "ACTIVE",
             description: "",
             isActive: true,
             ...defaultValues,
         },
     });
     const accountType = watch("type");
-
-    const tenureMonths = Number(watch("tenureMonths"));
-    const startDate = watch("startDate");
-
-    useEffect(() => {
-        if (
-            accountType !== AccountType.LOAN ||
-            !startDate ||
-            !tenureMonths ||
-            !Number.isFinite(tenureMonths) ||
-            tenureMonths <= 0
-        ) {
-            return;
-        }
-
-        const date = new Date(`${startDate}T00:00:00Z`);
-
-        if (Number.isNaN(date.getTime())) {
-            return;
-        }
-
-        date.setUTCMonth(
-            date.getUTCMonth() + Math.trunc(tenureMonths)
-        );
-
-        const maturityDate =
-            date.toISOString().slice(0, 10);
-
-        setValue("maturityDate", maturityDate, {
-            shouldValidate: true,
-            shouldDirty: true,
-        });
-    }, [
-        accountType,
-        startDate,
-        tenureMonths,
-        setValue,
-    ]);
     const isBankAccount =
         accountType === AccountType.SAVINGS ||
         accountType === AccountType.CURRENT;
 
+    const isCashOrWallet =
+        accountType === AccountType.CASH ||
+        accountType === AccountType.WALLET;
+
     const isCreditCard =
         accountType === AccountType.CREDIT_CARD;
-
-    const isLoan =
-        accountType === AccountType.LOAN;
 
     useEffect(() => {
         if (defaultValues) {
@@ -257,17 +207,19 @@ export function AccountForm({
                         />
                     </FormField>
 
-                    <FormField
-                    label="Bank"
-                    htmlFor="institutionName"
-                    error={errors.institutionName?.message}
-                >
-                    <Input
-                        id="institutionName"
-                        placeholder="e.g. HDFC Bank"
-                        {...register("institutionName")}
-                    />
-                </FormField>
+                    {!isCashOrWallet && (
+                        <FormField
+                            label="Bank"
+                            htmlFor="institutionName"
+                            error={errors.institutionName?.message}
+                        >
+                            <Input
+                                id="institutionName"
+                                placeholder="e.g. HDFC Bank"
+                                {...register("institutionName")}
+                            />
+                        </FormField>
+                    )}
 <FormField
                         label="Currency"
                         htmlFor="currencyId"
@@ -311,8 +263,8 @@ export function AccountForm({
             </Section>
 
             {isBankAccount && (
-            <Section title="Banking Details">
-                <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
+                <Section title="Banking Details">
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
 
                     <FormField
                         label="Account Number"
@@ -486,216 +438,6 @@ export function AccountForm({
             </div>
         </Section>
     )}
-{isLoan && (
-    <Section title="Loan Details">
-        <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
-
-            <FormField
-                label="Loan Type"
-                htmlFor="loanType"
-                error={errors.loanType?.message}
-            >
-                <Input
-                    id="loanType"
-                    placeholder="e.g. Home Loan, Personal Loan"
-                    {...register("loanType")}
-                />
-            </FormField>
-
-            <FormField
-                label="Principal Amount"
-                htmlFor="principalAmount"
-                error={errors.principalAmount?.message}
-            >
-                <Input
-                    id="principalAmount"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    {...register("principalAmount", {
-                        valueAsNumber: true,
-                    })}
-                />
-            </FormField>
-
-            <FormField
-                label="Interest Rate"
-                htmlFor="interestRate"
-                error={errors.interestRate?.message}
-            >
-                <Input
-                    id="interestRate"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="e.g. 8.50"
-                    {...register("interestRate", {
-                        valueAsNumber: true,
-                    })}
-                />
-            </FormField>
-
-            <FormField
-                label="Interest Type"
-                htmlFor="interestType"
-                error={errors.interestType?.message}
-            >
-                <Controller
-                    control={control}
-                    name="interestType"
-                    render={({ field }) => (
-                        <Select
-                            value={field.value}
-                            onValueChange={field.onChange}
-                        >
-                            <SelectTrigger id="interestType">
-                                <SelectValue placeholder="Select interest type" />
-                            </SelectTrigger>
-
-                            <SelectContent>
-                                <SelectItem value="REDUCING">
-                                    Reducing Balance
-                                </SelectItem>
-                                <SelectItem value="FLAT">
-                                    Flat Rate
-                                </SelectItem>
-                            </SelectContent>
-                        </Select>
-                    )}
-                />
-            </FormField>
-
-            <FormField
-                label="Tenure"
-                htmlFor="tenureMonths"
-                error={errors.tenureMonths?.message}
-            >
-                <Input
-                    id="tenureMonths"
-                    type="number"
-                    min="1"
-                    placeholder="Months"
-                    {...register("tenureMonths", {
-                        valueAsNumber: true,
-                    })}
-                />
-            </FormField>
-
-            <FormField
-                label="EMI Amount"
-                htmlFor="emiAmount"
-                error={errors.emiAmount?.message}
-            >
-                <Input
-                    id="emiAmount"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    {...register("emiAmount", {
-                        valueAsNumber: true,
-                    })}
-                />
-            </FormField>
-
-            <FormField
-                label="Start Date"
-                htmlFor="startDate"
-                error={errors.startDate?.message}
-            >
-                <Input
-                    id="startDate"
-                    type="date"
-                    {...register("startDate")}
-                />
-            </FormField>
-
-            <FormField
-                label="Maturity Date"
-                htmlFor="maturityDate"
-                error={errors.maturityDate?.message}
-            >
-                <Input
-                    id="maturityDate"
-                    type="date"
-                    {...register("maturityDate")}
-                />
-            </FormField>
-
-            <FormField
-                label="Outstanding Principal"
-                htmlFor="outstandingPrincipal"
-                error={errors.outstandingPrincipal?.message}
-            >
-                <Input
-                    id="outstandingPrincipal"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    {...register("outstandingPrincipal", {
-                        valueAsNumber: true,
-                    })}
-                />
-            </FormField>
-
-            <FormField
-                label="Outstanding Interest"
-                htmlFor="outstandingInterest"
-                error={errors.outstandingInterest?.message}
-            >
-                <Input
-                    id="outstandingInterest"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    {...register("outstandingInterest", {
-                        valueAsNumber: true,
-                    })}
-                />
-            </FormField>
-
-            <FormField
-                label="Loan Status"
-                htmlFor="loanStatus"
-                error={errors.loanStatus?.message}
-            >
-                <Controller
-                    control={control}
-                    name="loanStatus"
-                    render={({ field }) => (
-                        <Select
-                            value={field.value}
-                            onValueChange={field.onChange}
-                        >
-                            <SelectTrigger id="loanStatus">
-                                <SelectValue placeholder="Select loan status" />
-                            </SelectTrigger>
-
-                            <SelectContent>
-                                <SelectItem value="ACTIVE">
-                                    Active
-                                </SelectItem>
-                                <SelectItem value="CLOSED">
-                                    Closed
-                                </SelectItem>
-                                <SelectItem value="ON_HOLD">
-                                    On Hold
-                                </SelectItem>
-                                <SelectItem value="DEFAULTED">
-                                    Defaulted
-                                </SelectItem>
-                            </SelectContent>
-                        </Select>
-                    )}
-                />
-            </FormField>
-
-        </div>
-    </Section>
-)}
 <Section title="Financial">
                 <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
 
@@ -790,46 +532,6 @@ export function AccountForm({
         </form>
     );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

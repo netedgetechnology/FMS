@@ -8,6 +8,7 @@ import {
 
 import {
     normalizeCsvRows,
+    type CsvImportType,
 } from "./normalizer/csvNormalizer";
 
 import {
@@ -33,9 +34,6 @@ export interface CsvPreviewResult
     duplicates: Map<number, string>;
 }
 
-export type CsvImportType =
-    | "BANK_CSV"
-    | "CREDIT_CARD_CSV";
 
 export function processCsv(
     content: string,
@@ -65,7 +63,4 @@ export function processCsv(
         validation,
     };
 }
-
-
-
 

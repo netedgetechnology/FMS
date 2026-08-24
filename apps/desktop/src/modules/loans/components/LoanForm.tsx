@@ -28,6 +28,7 @@ export interface LoanFormProps {
     defaultValues?: Partial<LoanFormValues>;
     loading?: boolean;
     submitLabel?: string;
+    editMode?: boolean;
     onCancel?(): void;
     onSubmit(values: LoanFormValues): void | Promise<void>;
 }
@@ -58,6 +59,7 @@ export function LoanForm({
     defaultValues,
     loading = false,
     submitLabel = "Save Loan",
+    editMode = false,
     onCancel,
     onSubmit,
 }: LoanFormProps) {
@@ -227,7 +229,14 @@ export function LoanForm({
                                     onValueChange={field.onChange}
                                 >
                                     <SelectTrigger id="loan-account">
-                                        <SelectValue placeholder="Select account" />
+                                        <SelectValue placeholder="Select account">
+                                            {
+                                                accounts.find(
+                                                    account =>
+                                                        account.id === field.value
+                                                )?.name
+                                            }
+                                        </SelectValue>
                                     </SelectTrigger>
 
                                     <SelectContent>
@@ -411,8 +420,9 @@ export function LoanForm({
                 </div>
             </Section>
 
-            <Section title="Outstanding Balance">
-                <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
+            {!editMode && (
+                <Section title="Outstanding Balance">
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
                     <FormField
                         label="Outstanding Principal"
                         htmlFor="outstanding-principal"
@@ -498,8 +508,9 @@ export function LoanForm({
                             )}
                         />
                     </FormField>
-                </div>
-            </Section>
+                    </div>
+                </Section>
+            )}
 
             <Section title="Notes">
                 <FormField

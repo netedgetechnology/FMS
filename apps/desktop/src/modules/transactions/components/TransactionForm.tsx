@@ -67,12 +67,14 @@ export function TransactionForm({
         register,
         control,
         handleSubmit,
+        watch,
         formState: { errors },
     } = useForm<TransactionFormInput, unknown, TransactionFormValues>({
         resolver: zodResolver(transactionSchema),
         defaultValues: {
             accountId: "",
             categoryId: "",
+            subcategoryId: "",
             payee: "",
             type: "expense",
             amount: 0,
@@ -81,6 +83,12 @@ export function TransactionForm({
                 .slice(0, 10),
             referenceNumber: "",
             notes: "",
+            tags: "",
+            status: "CLEARED",
+            paymentMethod: null,
+            upiReference: "",
+            bankTransactionReference: "",
+            cardReference: "",
             ...defaultValues,
         },
     });
@@ -92,6 +100,8 @@ export function TransactionForm({
     const activeCategories = categories.filter(
         category => category.isActive
     );
+
+    const paymentMethod = watch("paymentMethod");
 
     return (
         <form
@@ -168,11 +178,9 @@ export function TransactionForm({
                                         <SelectItem value="income">
                                             Income
                                         </SelectItem>
-
                                         <SelectItem value="expense">
                                             Expense
                                         </SelectItem>
-
                                         <SelectItem value="transfer">
                                             Transfer
                                         </SelectItem>
@@ -235,6 +243,18 @@ export function TransactionForm({
                     </FormField>
 
                     <FormField
+                        label="Subcategory"
+                        htmlFor="subcategoryId"
+                        error={errors.subcategoryId?.message}
+                    >
+                        <Input
+                            id="subcategoryId"
+                            placeholder="Optional subcategory"
+                            {...register("subcategoryId")}
+                        />
+                    </FormField>
+
+                    <FormField
                         label="Transaction Date"
                         htmlFor="transactionDate"
                         required
@@ -248,7 +268,7 @@ export function TransactionForm({
                     </FormField>
 
                     <FormField
-                        label="Payee"
+                        label="Payee / Merchant"
                         htmlFor="payee"
                         required
                         error={errors.payee?.message}
@@ -277,6 +297,173 @@ export function TransactionForm({
                             })}
                         />
                     </FormField>
+
+                    <FormField
+                        label="Status"
+                        htmlFor="status"
+                        required
+                        error={errors.status?.message}
+                    >
+                        <Controller
+                            control={control}
+                            name="status"
+                            render={({ field }) => (
+                                <Select
+                                    value={field.value}
+                                    onValueChange={field.onChange}
+                                >
+                                    <SelectTrigger id="status">
+                                        <SelectValue />
+                                    </SelectTrigger>
+
+                                    <SelectContent>
+                                        <SelectItem value="CLEARED">
+                                            Cleared
+                                        </SelectItem>
+
+                                        <SelectItem value="PENDING">
+                                            Pending
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        />
+                    </FormField>
+                </div>
+            </Section>
+
+            <Section title="Classification & Payment">
+                <div className="grid grid-cols-2 gap-x-5 gap-y-3">
+                    <FormField
+                        label="Tags"
+                        htmlFor="tags"
+                        error={errors.tags?.message}
+                    >
+                        <Input
+                            id="tags"
+                            placeholder="e.g. monthly, business"
+                            {...register("tags")}
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="Payment Method"
+                        htmlFor="paymentMethod"
+                        error={errors.paymentMethod?.message}
+                    >
+                        <Controller
+                            control={control}
+                            name="paymentMethod"
+                            render={({ field }) => (
+                                <Select
+                                    value={field.value ?? "__none"}
+                                    onValueChange={value =>
+                                        field.onChange(
+                                            value === "__none"
+                                                ? null
+                                                : value
+                                        )
+                                    }
+                                >
+                                    <SelectTrigger id="paymentMethod">
+                                        <SelectValue placeholder="None">
+                                            {field.value === "CARD"
+                                                ? "Credit Card"
+                                                : field.value === "DEBIT_CARD"
+                                                    ? "Debit Card"
+                                                    : field.value === "BANK_TRANSFER"
+                                                        ? "Bank Transfer"
+                                                        : field.value === "DIRECT_DEBIT"
+                                                            ? "Direct Debit"
+                                                            : field.value === "CASH"
+                                                                ? "Cash"
+                                                                : field.value === "UPI"
+                                                                    ? "UPI"
+                                                                    : field.value === "OTHER"
+                                                                        ? "Other"
+                                                                        : "None"}
+                                        </SelectValue>
+                                    </SelectTrigger>
+
+                                    <SelectContent>
+                                        <SelectItem value="__none">
+                                            None
+                                        </SelectItem>
+
+                                        <SelectItem value="CASH">
+                                            Cash
+                                        </SelectItem>
+
+                                        <SelectItem value="CARD">
+                                            Credit Card
+                                        </SelectItem>
+
+                                        <SelectItem value="DEBIT_CARD">
+                                            Debit Card
+                                        </SelectItem>
+
+                                        <SelectItem value="UPI">
+                                            UPI
+                                        </SelectItem>
+
+                                        <SelectItem value="BANK_TRANSFER">
+                                            Bank Transfer
+                                        </SelectItem>
+
+                                        <SelectItem value="DIRECT_DEBIT">
+                                            Direct Debit
+                                        </SelectItem>
+
+                                        <SelectItem value="OTHER">
+                                            Other
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        />
+                    </FormField>
+
+                    {paymentMethod === "UPI" && (
+                        <FormField
+                            label="UPI Reference"
+                            htmlFor="upiReference"
+                            error={errors.upiReference?.message}
+                        >
+                            <Input
+                                id="upiReference"
+                                placeholder="Optional UPI reference"
+                                {...register("upiReference")}
+                            />
+                        </FormField>
+                    )}
+
+                    {paymentMethod === "BANK_TRANSFER" && (
+                        <FormField
+                            label="Bank Transaction Reference"
+                            htmlFor="bankTransactionReference"
+                            error={errors.bankTransactionReference?.message}
+                        >
+                            <Input
+                                id="bankTransactionReference"
+                                placeholder="Optional bank reference"
+                                {...register("bankTransactionReference")}
+                            />
+                        </FormField>
+                    )}
+
+                    {(paymentMethod === "CARD" || paymentMethod === "DEBIT_CARD") && (
+                        <FormField
+                            label="Card Reference"
+                            htmlFor="cardReference"
+                            error={errors.cardReference?.message}
+                        >
+                            <Input
+                                id="cardReference"
+                                placeholder="Optional card reference"
+                                {...register("cardReference")}
+                            />
+                        </FormField>
+                    )}
                 </div>
             </Section>
 

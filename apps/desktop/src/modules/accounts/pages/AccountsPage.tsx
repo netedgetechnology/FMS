@@ -47,7 +47,7 @@ export default function AccountsPage() {
     const [viewingAccount, setViewingAccount] = useState<Account | null>(null);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null);
     const [selectedAccountFilter, setSelectedAccountFilter] = useState<
-        "BANK" | AccountType.CREDIT_CARD | AccountType.LOAN | AccountType.INVESTMENT | null
+        "BANK" | "CASH_WALLET" | AccountType.CREDIT_CARD | AccountType.INVESTMENT | null
     >(null);
 
 const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
@@ -92,12 +92,17 @@ const activeAccounts = accounts.filter(
     const creditCards = accounts.filter(
         account => account.type === AccountType.CREDIT_CARD
     ).length;
-const loans = accounts.filter(
-    account => account.type === AccountType.LOAN
-).length;
 
 const investments = accounts.filter(
     account => account.type === AccountType.INVESTMENT
+).length;
+
+const cashAccounts = accounts.filter(
+    account => account.type === AccountType.CASH
+).length;
+
+const walletAccounts = accounts.filter(
+    account => account.type === AccountType.WALLET
 ).length;
 
 
@@ -109,6 +114,12 @@ const investments = accounts.filter(
                 account =>
                     account.type === AccountType.SAVINGS ||
                     account.type === AccountType.CURRENT
+            )
+        : selectedAccountFilter === "CASH_WALLET"
+            ? accounts.filter(
+                account =>
+                    account.type === AccountType.CASH ||
+                    account.type === AccountType.WALLET
             )
             : accounts.filter(
                 account => account.type === selectedAccountFilter
@@ -214,6 +225,56 @@ const totalBalance = accounts.reduce(
         <div className="flex items-start justify-between">
             <div>
                 <div className="text-caption font-medium text-slate-500">
+                    Cash & Wallets
+                </div>
+
+                <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {cashAccounts + walletAccounts}
+                </div>
+
+                <div className="mt-3 flex gap-3 text-[11px] text-slate-400">
+                    <span>Cash: {cashAccounts}</span>
+                    <span>Wallets: {walletAccounts}</span>
+                </div>
+            </div>
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#ECFDF5] shadow-sm">
+                <WalletCards size={20} className="text-[#059669]" />
+            </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+                type="button"
+                onClick={() => setSelectedAccountFilter("CASH_WALLET")}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                title="View cash and wallet accounts"
+                aria-label="View cash and wallet accounts"
+            >
+                <Eye size={14} />
+            </button>
+
+            <AddAccountDialog
+                defaultValues={{ type: AccountType.CASH }}
+                onSuccess={refresh}
+                trigger={
+                    <button
+                        type="button"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                        title="Add cash account"
+                        aria-label="Add cash account"
+                    >
+                        <Plus size={16} />
+                    </button>
+                }
+            />
+        </div>
+    </div>
+
+<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+        <div className="flex items-start justify-between">
+            <div>
+                <div className="text-caption font-medium text-slate-500">
                     Credit Cards
                 </div>
 
@@ -249,52 +310,6 @@ const totalBalance = accounts.reduce(
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
                         title="Add credit card"
                         aria-label="Add credit card"
-                    >
-                        <Plus size={16} />
-                    </button>
-                }
-            />
-        </div>
-    </div>
-<div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
-        <div className="flex items-start justify-between">
-            <div>
-                <div className="text-caption font-medium text-slate-500">
-                    Loans
-                </div>
-
-                <div className="mt-3 text-card-value leading-none tracking-[-0.02em] text-[#0F172A]">
-                    {loans}
-                </div>
-
-                <div className="mt-4 text-small text-slate-400">
-                    Active loans
-                </div>
-            </div>
-
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF7ED] shadow-sm">
-                <Landmark size={20} className="text-[#EA580C]" />
-            </div>
-        </div>
-
-        <div className="mt-3 flex items-center justify-end gap-2">
-            <button
-                type="button"
-                onClick={() => setSelectedAccountFilter(AccountType.LOAN)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
-            >
-                <Eye size={14} />
-            </button>
-
-            <AddAccountDialog
-                defaultValues={{ type: AccountType.LOAN }}
-                onSuccess={refresh}
-                trigger={
-                    <button
-                        type="button"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                        title="Add loan"
-                        aria-label="Add loan"
                     >
                         <Plus size={16} />
                     </button>
@@ -545,34 +560,4 @@ const totalBalance = accounts.reduce(
 </div>
     );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

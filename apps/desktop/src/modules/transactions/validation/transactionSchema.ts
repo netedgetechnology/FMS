@@ -14,6 +14,11 @@ export const transactionSchema = z.object({
             .trim()
             .optional(),
 
+    subcategoryId:
+        z.string()
+            .trim()
+            .optional(),
+
     payee:
         z.string()
             .trim()
@@ -51,6 +56,45 @@ export const transactionSchema = z.object({
             .optional(),
 
     notes:
+        z.string()
+            .trim()
+            .optional(),
+
+    tags:
+        z.string()
+            .trim()
+            .optional(),
+
+    status:
+        z.enum([
+            "PENDING",
+            "CLEARED",
+        ]),
+
+    paymentMethod:
+        z.enum([
+            "CASH",
+            "CARD",
+            "DEBIT_CARD",
+            "UPI",
+            "BANK_TRANSFER",
+            "DIRECT_DEBIT",
+            "OTHER",
+        ])
+            .nullable()
+            .optional(),
+
+    upiReference:
+        z.string()
+            .trim()
+            .optional(),
+
+    bankTransactionReference:
+        z.string()
+            .trim()
+            .optional(),
+
+    cardReference:
         z.string()
             .trim()
             .optional(),

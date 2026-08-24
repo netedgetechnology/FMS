@@ -2,13 +2,33 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PageHeader } from "@/components/common";
 
-import { AddLoanDialog } from "../components/AddLoanDialog";
-import { LoanService } from "../services";
+import {
+    AddLoanDialog,
+    EditLoanDialog,
+    EMIScheduleDialog,
+} from "../components";
+import {
+    LoanDashboardService,
+    LoanService,
+} from "../services";
 import { Loan } from "../types";
 
 export default function LoansPage() {
     const [loans, setLoans] = useState<Loan[]>([]);
     const [loading, setLoading] = useState(true);
+    const [scheduleLoan, setScheduleLoan] = useState<Loan | null>(null);
+    const [editLoan, setEditLoan] = useState<Loan | null>(null);
+    const [dashboardSummary, setDashboardSummary] =
+        useState<{
+            totalOutstandingInterest: number;
+            totalRemainingEmi: number;
+            overdueCount: number;
+            overdueAmount: number;
+            nextEmi: {
+                dueDate: string;
+                totalAmount: number;
+            } | null;
+        } | null>(null);
 
     const loadLoans = useCallback(async () => {
         try {
@@ -18,6 +38,14 @@ export default function LoansPage() {
             const result = await service.getAll();
 
             setLoans(result);
+
+            const dashboardService =
+                new LoanDashboardService();
+
+            const dashboardResult =
+                await dashboardService.getSummary(result);
+
+            setDashboardSummary(dashboardResult);
         } catch (error) {
             console.error("Failed to load loans:", error);
         } finally {
@@ -79,6 +107,46 @@ export default function LoansPage() {
                     <SummaryCard
                         label="Outstanding Principal"
                         value={formatAmount(summary.outstanding)}
+                    />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <SummaryCard
+                        label="Outstanding Interest"
+                        value={formatAmount(
+                            dashboardSummary?.totalOutstandingInterest ?? 0
+                        )}
+                    />
+
+                    <SummaryCard
+                        label="Remaining EMI"
+                        value={formatAmount(
+                            dashboardSummary?.totalRemainingEmi ?? 0
+                        )}
+                    />
+
+                    <SummaryCard
+                        label="Overdue EMI"
+                        value={
+                            dashboardSummary
+                                ? `${dashboardSummary.overdueCount} • ${formatAmount(
+                                      dashboardSummary.overdueAmount
+                                  )}`
+                                : "0 • 0.00"
+                        }
+                    />
+
+                    <SummaryCard
+                        label="Next EMI"
+                        value={
+                            dashboardSummary?.nextEmi
+                                ? `${formatAmount(
+                                      dashboardSummary.nextEmi.totalAmount
+                                  )} • ${formatDate(
+                                      dashboardSummary.nextEmi.dueDate
+                                  )}`
+                                : "—"
+                        }
                     />
                 </div>
 
@@ -157,6 +225,10 @@ export default function LoansPage() {
                                         <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500">
                                             Status
                                         </th>
+
+                                        <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500">
+                                            Actions
+                                        </th>
                                     </tr>
                                 </thead>
 
@@ -209,6 +281,30 @@ export default function LoansPage() {
                                                     status={loan.status}
                                                 />
                                             </td>
+
+                                            <td className="px-4 py-4 text-right">
+                                                <div className="flex justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setEditLoan(loan)
+                                                        }
+                                                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                                                    >
+                                                        Edit
+                                                    </button>
+
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setScheduleLoan(loan)
+                                                        }
+                                                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                                                    >
+                                                        View EMI Schedule
+                                                    </button>
+                                                </div>
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -216,6 +312,28 @@ export default function LoansPage() {
                         </div>
                     )}
                 </div>
+
+                <EditLoanDialog
+                    loan={editLoan}
+                    open={editLoan !== null}
+                    onSuccess={loadLoans}
+                    onOpenChange={open => {
+                        if (!open) {
+                            setEditLoan(null);
+                        }
+                    }}
+                />
+
+                <EMIScheduleDialog
+                    loan={scheduleLoan}
+                    open={scheduleLoan !== null}
+                    onSuccess={loadLoans}
+                    onOpenChange={open => {
+                        if (!open) {
+                            setScheduleLoan(null);
+                        }
+                    }}
+                />
             </div>
         </div>
     );

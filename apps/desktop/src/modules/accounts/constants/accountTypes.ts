@@ -23,10 +23,6 @@ export const ACCOUNT_TYPE_OPTIONS: AccountTypeOption[] = [
         label: "Credit Card",
     },
     {
-        value: AccountType.LOAN,
-        label: "Loan",
-    },
-    {
         value: AccountType.INVESTMENT,
         label: "Investment",
     },

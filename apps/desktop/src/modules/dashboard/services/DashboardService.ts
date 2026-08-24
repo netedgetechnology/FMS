@@ -1,6 +1,7 @@
 import { AccountService } from "@/modules/accounts/services";
 import { AccountType } from "@/modules/accounts/types";
 import { TransactionService } from "@/modules/transactions/services";
+import { LoanService } from "@/modules/loans/services";
 
 import type { DashboardSummary } from "../types";
 
@@ -31,13 +32,18 @@ export class DashboardService {
     private readonly transactionService =
         new TransactionService();
 
+    private readonly loanService =
+        new LoanService();
+
     async getSummary(): Promise<DashboardSummary> {
         const [
             accounts,
             transactions,
+            loans,
         ] = await Promise.all([
             this.accountService.getAll(),
             this.transactionService.getAll(),
+            this.loanService.getAll(),
         ]);
 
         const activeAccounts =
@@ -140,7 +146,6 @@ export class DashboardService {
                     break;
 
                 case AccountType.CREDIT_CARD:
-                case AccountType.LOAN:
                     netWorth -= Math.abs(
                         balance
                     );
@@ -154,6 +159,31 @@ export class DashboardService {
                     break;
             }
         }
+
+        const loanLiability = loans.reduce(
+            (total, loan) => {
+                if (loan.status === "CLOSED") {
+                    return total;
+                }
+
+                return (
+                    total +
+                    Math.abs(
+                        toNumber(
+                            loan.outstandingPrincipal
+                        )
+                    ) +
+                    Math.abs(
+                        toNumber(
+                            loan.outstandingInterest
+                        )
+                    )
+                );
+            },
+            0
+        );
+
+        netWorth -= loanLiability;
 
         const savingsRate =
             income > 0

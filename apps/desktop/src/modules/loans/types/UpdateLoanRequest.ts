@@ -1,5 +1,8 @@
-import { CreateLoanRequest } from "./CreateLoanRequest";
+import type { CreateLoanRequest } from "./CreateLoanRequest";
 
-export interface UpdateLoanRequest extends CreateLoanRequest {
+export type UpdateLoanRequest = Omit<
+    CreateLoanRequest,
+    "outstandingPrincipal" | "outstandingInterest"
+> & {
     id: string;
-}
+};

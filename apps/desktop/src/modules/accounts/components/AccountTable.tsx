@@ -92,7 +92,9 @@ export function AccountTable({
                             </td>
 
                             <td className="px-4 py-3 text-sm text-slate-600">
-                                {account.institutionName || "�"}
+                                {account.type === "CASH" || account.type === "WALLET"
+                                    ? "—"
+                                    : account.institutionName || "—"}
                             </td>
 
                             <td className="px-4 py-3 text-sm text-slate-500">
@@ -158,5 +160,4 @@ export function AccountTable({
         </div>
     );
 }
-
 
