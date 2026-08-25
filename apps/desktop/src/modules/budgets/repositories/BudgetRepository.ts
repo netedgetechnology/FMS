@@ -132,7 +132,7 @@ export class BudgetRepository extends Repository {
                 budget.endDate ?? null,
                 budget.currencyId,
                 budget.alertThreshold ?? 80,
-                budget.isActive ?? true ? 1 : 0,
+                (budget.isActive ?? true) ? 1 : 0,
                 budget.id,
             ]
         );
