@@ -1,6 +1,10 @@
 import { Eye, Pencil, Trash2 } from "lucide-react";
 
 import type { FinancialGoal } from "../types";
+import {
+    getFinancialGoalCategory,
+    getFinancialGoalSubcategoryLabel,
+} from "../constants";
 
 interface FinancialGoalTableProps {
     goals: FinancialGoal[];
@@ -161,7 +165,10 @@ export function FinancialGoalTable({
                                         </div>
 
                                         <div className="mt-1 text-xs text-slate-500">
-                                            {goal.goalSubcategory}
+                                            {getFinancialGoalSubcategoryLabel(
+                                                goal.goalCategory,
+                                                goal.goalSubcategory
+                                            )}
                                         </div>
 
                                     </td>
@@ -169,7 +176,8 @@ export function FinancialGoalTable({
                                     <td className="px-5 py-4">
 
                                         <span className="text-sm text-slate-700">
-                                            {goal.goalCategory}
+                                            {getFinancialGoalCategory(goal.goalCategory)?.label ??
+                                                goal.goalCategory}
                                         </span>
 
                                     </td>
