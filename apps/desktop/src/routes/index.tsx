@@ -13,6 +13,7 @@ import { FinancialPlansPage } from "@/modules/financial-plans/pages";
 import { FinancialGoalsPage } from "@/modules/financial-goals/pages";
 import { BudgetsPage } from "@/modules/budgets/pages";
 import { ImportsPage } from "@/modules/imports/pages";
+import ReconciliationPage from "@/modules/reconciliation/pages";
 
 export default function AppRoutes() {
   return (
@@ -62,11 +63,11 @@ export default function AppRoutes() {
           element={<ImportsPage />}
         />
 
-      </Route>
+        <Route
+          path="/reconciliation"
+          element={<ReconciliationPage />}
+        />      </Route>
     </Routes>
   );
 }
-
-
-
 
