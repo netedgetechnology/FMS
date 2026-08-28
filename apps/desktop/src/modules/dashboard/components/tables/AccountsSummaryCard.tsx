@@ -6,48 +6,57 @@ import {
 
 import { Card } from "@/components/ui/card";
 
-const accounts = [
-    {
+interface AccountsSummaryCardProps {
+    data: {
+        id: string;
+        name: string;
+        type: string;
+        amount: number;
+        isCreditCard: boolean;
+    }[];
+}
+
+function getAccountStyle(
+    type: string,
+    isCreditCard: boolean
+) {
+    if (isCreditCard) {
+        return {
+            icon: CreditCard,
+            color: "text-red-500",
+            bg: "bg-red-50",
+        };
+    }
+
+    if (type.toLowerCase().includes("cash")) {
+        return {
+            icon: Wallet,
+            color: "text-emerald-600",
+            bg: "bg-emerald-50",
+        };
+    }
+
+    return {
         icon: Building2,
-        name: "HDFC Savings",
-        type: "Bank",
-        amount: "₹42,320.00",
         color: "text-blue-600",
         bg: "bg-blue-50",
-    },
-    {
-        icon: Building2,
-        name: "SBI Savings",
-        type: "Bank",
-        amount: "₹12,000.00",
-        color: "text-indigo-600",
-        bg: "bg-indigo-50",
-    },
-    {
-        icon: CreditCard,
-        name: "ICICI Credit Card",
-        type: "Credit Card",
-        amount: "-₹3,560.00",
-        color: "text-red-500",
-        bg: "bg-red-50",
-    },
-    {
-        icon: Wallet,
-        name: "Cash Wallet",
-        type: "Cash",
-        amount: "₹3,560.00",
-        color: "text-emerald-600",
-        bg: "bg-emerald-50",
-    },
-];
+    };
+}
 
-export function AccountsSummaryCard() {
+export function AccountsSummaryCard({
+    data,
+}: AccountsSummaryCardProps) {
+
+    const totalBalance = data.reduce(
+        (sum, account) => sum + account.amount,
+        0
+    );
 
     return (
 
-        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-4 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
-            <div className="mb-6 flex items-center justify-between">
+            <div className="mb-4 flex items-center justify-between">
 
                 <div>
 
@@ -67,57 +76,77 @@ export function AccountsSummaryCard() {
 
             </div>
 
-            <div className="space-y-5">
+            <div className="space-y-3">
 
-                {accounts.map((item) => {
+                {data.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-slate-500">
+                        No accounts available
+                    </div>
+                ) : (
+                    data.slice(0, 5).map((item) => {
 
-                    const Icon = item.icon;
+                        const style = getAccountStyle(
+                            item.type,
+                            item.isCreditCard
+                        );
 
-                    return (
+                        const Icon = style.icon;
 
-                        <div
-                            key={item.name}
-                            className="flex items-center justify-between"
-                        >
+                        return (
 
-                            <div className="flex items-center gap-4">
+                            <div
+                                key={item.id}
+                                className="flex items-center justify-between"
+                            >
 
-                                <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${item.bg}`}>
+                                <div className="flex min-w-0 items-center gap-3">
 
-                                    <Icon
-                                        size={20}
-                                        className={item.color}
-                                    />
+                                    <div
+                                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${style.bg}`}
+                                    >
+
+                                        <Icon
+                                            size={16}
+                                            className={style.color}
+                                        />
+
+                                    </div>
+
+                                    <div className="min-w-0">
+
+                                        <div className="truncate text-body font-semibold text-slate-900">
+                                            {item.name}
+                                        </div>
+
+                                        <div className="text-secondary text-slate-500">
+                                            {item.type}
+                                        </div>
+
+                                    </div>
 
                                 </div>
 
-                                <div>
-
-                                    <div className="text-body font-semibold text-slate-900">
-                                        {item.name}
-                                    </div>
-
-                                    <div className="text-secondary text-slate-500">
-                                        {item.type}
-                                    </div>
-
+                                <div
+                                    className={`text-body amount ml-3 whitespace-nowrap font-semibold ${style.color}`}
+                                >
+                                    {item.amount < 0 ? "-" : ""}₹{Math.abs(
+                                        item.amount
+                                    ).toLocaleString("en-IN", {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                    })}
                                 </div>
 
                             </div>
 
-                            <div className={`text-body amount font-semibold ${item.color}`}>
-                                {item.amount}
-                            </div>
+                        );
 
-                        </div>
-
-                    );
-
-                })}
+                    })
+                )}
 
             </div>
 
-            <div className="mt-6 border-t border-transparent pt-5">
+            <div className="mt-4 border-t border-transparent pt-3">
 
                 <div className="flex items-center justify-between">
 
@@ -126,7 +155,12 @@ export function AccountsSummaryCard() {
                     </span>
 
                     <span className="text-card-value amount text-slate-900">
-                        ₹54,320.00
+                        {totalBalance < 0 ? "-" : ""}₹{Math.abs(
+                            totalBalance
+                        ).toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                        })}
                     </span>
 
                 </div>
@@ -134,9 +168,7 @@ export function AccountsSummaryCard() {
             </div>
 
         </Card>
-
     );
-
 }
 
 

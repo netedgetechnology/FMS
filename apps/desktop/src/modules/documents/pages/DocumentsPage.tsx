@@ -1,0 +1,784 @@
+
+import { useEffect, useState } from "react";
+import {
+    FileArchive,
+    FileImage,
+    FileSpreadsheet,
+    FileText,
+
+    Search,
+    Trash2,
+    Upload,
+    X,
+    Pencil,
+    ExternalLink,
+    Eye,
+} from "lucide-react";
+
+import { Card } from "@/components/ui/card";
+import { open } from "@tauri-apps/plugin-dialog";
+
+import { DocumentService } from "../services/DocumentService";
+import { Document } from "../types";
+
+const documentService = new DocumentService();
+
+function getFileIcon(mimeType: string | null) {
+    if (!mimeType) {
+        return FileText;
+    }
+
+    if (mimeType.startsWith("image/")) {
+        return FileImage;
+    }
+
+    if (
+        mimeType.includes("spreadsheet") ||
+        mimeType.includes("excel") ||
+        mimeType.includes("csv")
+    ) {
+        return FileSpreadsheet;
+    }
+
+    if (
+        mimeType.includes("zip") ||
+        mimeType.includes("rar") ||
+        mimeType.includes("archive")
+    ) {
+        return FileArchive;
+    }
+
+    return FileText;
+}
+
+function formatFileSize(size: number) {
+    if (size < 1024) {
+        return `${size} B`;
+    }
+
+    if (size < 1024 * 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+    }
+
+    if (size < 1024 * 1024 * 1024) {
+        return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatDate(value: string) {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return "—";
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+    }).format(date);
+}
+
+function createDocumentId() {
+    return crypto.randomUUID();
+}
+
+export function DocumentsPage() {
+    const [documents, setDocuments] = useState<Document[]>([]);
+    const [search, setSearch] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [uploading, setUploading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+    const [editingDocument, setEditingDocument] =
+        useState<Document | null>(null);
+    const [deletingDocument, setDeletingDocument] =
+        useState<Document | null>(null);
+
+    const [editName, setEditName] = useState("");
+    const [editType, setEditType] = useState("");
+    const [editDescription, setEditDescription] = useState("");
+    async function handleOpen(document: Document) {
+        if (!document.filePath) {
+            setError("This document has no stored file.");
+            return;
+        }
+
+        try {
+            setError(null);
+            setOpenMenuId(null);
+
+            await documentService.openFile(
+                document.filePath,
+            );
+        } catch (error) {
+            console.error(error);
+            setError("Unable to open the document.");
+        }
+    }
+
+    async function loadDocuments() {
+        try {
+            setLoading(true);
+            setError(null);
+
+            const result = await documentService.getAll();
+            setDocuments(result);
+        } catch (error) {
+            console.error(error);
+            setError("Unable to load documents.");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    useEffect(() => {
+        void loadDocuments();
+    }, []);
+
+    async function openFilePicker() {
+        if (uploading) {
+            return;
+        }
+
+        const selected = await open({
+            multiple: false,
+            directory: false,
+            filters: [
+                {
+                    name: "Documents",
+                    extensions: [
+                        "pdf",
+                        "doc",
+                        "docx",
+                        "xls",
+                        "xlsx",
+                        "csv",
+                        "txt",
+                        "png",
+                        "jpg",
+                        "jpeg",
+                        "zip",
+                    ],
+                },
+            ],
+        });
+
+        if (!selected || Array.isArray(selected)) {
+            return;
+        }
+
+        try {
+            setUploading(true);
+            setError(null);
+
+            const documentId = createDocumentId();
+
+            const stored = await documentService.storeFile(
+                selected,
+                documentId,
+            );
+
+            const fileName =
+                selected.split(/[\\/]/).pop() || "Document";
+
+            const now = new Date().toISOString();
+
+            const document: Document = {
+                id: documentId,
+                name: fileName,
+                documentType: "application/octet-stream",
+                filePath: stored.filePath,
+                fileSize: stored.fileSize,
+                mimeType: null,
+                checksum: stored.checksum,
+                relatedEntityType: null,
+                relatedEntityId: null,
+                description: null,
+                createdAt: now,
+                updatedAt: now,
+            };
+
+            await documentService.create(document);
+            await loadDocuments();
+        } catch (error) {
+            console.error(error);
+            setError("Unable to upload the selected document.");
+        } finally {
+            setUploading(false);
+        }
+    }
+    useEffect(() => {
+        void loadDocuments();
+    }, []);
+
+    function startEditing(document: Document) {
+        setOpenMenuId(null);
+        setEditingDocument(document);
+        setEditName(document.name);
+        setEditType(document.documentType);
+        setEditDescription(document.description ?? "");
+        setError(null);
+    }
+
+    async function saveEdit() {
+        if (!editingDocument) {
+            return;
+        }
+
+        const name = editName.trim();
+        const type = editType.trim();
+
+        if (!name) {
+            setError("Document name is required.");
+            return;
+        }
+
+        if (!type) {
+            setError("Document type is required.");
+            return;
+        }
+
+        try {
+            setSaving(true);
+            setError(null);
+
+            await documentService.update({
+                id: editingDocument.id,
+                name,
+                documentType: type,
+                description:
+                    editDescription.trim() || null,
+                relatedEntityType:
+                    editingDocument.relatedEntityType,
+                relatedEntityId:
+                    editingDocument.relatedEntityId,
+            });
+
+            setEditingDocument(null);
+            await loadDocuments();
+        } catch (error) {
+            console.error(error);
+            setError("Unable to save document changes.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function confirmDelete() {
+        if (!deletingDocument) {
+            return;
+        }
+
+        try {
+            setSaving(true);
+            setError(null);
+
+            await documentService.delete(
+                deletingDocument.id,
+            );
+
+            setDeletingDocument(null);
+            setOpenMenuId(null);
+
+            await loadDocuments();
+        } catch (error) {
+            console.error(error);
+            setError("Unable to delete the document.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    const query = search.trim().toLowerCase();
+
+    const filteredDocuments = documents.filter((document) => {
+        if (!query) {
+            return true;
+        }
+
+        return (
+            document.name.toLowerCase().includes(query) ||
+            document.documentType
+                .toLowerCase()
+                .includes(query) ||
+            document.mimeType
+                ?.toLowerCase()
+                .includes(query) ||
+            document.description
+                ?.toLowerCase()
+                .includes(query)
+        );
+    });
+
+    return (
+        <div
+            className="space-y-6"
+            onClick={() => setOpenMenuId(null)}
+        >
+<div className="flex items-start justify-between gap-4">
+                <div>
+                    <h1 className="text-[28px] font-bold tracking-tight text-slate-900">
+                        Document Vault
+                    </h1>
+
+                    <p className="mt-1 text-[15px] text-slate-500">
+                        Store and manage your financial documents securely.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        void openFilePicker();
+                    }}
+                    disabled={uploading}
+                    className="flex h-10 items-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <Upload size={17} />
+
+                    {uploading
+                        ? "Uploading..."
+                        : "Upload Document"}
+                </button>
+            </div>
+
+            {error && (
+                <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <span>{error}</span>
+
+                    <button
+                        type="button"
+                        onClick={() => setError(null)}
+                        className="ml-4 rounded-md p-1 hover:bg-red-100"
+                    >
+                        <X size={16} />
+                    </button>
+                </div>
+            )}
+
+            <Card className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-sm">
+                <div className="mb-5 flex items-center justify-between gap-4">
+                    <div>
+                        <h2 className="text-[19px] font-semibold text-slate-900">
+                            Your Documents
+                        </h2>
+
+                        <p className="mt-1 text-sm text-slate-500">
+                            {documents.length} document
+                            {documents.length === 1
+                                ? ""
+                                : "s"} stored
+                        </p>
+                    </div>
+
+                    <div className="relative w-[280px]">
+                        <Search
+                            size={17}
+                            className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                        />
+
+                        <input
+                            value={search}
+                            onChange={(event) =>
+                                setSearch(event.target.value)
+                            }
+                            placeholder="Search documents..."
+                            className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-300 focus:bg-white"
+                        />
+                    </div>
+                </div>
+
+                {loading ? (
+                    <div className="flex h-40 items-center justify-center text-sm text-slate-500">
+                        Loading documents...
+                    </div>
+                ) : filteredDocuments.length === 0 ? (
+                    <div className="flex min-h-[260px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 text-center">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm">
+                            <FileText
+                                size={22}
+                                className="text-slate-400"
+                            />
+                        </div>
+
+                        <h3 className="mt-4 text-[16px] font-semibold text-slate-800">
+                            {search
+                                ? "No documents found"
+                                : "No documents yet"}
+                        </h3>
+
+                        <p className="mt-1 max-w-sm text-sm text-slate-500">
+                            {search
+                                ? "Try a different search term."
+                                : "Upload your first financial document to get started."}
+                        </p>
+
+                        {!search && (
+                            <button
+                                type="button"
+                                onClick={() => void openFilePicker()}
+                                disabled={uploading}
+                                className="mt-4 flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white disabled:opacity-60"
+                            >
+                                <Upload size={15} />
+
+                                {uploading
+                                    ? "Uploading..."
+                                    : "Upload Document"}
+                            </button>
+                        )}
+                    </div>
+                ) : (
+                    <div className="overflow-hidden rounded-2xl border border-slate-200">
+                        <div className="grid grid-cols-[minmax(0,1fr)_170px_110px_120px_80px] items-center border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <span>Document</span>
+                            <span>Type</span>
+                            <span>Size</span>
+                            <span>Added</span>
+                            <span />
+                        </div>
+
+                        <div className="divide-y divide-slate-100">
+                            {filteredDocuments.map((document) => {
+                                const Icon = getFileIcon(
+                                    document.mimeType,
+                                );
+
+                                return (
+                                    <div
+                                        key={document.id}
+                                        className="grid grid-cols-[minmax(0,1fr)_170px_110px_120px_80px] items-center px-4 py-3 transition hover:bg-slate-50"
+                                    >
+                                        <div className="flex min-w-0 items-center gap-3">
+                                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100">
+                                                <Icon
+                                                    size={19}
+                                                    className="text-slate-600"
+                                                />
+                                            </div>
+
+                                            <div className="min-w-0">
+                                                <p className="truncate text-sm font-semibold text-slate-800">
+                                                    {document.name}
+                                                </p>
+
+                                                {document.description && (
+                                                    <p className="truncate text-xs text-slate-500">
+                                                        {document.description}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <span
+                                            className="truncate pr-4 text-sm text-slate-600"
+                                            title={document.documentType}
+                                        >
+                                            {document.documentType}
+                                        </span>
+
+                                        <span className="text-sm text-slate-500">
+                                            {formatFileSize(
+                                                document.fileSize,
+                                            )}
+                                        </span>
+
+                                        <span className="text-sm text-slate-500">
+                                            {formatDate(
+                                                document.createdAt,
+                                            )}
+                                        </span>
+
+                                        <div className="relative">
+                                            <div className="flex items-center justify-end gap-1">
+                                                <button
+                                                    type="button"
+                                                    title="View document"
+                                                    aria-label={`View ${document.name}`}
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        void handleOpen(document);
+                                                    }}
+                                                    className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                                                >
+                                                    <Eye size={17} />
+                                                </button>
+
+                                                <button
+                                                    type="button"
+                                                    title="Delete document"
+                                                    aria-label={`Delete ${document.name}`}
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        setOpenMenuId(null);
+                                                        setDeletingDocument(document);
+                                                        setError(null);
+                                                    }}
+                                                    className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                                                >
+                                                    <Trash2 size={17} />
+                                                </button>
+                                            </div>
+
+                                            {openMenuId ===
+                                                document.id && (
+                                                <div
+                                                    className="absolute right-0 top-9 z-20 w-40 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg"
+                                                    onClick={(event) =>
+                                                        event.stopPropagation()
+                                                    }
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            void handleOpen(
+                                                                document,
+                                                            );
+                                                        }}
+                                                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                                                    >
+                                                        <ExternalLink
+                                                            size={15}
+                                                        />
+                                                        Open
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            startEditing(
+                                                                document,
+                                                            )
+                                                        }
+                                                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                                                    >
+                                                        <Pencil
+                                                            size={15}
+                                                        />
+                                                        Edit
+                                                    </button>
+
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setOpenMenuId(
+                                                                null,
+                                                            );
+                                                            setDeletingDocument(
+                                                                document,
+                                                            );
+                                                        }}
+                                                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                                                    >
+                                                        <Trash2
+                                                            size={15}
+                                                        />
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </Card>
+
+            {editingDocument && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-6"
+                    onClick={() => setEditingDocument(null)}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+                        onClick={(event) =>
+                            event.stopPropagation()
+                        }
+                    >
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <h2 className="text-lg font-semibold text-slate-900">
+                                    Edit Document
+                                </h2>
+
+                                <p className="mt-1 text-sm text-slate-500">
+                                    Update the document information.
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setEditingDocument(null)
+                                }
+                                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="mt-6 space-y-4">
+                            <label className="block">
+                                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                                    Name
+                                </span>
+
+                                <input
+                                    value={editName}
+                                    onChange={(event) =>
+                                        setEditName(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-slate-400"
+                                />
+                            </label>
+
+                            <label className="block">
+                                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                                    Document Type
+                                </span>
+
+                                <input
+                                    value={editType}
+                                    onChange={(event) =>
+                                        setEditType(
+                                            event.target.value,
+                                        )
+                                    }
+                                    className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-slate-400"
+                                />
+                            </label>
+
+                            <label className="block">
+                                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                                    Description
+                                </span>
+
+                                <textarea
+                                    value={editDescription}
+                                    onChange={(event) =>
+                                        setEditDescription(
+                                            event.target.value,
+                                        )
+                                    }
+                                    rows={4}
+                                    className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                                />
+                            </label>
+                        </div>
+
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setEditingDocument(null)
+                                }
+                                disabled={saving}
+                                className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => void saveEdit()}
+                                disabled={saving}
+                                className="h-10 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                            >
+                                {saving
+                                    ? "Saving..."
+                                    : "Save Changes"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {deletingDocument && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-6"
+                    onClick={() =>
+                        saving
+                            ? undefined
+                            : setDeletingDocument(null)
+                    }
+                >
+                    <div
+                        className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+                        onClick={(event) =>
+                            event.stopPropagation()
+                        }
+                    >
+                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50">
+                            <Trash2
+                                size={20}
+                                className="text-red-600"
+                            />
+                        </div>
+
+                        <h2 className="mt-4 text-lg font-semibold text-slate-900">
+                            Delete document?
+                        </h2>
+
+                        <p className="mt-2 text-sm leading-6 text-slate-500">
+                            This will remove{" "}
+                            <span className="font-medium text-slate-700">
+                                {deletingDocument.name}
+                            </span>{" "}
+                            from the Document Vault. This action cannot
+                            be undone.
+                        </p>
+
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setDeletingDocument(null)
+                                }
+                                disabled={saving}
+                                className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    void confirmDelete()
+                                }
+                                disabled={saving}
+                                className="h-10 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                            >
+                                {saving
+                                    ? "Deleting..."
+                                    : "Delete Document"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

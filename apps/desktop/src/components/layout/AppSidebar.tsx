@@ -4,6 +4,7 @@ import {
   IconBuildingStore,
   IconReceipt,
   IconFileImport,
+  IconFileDescription,
   IconWallet,
   IconTarget,
   IconPigMoney,
@@ -24,6 +25,7 @@ const menu = [
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
   { icon: IconFileImport, label: "Imports", path: "/imports" },
+  { icon: IconFileDescription, label: "Document Vault", path: "/documents" },
   { icon: IconWallet, label: "Budgets", path: "/budgets" },
   { icon: IconWallet, label: "Financial Plans", path: "/financial-plans" },
   { icon: IconTarget, label: "Financial Goals", path: "/financial-goals" },
@@ -113,3 +115,4 @@ export default function AppSidebar() {
     </aside>
   );
 }
+

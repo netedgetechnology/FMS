@@ -14,6 +14,8 @@ import { FinancialGoalsPage } from "@/modules/financial-goals/pages";
 import { BudgetsPage } from "@/modules/budgets/pages";
 import { ImportsPage } from "@/modules/imports/pages";
 import ReconciliationPage from "@/modules/reconciliation/pages";
+import { DocumentsPage } from "@/modules/documents/pages/DocumentsPage";
+import SettingsPage from "@/modules/settings/pages/SettingsPage";
 
 export default function AppRoutes() {
   return (
@@ -66,8 +68,23 @@ export default function AppRoutes() {
         <Route
           path="/reconciliation"
           element={<ReconciliationPage />}
-        />      </Route>
+        />
+
+        <Route
+          path="/documents"
+          element={<DocumentsPage />}
+        />
+
+        <Route
+          path="/settings"
+          element={<SettingsPage />}
+        />
+      </Route>
     </Routes>
   );
 }
+
+
+
+
 

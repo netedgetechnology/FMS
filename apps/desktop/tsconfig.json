@@ -23,7 +23,9 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
+  "exclude": ["src/modules/dashboard/Dashboard.v2.backup.tsx"],
   "references": [
     { "path": "./tsconfig.node.json" }
   ]
 }
+

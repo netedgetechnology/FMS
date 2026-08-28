@@ -11,92 +11,74 @@ import {
 
 import { Card } from "@/components/ui/card";
 
-const data = [
+interface ExpenseBreakdownCardProps {
+    data: {
+        name: string;
+        value: number;
+        color: string;
+    }[];
+}
 
-    {
-        name: "Housing",
-        value: 10560,
-        color: "#2F66E8",
-    },
+export function ExpenseBreakdownCard({
+    data,
+}: ExpenseBreakdownCardProps) {
 
-    {
-        name: "Food",
-        value: 5566,
-        color: "#22C55E",
-    },
+    const sortedData = data
+        .slice()
+        .sort((a, b) => b.value - a.value);
 
-    {
-        name: "Transportation",
-        value: 3340,
-        color: "#F59E0B",
-    },
+    const topCategories = sortedData.slice(0, 9);
 
-    {
-        name: "Utilities",
-        value: 2228,
-        color: "#8B5CF6",
-    },
+    const othersValue = sortedData
+        .slice(9)
+        .reduce(
+            (sum, item) => sum + item.value,
+            0,
+        );
 
-    {
-        name: "Entertainment",
-        value: 1949,
-        color: "#EF4444",
-    },
+    const displayData = [
+        ...topCategories,
+        ...(othersValue > 0
+            ? [
+                  {
+                      name: "Others",
+                      value: othersValue,
+                      color: "#2563EB",
+                  },
+              ]
+            : []),
+    ];
 
-    {
-        name: "Others",
-        value: 4187,
-        color: "#60A5FA",
-    },
-
-];
-
-const total = data.reduce(
-    (sum, item) => sum + item.value,
-    0,
-);
-
-export function ExpenseBreakdownCard() {
+    const total = displayData.reduce(
+        (sum, item) => sum + item.value,
+        0,
+    );
 
     return (
-
         <Card
-            className="rounded-[20px] bg-white p-6 shadow-sm"
+            className="rounded-[20px] border border-slate-200/80 bg-white p-4 shadow-[0_4px_20px_rgba(15,23,42,0.05)]"
         >
 
-            <div
-                className="flex items-start justify-between"
-            >
+            <div className="flex items-start justify-between">
 
                 <div>
-
-                    <h2
-                        className="text-[20px] font-semibold text-slate-900"
-                    >
+                    <h2 className="text-[20px] font-semibold text-slate-900">
                         Expense Breakdown
                     </h2>
-
                 </div>
 
                 <button
-                    className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700"
+                    className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700"
                 >
-
                     This Month
-
                     <ChevronDown size={16} />
-
                 </button>
 
             </div>
 
-            <div
-                className="mt-5 grid grid-cols-[175px_1fr] items-center gap-2"
-            >
+            <div className="mt-4 grid grid-cols-[150px_1fr] items-center gap-3">
 
-                <div
-                    className="relative h-[175px] w-[175px]"
-                >
+                <div className="relative h-[150px] w-[150px]">
 
                     <ResponsiveContainer
                         width="100%"
@@ -106,24 +88,20 @@ export function ExpenseBreakdownCard() {
                         <PieChart>
 
                             <Pie
-                                data={data}
+                                data={displayData}
                                 dataKey="value"
-                                innerRadius={48}
-                                outerRadius={70}
+                                innerRadius={43}
+                                outerRadius={64}
                                 stroke="white"
                                 strokeWidth={4}
                             >
 
-                                {
-                                    data.map((item) => (
-
-                                        <Cell
-                                            key={item.name}
-                                            fill={item.color}
-                                        />
-
-                                    ))
-                                }
+                                {displayData.map((item) => (
+                                    <Cell
+                                        key={item.name}
+                                        fill={item.color}
+                                    />
+                                ))}
 
                             </Pie>
 
@@ -131,89 +109,65 @@ export function ExpenseBreakdownCard() {
 
                     </ResponsiveContainer>
 
-                    <div
-                        className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center"
-                    >
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
 
-                        <span
-                            className="text-[11px] font-medium text-slate-500"
-                        >
+                        <span className="text-[11px] font-medium text-slate-500">
                             Total
                         </span>
 
-                        <span
-                            className="mt-1 text-[18px] font-bold text-slate-900"
-                        >
-                            ₹27,830
+                        <span className="mt-0.5 max-w-[112px] whitespace-nowrap text-[14px] font-bold leading-tight text-slate-900">
+                            ₹{total.toLocaleString("en-IN")}
                         </span>
 
                     </div>
 
                 </div>
 
-                <div
-                    className="flex flex-1 flex-col justify-center space-y-2 pl-0"
-                >
+                <div className="flex min-w-0 flex-col justify-center space-y-1.5">
 
-                    {
-                        data.map((item) => {
+                    {displayData.map((item) => {
 
-                            const percent = Math.round(
-                                (item.value / total) * 100
-                            );
+                        const percent =
+                            total > 0
+                                ? Math.round(
+                                      (item.value / total) * 100,
+                                  )
+                                : 0;
 
-                            return (
+                        return (
+                            <div
+                                key={item.name}
+                                className="grid grid-cols-[8px_minmax(0,1fr)_34px_62px] items-center gap-2"
+                            >
 
-                                <div
-                                    key={item.name}
-                                    className="grid grid-cols-[10px_1fr_36px_64px] items-center gap-2"
-                                >
+                                <span
+                                    className="h-2.5 w-2.5 rounded-full"
+                                    style={{
+                                        background: item.color,
+                                    }}
+                                />
 
-                                    <span
-                                        className="h-3 w-3 rounded-full"
-                                        style={{
-                                            background: item.color,
-                                        }}
-                                    />
+                                <span className="truncate text-[13px] font-medium text-slate-700">
+                                    {item.name}
+                                </span>
 
-                                    <span
-                                        className="truncate text-[13px] font-medium text-slate-700"
-                                    >
-                                        {item.name}
-                                    </span>
+                                <span className="text-right text-[13px] text-slate-500">
+                                    {percent}%
+                                </span>
 
-                                    <span
-                                        className="text-right text-[13px] text-slate-500"
-                                    >
-                                        {percent}%
-                                    </span>
+                                <span className="whitespace-nowrap text-right text-[13px] font-semibold text-slate-900">
+                                    ₹{item.value.toLocaleString("en-IN")}
+                                </span>
 
-                                    <span
-                                        className="text-right text-[13px] font-semibold text-slate-900"
-                                    >
-                                        ₹{item.value.toLocaleString()}
-                                    </span>
+                            </div>
+                        );
 
-                                </div>
-
-                            );
-
-                        })
-                    }
+                    })}
 
                 </div>
 
             </div>
 
         </Card>
-
     );
-
 }
-
-
-
-
-
-
-

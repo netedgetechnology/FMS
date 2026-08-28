@@ -7,15 +7,42 @@ import {
 
 import { Card } from "@/components/ui/card";
 
-const data = [
-    { value: 64, color: "#2563eb" },
-    { value: 36, color: "#dbeafe" },
-];
+interface BudgetOverviewCardProps {
+    data: {
+        totalBudget: number;
+        spent: number;
+        remaining: number;
+        percentage: number;
+    };
+}
 
-export function BudgetOverviewCard() {
+function formatCurrency(value: number) {
+    return `₹${value.toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    })}`;
+}
+
+export function BudgetOverviewCard({
+    data,
+}: BudgetOverviewCardProps) {
+    const percentage = Math.min(
+        Math.max(data.percentage, 0),
+        100
+    );
+
+    const chartData = [
+        {
+            value: percentage,
+            color: "#2563eb",
+        },
+        {
+            value: 100 - percentage,
+            color: "#dbeafe",
+        },
+    ];
 
     return (
-
         <Card className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-6 flex items-center justify-between">
@@ -39,22 +66,18 @@ export function BudgetOverviewCard() {
                         <PieChart>
 
                             <Pie
-                                data={data}
+                                data={chartData}
                                 innerRadius={48}
                                 outerRadius={66}
                                 stroke="none"
                                 dataKey="value"
                             >
-
-                                {data.map((entry, index) => (
-
+                                {chartData.map((entry, index) => (
                                     <Cell
                                         key={index}
                                         fill={entry.color}
                                     />
-
                                 ))}
-
                             </Pie>
 
                         </PieChart>
@@ -64,7 +87,7 @@ export function BudgetOverviewCard() {
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
 
                         <div className="text-card-value percent">
-                            64%
+                            {percentage}%
                         </div>
 
                         <div className="text-small text-slate-500">
@@ -78,18 +101,33 @@ export function BudgetOverviewCard() {
                 <div className="space-y-5">
 
                     <div className="flex justify-between">
-                        <span className="text-secondary text-slate-500">Total Budget</span>
-                        <span className="text-body amount font-semibold">₹1,20,000.00</span>
+                        <span className="text-secondary text-slate-500">
+                            Total Budget
+                        </span>
+
+                        <span className="text-body amount font-semibold">
+                            {formatCurrency(data.totalBudget)}
+                        </span>
                     </div>
 
                     <div className="flex justify-between">
-                        <span className="text-secondary text-slate-500">Spent</span>
-                        <span className="text-body amount font-semibold text-red-500">₹76,800.00</span>
+                        <span className="text-secondary text-slate-500">
+                            Spent
+                        </span>
+
+                        <span className="text-body amount font-semibold text-red-500">
+                            {formatCurrency(data.spent)}
+                        </span>
                     </div>
 
                     <div className="flex justify-between">
-                        <span className="text-secondary text-slate-500">Remaining</span>
-                        <span className="text-body amount font-semibold text-emerald-600">₹43,200.00</span>
+                        <span className="text-secondary text-slate-500">
+                            Remaining
+                        </span>
+
+                        <span className="text-body amount font-semibold text-emerald-600">
+                            {formatCurrency(data.remaining)}
+                        </span>
                     </div>
 
                 </div>
@@ -97,9 +135,5 @@ export function BudgetOverviewCard() {
             </div>
 
         </Card>
-
     );
-
 }
-
-

@@ -7,37 +7,48 @@ import {
 
 import { Card } from "@/components/ui/card";
 
-const portfolio = [
-    {
-        name: "Mutual Funds",
-        value: 45,
-        amount: "₹84,000",
-        color: "#2563EB",
-    },
-    {
-        name: "Stocks",
-        value: 30,
-        amount: "₹56,000",
-        color: "#8B5CF6",
-    },
-    {
-        name: "PPF",
-        value: 15,
-        amount: "₹28,000",
-        color: "#10B981",
-    },
-    {
-        name: "Gold",
-        value: 10,
-        amount: "₹18,750",
-        color: "#F59E0B",
-    },
+interface InvestmentSummaryCardProps {
+    data: {
+        totalValue: number;
+        monthlyChangePercentage: number;
+        allocation: {
+            name: string;
+            value: number;
+            amount: number;
+        }[];
+    };
+}
+
+const allocationColors = [
+    "#2563EB",
+    "#8B5CF6",
+    "#10B981",
+    "#F59E0B",
+    "#EF4444",
+    "#06B6D4",
 ];
 
-export function InvestmentSummaryCard() {
+function formatCurrency(value: number) {
+    return `₹${value.toLocaleString("en-IN", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+    })}`;
+}
+
+export function InvestmentSummaryCard({
+    data,
+}: InvestmentSummaryCardProps) {
+    const portfolio = data.allocation.map(
+        (item, index) => ({
+            ...item,
+            color:
+                allocationColors[
+                    index % allocationColors.length
+                ],
+        })
+    );
 
     return (
-
         <Card className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-6 flex items-center justify-between">
@@ -76,16 +87,12 @@ export function InvestmentSummaryCard() {
                                 stroke="none"
                                 paddingAngle={3}
                             >
-
                                 {portfolio.map((item) => (
-
                                     <Cell
                                         key={item.name}
                                         fill={item.color}
                                     />
-
                                 ))}
-
                             </Pie>
 
                         </PieChart>
@@ -95,11 +102,21 @@ export function InvestmentSummaryCard() {
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
 
                         <div className="text-3xl font-bold text-slate-900">
-                            ₹1.87L
+                            {formatCurrency(data.totalValue)}
                         </div>
 
-                        <div className="mt-1 text-xs text-emerald-600">
-                            +11.3% this month
+                        <div
+                            className={`mt-1 text-xs ${
+                                data.monthlyChangePercentage >= 0
+                                    ? "text-emerald-600"
+                                    : "text-red-500"
+                            }`}
+                        >
+                            {data.monthlyChangePercentage >= 0
+                                ? "+"
+                                : ""}
+                            {data.monthlyChangePercentage.toFixed(1)}%
+                            {" "}this month
                         </div>
 
                     </div>
@@ -108,55 +125,59 @@ export function InvestmentSummaryCard() {
 
                 <div className="space-y-5">
 
-                    {portfolio.map((item) => (
-
-                        <div
-                            key={item.name}
-                            className="flex items-center justify-between"
-                        >
-
-                            <div className="flex items-center gap-3">
-
-                                <span
-                                    className="h-3 w-3 rounded-full"
-                                    style={{
-                                        backgroundColor: item.color,
-                                    }}
-                                />
-
-                                <div>
-
-                                    <div className="font-semibold">
-                                        {item.name}
-                                    </div>
-
-                                    <div className="text-sm text-slate-500">
-                                        {item.value}%
-                                    </div>
-
-                                </div>
-
-                            </div>
-
-                            <div className="text-right">
-
-                                <div className="font-bold">
-                                    {item.amount}
-                                </div>
-
-                            </div>
-
+                    {portfolio.length === 0 ? (
+                        <div className="py-8 text-center text-sm text-slate-500">
+                            No investment data available
                         </div>
+                    ) : (
+                        portfolio.map((item) => (
 
-                    ))}
+                            <div
+                                key={item.name}
+                                className="flex items-center justify-between"
+                            >
+
+                                <div className="flex items-center gap-3">
+
+                                    <span
+                                        className="h-3 w-3 rounded-full"
+                                        style={{
+                                            backgroundColor:
+                                                item.color,
+                                        }}
+                                    />
+
+                                    <div>
+
+                                        <div className="font-semibold">
+                                            {item.name}
+                                        </div>
+
+                                        <div className="text-sm text-slate-500">
+                                            {item.value}%
+                                        </div>
+
+                                    </div>
+
+                                </div>
+
+                                <div className="text-right">
+
+                                    <div className="font-bold">
+                                        {formatCurrency(item.amount)}
+                                    </div>
+
+                                </div>
+
+                            </div>
+
+                        ))
+                    )}
 
                 </div>
 
             </div>
 
         </Card>
-
     );
-
 }
-

@@ -38,16 +38,66 @@ function formatCurrency(
     ).format(value);
 }
 
-function TopSpendingCategoriesCard() {
+function TopSpendingCategoriesCard({
+    data,
+}: {
+    data: {
+        name: string;
+        amount: number;
+        percentage: number;
+    }[];
+}) {
     return (
         <div className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
-            <h2 className="text-xl font-bold">
-                Top Spending Categories
-            </h2>
 
-            <p className="mt-1 text-sm text-slate-500">
-                Coming in next sprint
-            </p>
+            <div className="mb-5">
+                <h2 className="text-[20px] font-semibold text-slate-900">
+                    Top Spending Categories
+                </h2>
+
+                <p className="mt-1 text-[14px] text-slate-500">
+                    Where your money is going
+                </p>
+            </div>
+
+            <div className="space-y-5">
+                {data.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-slate-500">
+                        No spending data available
+                    </div>
+                ) : (
+                    data.map((item) => (
+                        <div key={item.name}>
+                            <div className="mb-2 flex items-center justify-between gap-3">
+                                <span className="truncate text-[14px] font-medium text-slate-700">
+                                    {item.name}
+                                </span>
+
+                                <span className="whitespace-nowrap text-[14px] font-semibold text-slate-900">
+                                    ₹{item.amount.toLocaleString("en-IN")}
+                                </span>
+                            </div>
+
+                            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                    className="h-full rounded-full bg-blue-500"
+                                    style={{
+                                        width: `${Math.min(
+                                            item.percentage,
+                                            100
+                                        )}%`,
+                                    }}
+                                />
+                            </div>
+
+                            <div className="mt-1 text-right text-[12px] text-slate-400">
+                                {item.percentage}% of expenses
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+
         </div>
     );
 }
@@ -116,6 +166,24 @@ export default function Dashboard() {
             expenses: 0,
             netWorth: 0,
             savingsRate: 0,
+            cashFlow: [],
+            expenseBreakdown: [],
+            recentTransactions: [],
+            accounts: [],
+            topSpendingCategories: [],
+            upcomingEMIs: [],
+            budgetOverview: {
+                totalBudget: 0,
+                spent: 0,
+                remaining: 0,
+                percentage: 0,
+            },
+            goalsProgress: [],
+            investmentSummary: {
+                totalValue: 0,
+                monthlyChangePercentage: 0,
+                allocation: [],
+            },
         };
 
     return (
@@ -219,15 +287,21 @@ export default function Dashboard() {
                 <section className="grid gap-5 xl:grid-cols-12">
 
                     <div className="xl:col-span-5">
-                        <CashFlowCard />
+                        <CashFlowCard
+                        data={dashboardSummary.cashFlow}
+                    />
                     </div>
 
                     <div className="xl:col-span-4">
-                        <ExpenseBreakdownCard />
+                        <ExpenseBreakdownCard
+                        data={dashboardSummary.expenseBreakdown}
+                    />
                     </div>
 
                     <div className="xl:col-span-3">
-                        <RecentTransactionsCard />
+                        <RecentTransactionsCard
+                        data={dashboardSummary.recentTransactions}
+                    />
                     </div>
 
                 </section>
@@ -235,15 +309,21 @@ export default function Dashboard() {
                 <section className="grid gap-5 xl:grid-cols-12">
 
                     <div className="xl:col-span-5">
-                        <AccountsSummaryCard />
+                        <AccountsSummaryCard
+                        data={dashboardSummary.accounts}
+                    />
                     </div>
 
                     <div className="xl:col-span-3">
-                        <TopSpendingCategoriesCard />
+                        <TopSpendingCategoriesCard
+                        data={dashboardSummary.topSpendingCategories}
+                    />
                     </div>
 
                     <div className="xl:col-span-4">
-                        <UpcomingEMICard />
+                        <UpcomingEMICard
+                        data={dashboardSummary.upcomingEMIs}
+                    />
                     </div>
 
                 </section>
@@ -251,15 +331,21 @@ export default function Dashboard() {
                 <section className="grid gap-5 xl:grid-cols-12">
 
                     <div className="xl:col-span-4">
-                        <BudgetOverviewCard />
+                        <BudgetOverviewCard
+                        data={dashboardSummary.budgetOverview}
+                    />
                     </div>
 
                     <div className="xl:col-span-3">
-                        <GoalsProgressCard />
+                        <GoalsProgressCard
+                        data={dashboardSummary.goalsProgress}
+                    />
                     </div>
 
                     <div className="xl:col-span-4">
-                        <InvestmentSummaryCard />
+                        <InvestmentSummaryCard
+                        data={dashboardSummary.investmentSummary}
+                    />
                     </div>
 
                 </section>
@@ -269,3 +355,16 @@ export default function Dashboard() {
         </div>
     );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
