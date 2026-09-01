@@ -14,6 +14,8 @@ export class AccountRepository extends Repository {
                 accounts.account_type AS type,
                 accounts.institution_id AS institutionId,
                 institutions.name AS institutionName,
+                accounts.business_entity_id AS businessEntityId,
+                business_entities.name AS businessEntityName,
                 accounts.currency_id AS currencyId,
                 accounts.opening_balance AS openingBalance,
                 accounts.account_number AS accountNumber,
@@ -28,6 +30,8 @@ export class AccountRepository extends Repository {
             FROM accounts
             LEFT JOIN institutions
                 ON institutions.id = accounts.institution_id
+            LEFT JOIN business_entities
+                ON business_entities.id = accounts.business_entity_id
             WHERE accounts.deleted_at IS NULL
             ORDER BY accounts.name
             `
@@ -48,6 +52,8 @@ export class AccountRepository extends Repository {
                 accounts.account_type AS type,
                 accounts.institution_id AS institutionId,
                 institutions.name AS institutionName,
+                accounts.business_entity_id AS businessEntityId,
+                business_entities.name AS businessEntityName,
                 accounts.currency_id AS currencyId,
                 accounts.opening_balance AS openingBalance,
                 accounts.account_number AS accountNumber,
@@ -62,6 +68,8 @@ export class AccountRepository extends Repository {
             FROM accounts
             LEFT JOIN institutions
                 ON institutions.id = accounts.institution_id
+            LEFT JOIN business_entities
+                ON business_entities.id = accounts.business_entity_id
             WHERE accounts.id = ?
               AND accounts.deleted_at IS NULL
             `,
@@ -87,6 +95,7 @@ export class AccountRepository extends Repository {
             (
                 id,
                 institution_id,
+                business_entity_id,
                 currency_id,
                 name,
                 account_type,
@@ -102,11 +111,12 @@ export class AccountRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 account.id,
                 account.institutionId,
+                account.businessEntityId ?? null,
                 account.currencyId,
                 account.name,
                 account.type,
@@ -130,6 +140,7 @@ export class AccountRepository extends Repository {
             UPDATE accounts
             SET
                 institution_id = ?,
+                business_entity_id = ?,
                 currency_id = ?,
                 name = ?,
                 account_type = ?,
@@ -146,6 +157,7 @@ export class AccountRepository extends Repository {
             `,
             [
                 account.institutionId,
+                account.businessEntityId ?? null,
                 account.currencyId,
                 account.name,
                 account.type,

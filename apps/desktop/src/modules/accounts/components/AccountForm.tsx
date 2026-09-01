@@ -15,6 +15,7 @@ import {
 
 import { FormField } from "@/components/forms";
 import { useCurrencies } from "@/modules/currencies";
+import { useBusinessEntities } from "@/modules/business-entities";
 
 import {
     accountSchema,
@@ -61,6 +62,7 @@ export function AccountForm({
     onSubmit,
 }: AccountFormProps) {
     const { currencies } = useCurrencies();
+    const { businessEntities } = useBusinessEntities();
 
     const {
         register,
@@ -75,6 +77,7 @@ export function AccountForm({
             name: "",
             type: undefined,
             institutionName: "",
+            businessEntityId: "",
             currencyId: "",
             openingBalance: 0,
             accountNumber: "",
@@ -109,6 +112,7 @@ export function AccountForm({
                 name: defaultValues.name ?? "",
                 type: defaultValues.type,
                 institutionName: defaultValues.institutionName ?? "",
+                businessEntityId: defaultValues.businessEntityId ?? "",
                 currencyId: defaultValues.currencyId ?? "",
                 openingBalance: defaultValues.openingBalance ?? 0,
                 accountNumber: defaultValues.accountNumber ?? "",
@@ -204,6 +208,46 @@ export function AccountForm({
                                     </Select>
                                 );
                             }}
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="Business Entity"
+                        htmlFor="businessEntityId"
+                        required
+                        error={errors.businessEntityId?.message}
+                    >
+                        <Controller
+                            control={control}
+                            name="businessEntityId"
+                            render={({ field }) => (
+                                <Select
+                                    value={field.value}
+                                    onValueChange={field.onChange}
+                                >
+                                    <SelectTrigger id="businessEntityId">
+                                        <SelectValue placeholder="Select Business Entity" />
+                                    </SelectTrigger>
+
+                                    <SelectContent>
+                                        <SelectItem
+                                            value="__placeholder"
+                                            disabled
+                                        >
+                                            Select Business Entity
+                                        </SelectItem>
+
+                                        {businessEntities.map(entity => (
+                                            <SelectItem
+                                                key={entity.id}
+                                                value={entity.id}
+                                            >
+                                                {entity.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
                         />
                     </FormField>
 

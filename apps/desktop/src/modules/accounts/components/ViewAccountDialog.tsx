@@ -1,3 +1,4 @@
+import { useMoneyFormatter } from "@/core/formatting";
 import {
     Dialog,
     DialogContent,
@@ -21,17 +22,7 @@ function formatType(type: string): string {
         .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-function formatCurrency(amount: number, currency: string): string {
-    try {
-        return new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency,
-            maximumFractionDigits: 2,
-        }).format(amount);
-    } catch {
-        return `${currency} ${amount.toFixed(2)}`;
-    }
-}
+
 
 function Detail({
     label,
@@ -58,6 +49,7 @@ export function ViewAccountDialog({
     open,
     onOpenChange,
 }: ViewAccountDialogProps) {
+    const formatMoney = useMoneyFormatter();
     if (!account) {
         return null;
     }
@@ -99,10 +91,7 @@ export function ViewAccountDialog({
                             </div>
 
                             <div className="mt-2 text-xl font-semibold tracking-tight text-slate-900">
-                                {formatCurrency(
-                                    Number(account.openingBalance ?? 0),
-                                    account.currencyId
-                                )}
+                                {formatMoney(Number(account.openingBalance ?? 0), account.currencyId)}
                             </div>
                         </div>
 
@@ -135,6 +124,11 @@ export function ViewAccountDialog({
                             <Detail
                                 label="Institution"
                                 value={account.institutionName}
+                            />
+
+                            <Detail
+                                label="Business Entity"
+                                value={account.businessEntityName}
                             />
 
                             <Detail
@@ -185,3 +179,6 @@ export function ViewAccountDialog({
         </Dialog>
     );
 }
+
+
+

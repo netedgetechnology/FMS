@@ -14,6 +14,11 @@ export const accountSchema = z.object({
         .trim()
         .optional(),
 
+    businessEntityId: z
+        .string()
+        .trim()
+        .min(1, "Business entity is required."),
+
     currencyId: z
         .string()
         .trim()

@@ -63,6 +63,7 @@ export class AccountService {
             name: request.name,
             type: request.type,
             institutionId,
+            businessEntityId: request.businessEntityId,
             currencyId: request.currencyId,
             openingBalance: request.openingBalance,
             accountNumber: request.accountNumber,

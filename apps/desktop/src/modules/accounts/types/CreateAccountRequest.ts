@@ -9,6 +9,8 @@ export interface CreateAccountRequest {
 
     institutionName?: string | null;
 
+    businessEntityId: string;
+
     currencyId: string;
 
     openingBalance: number;

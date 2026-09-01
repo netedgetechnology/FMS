@@ -11,6 +11,10 @@ export interface Account {
 
 institutionName?: string;
 
+    businessEntityId: string | null;
+
+    businessEntityName?: string;
+
     currencyId: string;
 
     openingBalance: number;

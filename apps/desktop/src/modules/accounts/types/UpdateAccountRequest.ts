@@ -9,6 +9,8 @@ export interface UpdateAccountRequest {
 
     institutionId: string | null;
 
+    businessEntityId: string;
+
     currencyId: string;
 
     openingBalance: number;
