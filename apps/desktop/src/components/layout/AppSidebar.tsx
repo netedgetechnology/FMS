@@ -1,3 +1,4 @@
+import finwealogo from "@/assets/icons/finwealogo.png";
 import {
   IconDashboard,
   IconBuildingBank,
@@ -16,8 +17,9 @@ import {
   IconUserCircle,
   IconChevronDown,
 } from "@tabler/icons-react";
-
 import { NavLink } from "react-router-dom";
+import { useSettings } from "@/modules/settings/hooks/useSettings";
+
 
 const menu = [
   { icon: IconDashboard, label: "Dashboard", path: "/dashboard" },
@@ -38,17 +40,22 @@ const menu = [
 ];
 
 export default function AppSidebar() {
+  const { settings } = useSettings();
   return (
-    <aside className="flex h-screen w-[220px] shrink-0 flex-col border-r border-slate-100 bg-white">
+    <aside className="flex h-screen w-[220px] shrink-0 flex-col border-r border-slate-100 bg-white dark:border-slate-800 dark:bg-[#111827]">
 
       <div className="shrink-0 px-7 pb-5 pt-7">
-        <h1 className="text-[27px] font-extrabold tracking-tight text-[#0F172A]">
-          FinanceOS
-        </h1>
+        <div className="flex items-center gap-2">
+          <img
+            src={finwealogo}
+            alt="FinWea"
+            className="h-8 w-auto object-contain"
+          />
+          <h1 className="whitespace-nowrap text-[27px] font-extrabold tracking-tight text-[#111827]">FinWea</h1>
+        </div>
 
         <p className="mt-1 text-[13px] leading-5 text-slate-500">
-          Personal Finance<br />
-          Manager
+          Your Finance Manager
         </p>
       </div>
 
@@ -97,7 +104,7 @@ export default function AppSidebar() {
               </div>
 
               <div className="text-[13px] font-semibold text-slate-900">
-                Personal
+                {settings.workspaceName}
               </div>
             </div>
 
@@ -115,4 +122,13 @@ export default function AppSidebar() {
     </aside>
   );
 }
+
+
+
+
+
+
+
+
+
 
