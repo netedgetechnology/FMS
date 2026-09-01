@@ -22,33 +22,29 @@ import { GoalsProgressCard } from "./components/widgets/GoalsProgressCard";
 import { UpcomingEMICard } from "./components/widgets/UpcomingEMICard";
 import { InvestmentSummaryCard } from "./components/widgets/InvestmentSummaryCard";
 
-import { DashboardService } from "./services";
+import {
+    DashboardService,
+    DEFAULT_DASHBOARD_RANGE_DAYS,
+    rangeFromDays,
+} from "./services";
+import { useMoneyFormatter } from "@/core/formatting";
 import type { DashboardSummary } from "./types";
 
-function formatCurrency(
-    value: number
-): string {
-    return new Intl.NumberFormat(
-        "en-IN",
-        {
-            style: "currency",
-            currency: "INR",
-            maximumFractionDigits: 2,
-        }
-    ).format(value);
-}
+
 
 function TopSpendingCategoriesCard({
     data,
+    formatMoney,
 }: {
     data: {
         name: string;
         amount: number;
         percentage: number;
     }[];
+    formatMoney: (value: number) => string;
 }) {
     return (
-        <div className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <div className="h-full rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-5">
                 <h2 className="text-[20px] font-semibold text-slate-900">
@@ -74,7 +70,7 @@ function TopSpendingCategoriesCard({
                                 </span>
 
                                 <span className="whitespace-nowrap text-[14px] font-semibold text-slate-900">
-                                    ₹{item.amount.toLocaleString("en-IN")}
+                                    {formatMoney(item.amount)}
                                 </span>
                             </div>
 
@@ -103,6 +99,13 @@ function TopSpendingCategoriesCard({
 }
 
 export default function Dashboard() {
+    const formatMoney = useMoneyFormatter();
+
+    const [rangeDays, setRangeDays] =
+        useState<number>(
+            DEFAULT_DASHBOARD_RANGE_DAYS
+        );
+
     const [summary, setSummary] =
         useState<DashboardSummary | null>(
             null
@@ -127,7 +130,9 @@ export default function Dashboard() {
                         new DashboardService();
 
                     const data =
-                        await service.getSummary();
+                        await service.getSummary(
+                            rangeFromDays(rangeDays)
+                        );
 
                     if (mounted) {
                         setSummary(data);
@@ -157,7 +162,7 @@ export default function Dashboard() {
         return () => {
             mounted = false;
         };
-    }, []);
+    }, [rangeDays]);
 
     const dashboardSummary =
         summary ?? {
@@ -191,7 +196,10 @@ export default function Dashboard() {
 
             <div className="w-full space-y-5 px-0 py-0">
 
-                <DashboardHeader />
+                <DashboardHeader
+                    rangeDays={rangeDays}
+                    onRangeDaysChange={setRangeDays}
+                />
 
                 {error && (
                     <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
@@ -207,9 +215,7 @@ export default function Dashboard() {
                         value={
                             loading
                                 ? "Loading..."
-                                : formatCurrency(
-                                      dashboardSummary.cashBalance
-                                  )
+                                : formatMoney(dashboardSummary.cashBalance)
                         }
                         change={null}
                         positive
@@ -223,9 +229,7 @@ export default function Dashboard() {
                         value={
                             loading
                                 ? "Loading..."
-                                : formatCurrency(
-                                      dashboardSummary.income
-                                  )
+                                : formatMoney(dashboardSummary.income)
                         }
                         change={null}
                         positive
@@ -239,9 +243,7 @@ export default function Dashboard() {
                         value={
                             loading
                                 ? "Loading..."
-                                : formatCurrency(
-                                      dashboardSummary.expenses
-                                  )
+                                : formatMoney(dashboardSummary.expenses)
                         }
                         change={null}
                         positive={false}
@@ -255,9 +257,7 @@ export default function Dashboard() {
                         value={
                             loading
                                 ? "Loading..."
-                                : formatCurrency(
-                                      dashboardSummary.netWorth
-                                  )
+                                : formatMoney(dashboardSummary.netWorth)
                         }
                         change={null}
                         positive
@@ -316,8 +316,9 @@ export default function Dashboard() {
 
                     <div className="xl:col-span-3">
                         <TopSpendingCategoriesCard
-                        data={dashboardSummary.topSpendingCategories}
-                    />
+                            data={dashboardSummary.topSpendingCategories}
+                            formatMoney={formatMoney}
+                        />
                     </div>
 
                     <div className="xl:col-span-4">
@@ -336,13 +337,13 @@ export default function Dashboard() {
                     />
                     </div>
 
-                    <div className="xl:col-span-3">
+                    <div className="xl:col-span-5">
                         <GoalsProgressCard
                         data={dashboardSummary.goalsProgress}
                     />
                     </div>
 
-                    <div className="xl:col-span-4">
+                    <div className="xl:col-span-3">
                         <InvestmentSummaryCard
                         data={dashboardSummary.investmentSummary}
                     />
@@ -355,6 +356,14 @@ export default function Dashboard() {
         </div>
     );
 }
+
+
+
+
+
+
+
+
 
 
 

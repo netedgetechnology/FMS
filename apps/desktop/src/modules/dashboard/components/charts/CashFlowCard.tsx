@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import {
     Area,
     AreaChart,
@@ -8,30 +10,69 @@ import {
     YAxis,
 } from "recharts";
 
-import { ChevronDown } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { useMoneyFormatter } from "@/core/formatting";
+
+import {
+    DashboardService,
+    DEFAULT_DASHBOARD_PERIOD,
+    resolveDashboardPeriod,
+    type CashFlowPoint,
+    type DashboardPeriod,
+} from "../../services";
+import { PeriodSelect } from "../common/PeriodSelect";
 
 interface CashFlowCardProps {
-    data: {
-        day: string;
-        income: number;
-        expense: number;
-    }[];
+    data: CashFlowPoint[];
 }
-
-const currency = (value: number) => {
-    if (value === 0) {
-        return "₹0";
-    }
-
-    return `₹${value / 1000}k`;
-};
 
 export function CashFlowCard({
     data,
 }: CashFlowCardProps) {
+    const formatMoney = useMoneyFormatter();
+
+    const [period, setPeriod] = useState<DashboardPeriod>(
+        DEFAULT_DASHBOARD_PERIOD,
+    );
+
+    const [fetched, setFetched] = useState<CashFlowPoint[] | null>(
+        null,
+    );
+
+    useEffect(() => {
+        let active = true;
+
+        new DashboardService()
+            .getCashFlow(resolveDashboardPeriod(period))
+            .then((result) => {
+                if (active) {
+                    setFetched(result);
+                }
+            })
+            .catch(() => {
+                if (active) {
+                    setFetched([]);
+                }
+            });
+
+        return () => {
+            active = false;
+        };
+    }, [period]);
+
+    const series = fetched ?? data;
+
+    const formatAxisMoney = (value: number) => {
+        if (value === 0) {
+            return formatMoney(0);
+        }
+
+        const formatted = formatMoney(value / 1000);
+
+        return `${formatted}k`;
+    };
     return (
-        <Card className="rounded-[20px] bg-white p-6 shadow-sm">
+        <Card className="h-full rounded-[20px] bg-white p-6 shadow-sm">
 
             <div className="flex items-start justify-between">
 
@@ -67,12 +108,11 @@ export function CashFlowCard({
 
                 </div>
 
-                <button
-                    className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 text-body font-medium text-slate-700"
-                >
-                    This Month
-                    <ChevronDown size={16} />
-                </button>
+                <PeriodSelect
+                    value={period}
+                    onChange={setPeriod}
+                    triggerClassName="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 text-body font-medium text-slate-700"
+                />
 
             </div>
 
@@ -84,7 +124,7 @@ export function CashFlowCard({
                 >
 
                     <AreaChart
-                        data={data}
+                        data={series}
                         margin={{
                             top: 12,
                             left: -8,
@@ -158,7 +198,7 @@ export function CashFlowCard({
                             tickLine={false}
                             tickMargin={12}
                             width={44}
-                            tickFormatter={currency}
+                            tickFormatter={formatAxisMoney}
                             tick={{
                                 fill: "#CBD5E1",
                                 fontSize: 11,
@@ -177,9 +217,7 @@ export function CashFlowCard({
                                     "0 12px 30px rgba(15,23,42,.08)",
                                 background: "#FFFFFF",
                             }}
-                            formatter={(value) =>
-                                `₹${Number(value ?? 0).toLocaleString("en-IN")}`
-                            }
+                            formatter={(value) => formatMoney(Number(value ?? 0))}
                         />
 
                         <Area
@@ -221,5 +259,13 @@ export function CashFlowCard({
         </Card>
     );
 }
+
+
+
+
+
+
+
+
 
 

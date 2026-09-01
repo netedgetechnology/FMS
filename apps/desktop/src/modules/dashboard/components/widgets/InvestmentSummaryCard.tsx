@@ -1,11 +1,16 @@
+import { useMoneyFormatter } from "@/core/formatting";
+
 import {
-    Cell,
     Pie,
     PieChart,
     ResponsiveContainer,
 } from "recharts";
 
+
+
 import { Card } from "@/components/ui/card";
+
+import { CardViewAllLink } from "../common/CardViewAllLink";
 
 interface InvestmentSummaryCardProps {
     data: {
@@ -28,28 +33,27 @@ const allocationColors = [
     "#06B6D4",
 ];
 
-function formatCurrency(value: number) {
-    return `₹${value.toLocaleString("en-IN", {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0,
-    })}`;
-}
+
 
 export function InvestmentSummaryCard({
     data,
 }: InvestmentSummaryCardProps) {
+    const formatMoney = useMoneyFormatter();
+
     const portfolio = data.allocation.map(
         (item, index) => ({
             ...item,
-            color:
+            fill:
                 allocationColors[
                     index % allocationColors.length
                 ],
         })
     );
 
+    const changePositive = data.monthlyChangePercentage >= 0;
+
     return (
-        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <Card className="h-full rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-6 flex items-center justify-between">
 
@@ -65,108 +69,93 @@ export function InvestmentSummaryCard({
 
                 </div>
 
-                <button className="text-sm font-semibold text-blue-600">
-                    View all
-                </button>
+                <CardViewAllLink to="/investments" />
 
             </div>
 
-            <div className="grid grid-cols-[220px_1fr] items-center gap-5">
+            <div className="flex flex-col items-center gap-5">
 
-                <div className="relative h-56">
+                <div className="flex flex-col items-center">
 
-                    <ResponsiveContainer>
+                    <div className="relative aspect-square w-[168px]">
 
-                        <PieChart>
+                        <ResponsiveContainer>
 
-                            <Pie
-                                data={portfolio}
-                                dataKey="value"
-                                innerRadius={58}
-                                outerRadius={86}
-                                stroke="none"
-                                paddingAngle={3}
-                            >
-                                {portfolio.map((item) => (
-                                    <Cell
-                                        key={item.name}
-                                        fill={item.color}
-                                    />
-                                ))}
-                            </Pie>
+                            <PieChart>
 
-                        </PieChart>
+                                <Pie
+                                    data={portfolio}
+                                    dataKey="value"
+                                    nameKey="name"
+                                    innerRadius="62%"
+                                    outerRadius="90%"
+                                    stroke="none"
+                                    paddingAngle={3}
+                                    isAnimationActive={false}
+                                />
 
-                    </ResponsiveContainer>
+                            </PieChart>
 
-                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                        </ResponsiveContainer>
 
-                        <div className="text-3xl font-bold text-slate-900">
-                            {formatCurrency(data.totalValue)}
-                        </div>
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
 
-                        <div
-                            className={`mt-1 text-xs ${
-                                data.monthlyChangePercentage >= 0
-                                    ? "text-emerald-600"
-                                    : "text-red-500"
-                            }`}
-                        >
-                            {data.monthlyChangePercentage >= 0
-                                ? "+"
-                                : ""}
-                            {data.monthlyChangePercentage.toFixed(1)}%
-                            {" "}this month
+                            <span className="max-w-[62%] text-center text-[12px] font-bold leading-tight text-slate-900 tabular-nums break-words">
+                                {formatMoney(data.totalValue)}
+                            </span>
+
                         </div>
 
                     </div>
 
+                    <div
+                        className={`mt-2 whitespace-nowrap text-[11px] font-medium ${
+                            changePositive
+                                ? "text-emerald-600"
+                                : "text-red-500"
+                        }`}
+                    >
+                        {changePositive ? "+" : ""}
+                        {data.monthlyChangePercentage.toFixed(1)}% this month
+                    </div>
+
                 </div>
 
-                <div className="space-y-5">
+                <div className="w-full space-y-4">
 
                     {portfolio.length === 0 ? (
                         <div className="py-8 text-center text-sm text-slate-500">
                             No investment data available
                         </div>
                     ) : (
-                        portfolio.map((item) => (
+                        portfolio.map((item, index) => (
 
                             <div
-                                key={item.name}
-                                className="flex items-center justify-between"
+                                key={`${item.name}-${index}`}
+                                className="flex items-center gap-3"
                             >
 
-                                <div className="flex items-center gap-3">
+                                <span
+                                    className="h-3 w-3 shrink-0 rounded-full"
+                                    style={{
+                                        backgroundColor: item.fill,
+                                    }}
+                                />
 
-                                    <span
-                                        className="h-3 w-3 rounded-full"
-                                        style={{
-                                            backgroundColor:
-                                                item.color,
-                                        }}
-                                    />
+                                <div className="min-w-0 flex-1">
 
-                                    <div>
+                                    <div className="truncate font-semibold">
+                                        {item.name}
+                                    </div>
 
-                                        <div className="font-semibold">
-                                            {item.name}
-                                        </div>
-
-                                        <div className="text-sm text-slate-500">
-                                            {item.value}%
-                                        </div>
-
+                                    <div className="text-sm text-slate-500">
+                                        {item.value}%
                                     </div>
 
                                 </div>
 
-                                <div className="text-right">
-
-                                    <div className="font-bold">
-                                        {formatCurrency(item.amount)}
-                                    </div>
-
+                                <div className="shrink-0 text-right font-bold tabular-nums">
+                                    {formatMoney(item.amount)}
                                 </div>
 
                             </div>
@@ -181,3 +170,5 @@ export function InvestmentSummaryCard({
         </Card>
     );
 }
+
+

@@ -1,3 +1,5 @@
+import { formatDateValue } from "@/core/formatting";
+import { DEFAULT_SETTINGS, SETTING_KEYS } from "@/modules/settings/constants";
 import { AccountService } from "@/modules/accounts/services";
 import { AccountType } from "@/modules/accounts/types";
 import { TransactionService } from "@/modules/transactions/services";
@@ -11,28 +13,55 @@ import { CategoryService } from "@/modules/categories/services";
 
 import type { DashboardSummary } from "../types";
 
-function startOfCurrentMonth(): string {
-    const now = new Date();
-
-    return new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        1
-    )
-        .toISOString()
-        .slice(0, 10);
+export interface DashboardDateRange {
+    /** Inclusive start date, formatted as YYYY-MM-DD. */
+    start: string;
+    /** Inclusive end date, formatted as YYYY-MM-DD. */
+    end: string;
 }
 
-function endOfCurrentMonth(): string {
-    const now = new Date();
+export const DEFAULT_DASHBOARD_RANGE_DAYS = 30;
 
-    return new Date(
-        now.getFullYear(),
-        now.getMonth() + 1,
-        0
-    )
-        .toISOString()
-        .slice(0, 10);
+/**
+ * Upper guard for the custom range. High enough to be effectively
+ * unlimited for personal-finance history, low enough to keep the
+ * per-day cash-flow series from freezing the UI.
+ */
+export const MAX_DASHBOARD_RANGE_DAYS = 3650;
+
+function toLocalISODate(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+}
+
+/**
+ * Build a date range covering the last `days` calendar days, ending
+ * today (inclusive). `days = 1` means "today only".
+ */
+export function rangeFromDays(
+    days: number = DEFAULT_DASHBOARD_RANGE_DAYS
+): DashboardDateRange {
+    const safeDays =
+        Number.isFinite(days) && days > 0
+            ? Math.min(
+                  Math.floor(days),
+                  MAX_DASHBOARD_RANGE_DAYS
+              )
+            : DEFAULT_DASHBOARD_RANGE_DAYS;
+
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+
+    const start = new Date(end);
+    start.setDate(start.getDate() - (safeDays - 1));
+
+    return {
+        start: toLocalISODate(start),
+        end: toLocalISODate(end),
+    };
 }
 
 function toNumber(value: unknown): number {
@@ -41,14 +70,272 @@ function toNumber(value: unknown): number {
     return Number.isFinite(number) ? number : 0;
 }
 
-function formatDate(date: string): string {
-    const parsed = new Date(`${date}T00:00:00`);
+/*
+ * ---------------------------------------------------------------------
+ * PER-CARD PERIOD FILTERS (Cash Flow Overview / Expense Breakdown)
+ *
+ * These are independent of the MAIN dashboard range selector. They
+ * reuse the same date-range primitives (`DashboardDateRange`,
+ * `rangeFromDays`, `toLocalISODate`) and the same aggregation logic
+ * used by `getSummary`, so calculations stay identical.
+ * ---------------------------------------------------------------------
+ */
 
-    return parsed.toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-    });
+export type DashboardPeriod =
+    | "7d"
+    | "30d"
+    | "60d"
+    | "90d"
+    | "180d"
+    | "365d"
+    | "thisMonth"
+    | "lastMonth"
+    | "last3Months"
+    | "last6Months"
+    | "last12Months";
+
+export const DEFAULT_DASHBOARD_PERIOD: DashboardPeriod = "30d";
+
+function startOfMonth(date: Date): Date {
+    return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date: Date): Date {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+}
+
+/**
+ * Resolve a card-level period selection into a concrete inclusive date
+ * range. Day-based options reuse {@link rangeFromDays}; month-based
+ * options snap to calendar-month boundaries and end today.
+ */
+export function resolveDashboardPeriod(
+    period: DashboardPeriod
+): DashboardDateRange {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    switch (period) {
+        case "7d":
+            return rangeFromDays(7);
+        case "30d":
+            return rangeFromDays(30);
+        case "60d":
+            return rangeFromDays(60);
+        case "90d":
+            return rangeFromDays(90);
+        case "180d":
+            return rangeFromDays(180);
+        case "365d":
+            return rangeFromDays(365);
+        case "thisMonth":
+            return {
+                start: toLocalISODate(startOfMonth(now)),
+                end: toLocalISODate(now),
+            };
+        case "lastMonth": {
+            const lastMonth = new Date(
+                now.getFullYear(),
+                now.getMonth() - 1,
+                1
+            );
+
+            return {
+                start: toLocalISODate(startOfMonth(lastMonth)),
+                end: toLocalISODate(endOfMonth(lastMonth)),
+            };
+        }
+        case "last3Months":
+            return {
+                start: toLocalISODate(
+                    new Date(now.getFullYear(), now.getMonth() - 2, 1)
+                ),
+                end: toLocalISODate(now),
+            };
+        case "last6Months":
+            return {
+                start: toLocalISODate(
+                    new Date(now.getFullYear(), now.getMonth() - 5, 1)
+                ),
+                end: toLocalISODate(now),
+            };
+        case "last12Months":
+            return {
+                start: toLocalISODate(
+                    new Date(now.getFullYear(), now.getMonth() - 11, 1)
+                ),
+                end: toLocalISODate(now),
+            };
+        default:
+            return rangeFromDays(DEFAULT_DASHBOARD_RANGE_DAYS);
+    }
+}
+
+export interface CashFlowPoint {
+    day: string;
+    income: number;
+    expense: number;
+}
+
+export interface ExpenseBreakdownItem {
+    name: string;
+    value: number;
+}
+
+type CashFlowTransaction = {
+    transactionDate: string;
+    type: string;
+    amount: number;
+};
+
+type CategoryExpenseTransaction = CashFlowTransaction & {
+    categoryId: string | null;
+};
+
+function rangeSpanDays(range: DashboardDateRange): number {
+    const start = new Date(`${range.start}T00:00:00`).getTime();
+    const end = new Date(`${range.end}T00:00:00`).getTime();
+
+    return Math.round((end - start) / 86_400_000) + 1;
+}
+
+/**
+ * Aggregate income / expense totals across a date range into a chart
+ * series. Ranges up to ~13 weeks bucket by day (compact "3 Sep"
+ * labels); longer ranges bucket by calendar month ("Sep 26") so the
+ * chart stays readable instead of rendering hundreds of daily points.
+ */
+export function computeCashFlowSeries(
+    transactions: readonly CashFlowTransaction[],
+    range: DashboardDateRange
+): CashFlowPoint[] {
+    const byMonth = rangeSpanDays(range) > 92;
+
+    const buckets = new Map<
+        string,
+        { income: number; expense: number }
+    >();
+
+    const start = new Date(`${range.start}T00:00:00`);
+    const end = new Date(`${range.end}T00:00:00`);
+
+    if (byMonth) {
+        for (
+            let cursor = new Date(
+                start.getFullYear(),
+                start.getMonth(),
+                1
+            );
+            cursor <= end;
+            cursor.setMonth(cursor.getMonth() + 1)
+        ) {
+            buckets.set(
+                `${cursor.getFullYear()}-${String(
+                    cursor.getMonth() + 1
+                ).padStart(2, "0")}`,
+                { income: 0, expense: 0 }
+            );
+        }
+    } else {
+        for (
+            let cursor = new Date(start);
+            cursor <= end;
+            cursor.setDate(cursor.getDate() + 1)
+        ) {
+            buckets.set(toLocalISODate(cursor), {
+                income: 0,
+                expense: 0,
+            });
+        }
+    }
+
+    for (const transaction of transactions) {
+        if (
+            transaction.transactionDate < range.start ||
+            transaction.transactionDate > range.end
+        ) {
+            continue;
+        }
+
+        const key = byMonth
+            ? transaction.transactionDate.slice(0, 7)
+            : transaction.transactionDate;
+
+        const entry = buckets.get(key);
+
+        if (!entry) {
+            continue;
+        }
+
+        const amount = Math.abs(toNumber(transaction.amount));
+
+        if (transaction.type === "income") {
+            entry.income += amount;
+        }
+
+        if (transaction.type === "expense") {
+            entry.expense += amount;
+        }
+    }
+
+    return Array.from(buckets.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, value]) => ({
+            day: byMonth
+                ? new Date(
+                      `${key}-01T00:00:00`
+                  ).toLocaleDateString("en-IN", {
+                      month: "short",
+                      year: "2-digit",
+                  })
+                : new Date(
+                      `${key}T00:00:00`
+                  ).toLocaleDateString("en-IN", {
+                      day: "numeric",
+                      month: "short",
+                  }),
+            income: value.income,
+            expense: value.expense,
+        }));
+}
+
+/**
+ * Total expense amount per category within a date range, sorted
+ * descending. `null` category ids collapse into "Others".
+ */
+export function computeExpensesByCategory(
+    transactions: readonly CategoryExpenseTransaction[],
+    categoryNames: Map<string, string>,
+    range: DashboardDateRange
+): ExpenseBreakdownItem[] {
+    const totals = new Map<string, number>();
+
+    for (const transaction of transactions) {
+        if (transaction.type !== "expense") {
+            continue;
+        }
+
+        if (
+            transaction.transactionDate < range.start ||
+            transaction.transactionDate > range.end
+        ) {
+            continue;
+        }
+
+        const categoryName = transaction.categoryId
+            ? categoryNames.get(transaction.categoryId) ?? "Others"
+            : "Others";
+
+        totals.set(
+            categoryName,
+            (totals.get(categoryName) ?? 0) +
+                Math.abs(toNumber(transaction.amount))
+        );
+    }
+
+    return Array.from(totals.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, value]) => ({ name, value }));
 }
 
 function getDaysUntil(date: string): number {
@@ -61,21 +348,6 @@ function getDaysUntil(date: string): number {
         (target.getTime() - today.getTime()) /
             (1000 * 60 * 60 * 24)
     );
-}
-
-function getCategoryColor(index: number): string {
-    const colors = [
-        "#2F66E8",
-        "#22C55E",
-        "#F59E0B",
-        "#8B5CF6",
-        "#EF4444",
-        "#60A5FA",
-        "#EC4899",
-        "#14B8A6",
-    ];
-
-    return colors[index % colors.length];
 }
 
 function getEMIType(
@@ -126,7 +398,9 @@ export class DashboardService {
     private readonly categoryService =
         new CategoryService();
 
-    async getSummary(): Promise<DashboardSummary> {
+    async getSummary(
+        range: DashboardDateRange = rangeFromDays()
+    ): Promise<DashboardSummary> {
         const [
             accounts,
             transactions,
@@ -147,11 +421,8 @@ export class DashboardService {
             this.institutionService.getAll(),
         ]);
 
-        const currentMonthStart =
-            startOfCurrentMonth();
-
-        const currentMonthEnd =
-            endOfCurrentMonth();
+        const rangeStart = range.start;
+        const rangeEnd = range.end;
 
         const activeAccounts =
             accounts.filter(
@@ -185,9 +456,9 @@ export class DashboardService {
         for (const transaction of transactions) {
             if (
                 transaction.transactionDate <
-                    currentMonthStart ||
+                    rangeStart ||
                 transaction.transactionDate >
-                    currentMonthEnd
+                    rangeEnd
             ) {
                 continue;
             }
@@ -336,110 +607,13 @@ export class DashboardService {
          * ---------------------------------------------------------
          */
 
-        const cashFlowMap =
-            new Map<
-                string,
-                {
-                    income: number;
-                    expense: number;
-                }
-            >();
-
-        const cashFlowToday =
-            new Date();
-
-        cashFlowToday.setHours(
-            0,
-            0,
-            0,
-            0
+        const cashFlow = computeCashFlowSeries(
+            transactions,
+            {
+                start: rangeStart,
+                end: rangeEnd,
+            }
         );
-
-        for (
-            let day = 1;
-            day <=
-            new Date(
-                cashFlowToday.getFullYear(),
-                cashFlowToday.getMonth() + 1,
-                0
-            ).getDate();
-            day++
-        ) {
-            const date =
-                new Date(
-                    cashFlowToday.getFullYear(),
-                    cashFlowToday.getMonth(),
-                    day
-                );
-
-            if (date > cashFlowToday) {
-                break;
-            }
-
-            const key =
-                date
-                    .toISOString()
-                    .slice(0, 10);
-
-            cashFlowMap.set(key, {
-                income: 0,
-                expense: 0,
-            });
-        }
-
-        for (const transaction of transactions) {
-            if (
-                transaction.transactionDate <
-                    currentMonthStart ||
-                transaction.transactionDate >
-                    currentMonthEnd
-            ) {
-                continue;
-            }
-
-            const entry =
-                cashFlowMap.get(
-                    transaction.transactionDate
-                );
-
-            if (!entry) {
-                continue;
-            }
-
-            const amount =
-                Math.abs(
-                    toNumber(
-                        transaction.amount
-                    )
-                );
-
-            if (
-                transaction.type ===
-                "income"
-            ) {
-                entry.income += amount;
-            }
-
-            if (
-                transaction.type ===
-                "expense"
-            ) {
-                entry.expense += amount;
-            }
-        }
-        const cashFlow =
-            Array.from(
-                cashFlowMap.entries()
-            ).map(([date, value]) => ({
-                day: new Date(
-                    `${date}T00:00:00`
-                ).toLocaleDateString("en-IN", {
-                    day: "numeric",
-                    month: "short",
-                }),
-                income: value.income,
-                expense: value.expense,
-            }));
 
         /*
          * ---------------------------------------------------------
@@ -447,80 +621,34 @@ export class DashboardService {
          * ---------------------------------------------------------
          */
 
-        const expensesByCategory =
-            new Map<string, number>();
-
-        for (const transaction of transactions) {
-            if (
-                transaction.type !== "expense"
-            ) {
-                continue;
+        const sortedCategories = computeExpensesByCategory(
+            transactions,
+            categoryMap,
+            {
+                start: rangeStart,
+                end: rangeEnd,
             }
+        );
 
-            if (
-                transaction.transactionDate <
-                    currentMonthStart ||
-                transaction.transactionDate >
-                    currentMonthEnd
-            ) {
-                continue;
-            }
+        const expenseBreakdown = sortedCategories.map(
+            (item) => ({
+                name: item.name,
+                value: item.value,
+            })
+        );
 
-            const categoryName =
-                transaction.categoryId
-                    ? (
-                          categoryMap.get(
-                              transaction.categoryId
-                          ) ?? "Others"
-                      )
-                    : "Others";
-
-            expensesByCategory.set(
-                categoryName,
-                (
-                    expensesByCategory.get(
-                        categoryName
-                    ) ?? 0
-                ) +
-                    Math.abs(
-                        toNumber(transaction.amount)
-                    )
-            );
-        }
-
-        const sortedCategories =
-            Array.from(
-                expensesByCategory.entries()
-            )
-                .sort(
-                    (a, b) => b[1] - a[1]
-                );
-
-        const expenseBreakdown =
-            sortedCategories.map(
-                ([name, value], index) => ({
-                    name,
-                    value,
-                    color:
-                        getCategoryColor(index),
-                })
-            );
-
-        const topSpendingCategories =
-            sortedCategories
-                .slice(0, 5)
-                .map(([name, amount]) => ({
-                    name,
-                    amount,
-                    percentage:
-                        expenses > 0
-                            ? Math.round(
-                                  (amount /
-                                      expenses) *
-                                      100
-                              )
-                            : 0,
-                }));
+        const topSpendingCategories = sortedCategories
+            .slice(0, 5)
+            .map((item) => ({
+                name: item.name,
+                amount: item.value,
+                percentage:
+                    expenses > 0
+                        ? Math.round(
+                              (item.value / expenses) * 100
+                          )
+                        : 0,
+            }));
 
         /*
          * ---------------------------------------------------------
@@ -564,8 +692,9 @@ export class DashboardService {
                         )
                     ),
                     type: (transaction.type === "income" ? "income" : "expense") as "income" | "expense",
-                    date: formatDate(
-                        transaction.transactionDate
+                    date: formatDateValue(
+                        transaction.transactionDate,
+                        String(DEFAULT_SETTINGS[SETTING_KEYS.DATE_FORMAT])
                     ),
                 }));
 
@@ -648,8 +777,9 @@ export class DashboardService {
                         toNumber(schedule.totalAmount) -
                             toNumber(schedule.paidAmount)
                     ),
-                    dueDate: formatDate(
-                        schedule.dueDate
+                    dueDate: formatDateValue(
+                        schedule.dueDate,
+                        String(DEFAULT_SETTINGS[SETTING_KEYS.DATE_FORMAT])
                     ),
                     dueIn,
                     progress,
@@ -728,9 +858,9 @@ export class DashboardService {
 
                     if (
                         transaction.transactionDate <
-                            currentMonthStart ||
+                            rangeStart ||
                         transaction.transactionDate >
-                            currentMonthEnd
+                            rangeEnd
                     ) {
                         return total;
                     }
@@ -949,7 +1079,51 @@ export class DashboardService {
             },
         };
     }
+
+    /**
+     * Cash Flow Overview series for its own period filter. Independent
+     * of the main dashboard range; uses the same aggregation as
+     * `getSummary`.
+     */
+    async getCashFlow(
+        range: DashboardDateRange = rangeFromDays()
+    ): Promise<CashFlowPoint[]> {
+        const transactions =
+            await this.transactionService.getAll();
+
+        return computeCashFlowSeries(transactions, range);
+    }
+
+    /**
+     * Expense Breakdown category totals for its own period filter.
+     * Independent of the main dashboard range; uses the same
+     * aggregation as `getSummary`.
+     */
+    async getExpenseBreakdown(
+        range: DashboardDateRange = rangeFromDays()
+    ): Promise<ExpenseBreakdownItem[]> {
+        const [transactions, categories] = await Promise.all([
+            this.transactionService.getAll(),
+            this.categoryService.getAll(),
+        ]);
+
+        const categoryNames = new Map(
+            categories
+                .filter((category) => category.isActive)
+                .map((category) => [category.id, category.name])
+        );
+
+        return computeExpensesByCategory(
+            transactions,
+            categoryNames,
+            range
+        );
+    }
 }
+
+
+
+
 
 
 

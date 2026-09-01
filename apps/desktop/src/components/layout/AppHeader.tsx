@@ -1,8 +1,6 @@
 import {
     IconBell,
     IconCalendar,
-    IconChevronDown,
-    IconPlus,
     IconSearch,
     IconUserCircle,
 } from "@tabler/icons-react";
@@ -10,9 +8,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+function todayLabel(): string {
+    return new Date().toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+    });
+}
+
 export default function AppHeader() {
     return (
-        <header className="flex h-16 items-center justify-between border-b border-transparent bg-white px-10">
+        <header className="flex h-16 items-center justify-between border-b border-slate-100 bg-white dark:border-slate-800 dark:bg-[#111827] px-10">
 
             <div className="relative w-[470px]">
 
@@ -23,35 +29,23 @@ export default function AppHeader() {
 
                 <Input
                     placeholder="Search transactions, accounts..."
-                    className="h-11 rounded-xl border-transparent bg-slate-50 pl-12"
+                    className="h-11 rounded-xl border-transparent bg-slate-50 dark:bg-[#172033] dark:border-slate-700 pl-12"
                 />
 
             </div>
 
             <div className="flex items-center gap-3">
 
-                <Button
-                    variant="outline"
-                    className="h-11 rounded-xl border-transparent px-5"
+                <div
+                    className="flex h-11 items-center rounded-xl px-5 text-slate-600"
+                    aria-label="Current date"
                 >
                     <IconCalendar size={18} />
 
-                    <span className="mx-2">
-                        July 2026
+                    <span className="ml-2 text-sm font-medium">
+                        {todayLabel()}
                     </span>
-
-                    <IconChevronDown size={16} />
-                </Button>
-
-                <Button className="h-11 rounded-xl bg-slate-900 px-5 hover:bg-slate-800">
-
-                    <IconPlus size={18} />
-
-                    <span className="ml-2">
-                        Add
-                    </span>
-
-                </Button>
+                </div>
 
                 <Button
                     variant="outline"
@@ -61,7 +55,7 @@ export default function AppHeader() {
                     <IconBell size={20} />
                 </Button>
 
-                <div className="flex items-center gap-3 rounded-xl  bg-white px-4 py-1.5">
+                <div className="flex items-center gap-3 rounded-xl bg-white dark:bg-[#172033] px-4 py-1.5">
 
                     <IconUserCircle
                         size={34}
@@ -87,4 +81,5 @@ export default function AppHeader() {
         </header>
     );
 }
+
 

@@ -1,3 +1,4 @@
+import { useDateFormatter } from "@/core/formatting";
 import {
     ShoppingBag,
     UtensilsCrossed,
@@ -6,6 +7,8 @@ import {
 } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
+
+import { CardViewAllLink } from "../common/CardViewAllLink";
 
 interface RecentTransactionsCardProps {
     data: {
@@ -47,8 +50,9 @@ function getIcon(category: string, type: "income" | "expense") {
 export function RecentTransactionsCard({
     data,
 }: RecentTransactionsCardProps) {
+    const formatDate = useDateFormatter();
     return (
-        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-4 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <Card className="h-full rounded-[20px] border border-slate-200/80 bg-white p-4 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-4 flex items-start justify-between">
 
@@ -62,9 +66,7 @@ export function RecentTransactionsCard({
                     </p>
                 </div>
 
-                <button className="text-sm font-semibold text-blue-600 hover:text-blue-700">
-                    View all
-                </button>
+                <CardViewAllLink to="/transactions" />
 
             </div>
 
@@ -144,7 +146,7 @@ export function RecentTransactionsCard({
                                     </div>
 
                                     <div className="mt-1 text-[14px] text-slate-500">
-                                        {item.date}
+                                        {formatDate(item.date)}
                                     </div>
 
                                 </div>
@@ -159,6 +161,7 @@ export function RecentTransactionsCard({
         </Card>
     );
 }
+
 
 
 

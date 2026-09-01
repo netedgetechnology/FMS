@@ -5,6 +5,9 @@ import {
 } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
+import { useMoneyFormatter } from "@/core/formatting";
+
+import { CardViewAllLink } from "../common/CardViewAllLink";
 
 interface AccountsSummaryCardProps {
     data: {
@@ -46,6 +49,7 @@ function getAccountStyle(
 export function AccountsSummaryCard({
     data,
 }: AccountsSummaryCardProps) {
+    const formatMoney = useMoneyFormatter();
 
     const totalBalance = data.reduce(
         (sum, account) => sum + account.amount,
@@ -54,7 +58,7 @@ export function AccountsSummaryCard({
 
     return (
 
-        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-4 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <Card className="h-full rounded-[20px] border border-slate-200/80 bg-white p-4 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-4 flex items-center justify-between">
 
@@ -70,9 +74,7 @@ export function AccountsSummaryCard({
 
                 </div>
 
-                <button className="text-body font-medium text-blue-600 hover:text-blue-700">
-                    View all
-                </button>
+                <CardViewAllLink to="/accounts" />
 
             </div>
 
@@ -129,12 +131,7 @@ export function AccountsSummaryCard({
                                 <div
                                     className={`text-body amount ml-3 whitespace-nowrap font-semibold ${style.color}`}
                                 >
-                                    {item.amount < 0 ? "-" : ""}₹{Math.abs(
-                                        item.amount
-                                    ).toLocaleString("en-IN", {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2,
-                                    })}
+                                    {item.amount < 0 ? "-" : ""}{formatMoney(Math.abs(item.amount))}
                                 </div>
 
                             </div>
@@ -155,12 +152,7 @@ export function AccountsSummaryCard({
                     </span>
 
                     <span className="text-card-value amount text-slate-900">
-                        {totalBalance < 0 ? "-" : ""}₹{Math.abs(
-                            totalBalance
-                        ).toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                        })}
+                        {totalBalance < 0 ? "-" : ""}{formatMoney(Math.abs(totalBalance))}
                     </span>
 
                 </div>
@@ -170,5 +162,10 @@ export function AccountsSummaryCard({
         </Card>
     );
 }
+
+
+
+
+
 
 

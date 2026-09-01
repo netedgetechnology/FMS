@@ -1,3 +1,4 @@
+import { useDateFormatter } from "@/core/formatting";
 import {
     Car,
     ChevronRight,
@@ -6,6 +7,8 @@ import {
 } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
+
+import { CardViewAllLink } from "../common/CardViewAllLink";
 
 interface EMI {
     id: string;
@@ -65,6 +68,7 @@ function EMIRow({
 }: {
     emi: EMI;
 }) {
+    const formatDate = useDateFormatter();
     const Icon = getIcon(emi.type);
     const badge = getBadge(emi.dueIn);
 
@@ -102,7 +106,7 @@ function EMIRow({
                     </span>
 
                     <span className="mt-2 text-small text-slate-500">
-                        {emi.dueDate}
+                        {formatDate(emi.dueDate)}
                     </span>
                 </div>
             </div>
@@ -143,7 +147,7 @@ export function UpcomingEMICard({
     );
 
     return (
-        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-3 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <Card className="h-full rounded-[20px] border border-slate-200/80 bg-white p-3 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
             <div className="mb-4 flex items-start justify-between">
                 <div>
                     <h2 className="text-card-title text-slate-900">
@@ -158,9 +162,7 @@ export function UpcomingEMICard({
                     </p>
                 </div>
 
-                <button className="text-body font-medium text-blue-600 hover:text-blue-700">
-                    View All
-                </button>
+                <CardViewAllLink to="/loans" />
             </div>
 
             <div>
@@ -193,3 +195,6 @@ export function UpcomingEMICard({
         </Card>
     );
 }
+
+
+

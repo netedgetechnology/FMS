@@ -14,7 +14,6 @@ export interface DashboardSummary {
     expenseBreakdown: {
         name: string;
         value: number;
-        color: string;
     }[];
 
     recentTransactions: {

@@ -1,3 +1,5 @@
+import { useMoneyFormatter } from "@/core/formatting";
+
 import {
     Cell,
     Pie,
@@ -5,7 +7,11 @@ import {
     ResponsiveContainer,
 } from "recharts";
 
+
+
 import { Card } from "@/components/ui/card";
+
+import { CardViewAllLink } from "../common/CardViewAllLink";
 
 interface BudgetOverviewCardProps {
     data: {
@@ -16,16 +22,13 @@ interface BudgetOverviewCardProps {
     };
 }
 
-function formatCurrency(value: number) {
-    return `₹${value.toLocaleString("en-IN", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    })}`;
-}
+
 
 export function BudgetOverviewCard({
     data,
 }: BudgetOverviewCardProps) {
+    const formatMoney = useMoneyFormatter();
+
     const percentage = Math.min(
         Math.max(data.percentage, 0),
         100
@@ -43,7 +46,7 @@ export function BudgetOverviewCard({
     ];
 
     return (
-        <Card className="rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
+        <Card className="h-full rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
 
             <div className="mb-6 flex items-center justify-between">
 
@@ -51,9 +54,7 @@ export function BudgetOverviewCard({
                     Budget Overview
                 </h2>
 
-                <button className="text-body font-medium text-blue-600">
-                    View all
-                </button>
+                <CardViewAllLink to="/budgets" />
 
             </div>
 
@@ -106,7 +107,7 @@ export function BudgetOverviewCard({
                         </span>
 
                         <span className="text-body amount font-semibold">
-                            {formatCurrency(data.totalBudget)}
+                            {formatMoney(data.totalBudget)}
                         </span>
                     </div>
 
@@ -116,7 +117,7 @@ export function BudgetOverviewCard({
                         </span>
 
                         <span className="text-body amount font-semibold text-red-500">
-                            {formatCurrency(data.spent)}
+                            {formatMoney(data.spent)}
                         </span>
                     </div>
 
@@ -126,7 +127,7 @@ export function BudgetOverviewCard({
                         </span>
 
                         <span className="text-body amount font-semibold text-emerald-600">
-                            {formatCurrency(data.remaining)}
+                            {formatMoney(data.remaining)}
                         </span>
                     </div>
 
@@ -137,3 +138,5 @@ export function BudgetOverviewCard({
         </Card>
     );
 }
+
+
