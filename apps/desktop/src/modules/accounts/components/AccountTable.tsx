@@ -1,3 +1,4 @@
+import { useMoneyFormatter } from "@/core/formatting";
 import { Eye, Pencil, Trash2 } from "lucide-react";
 
 import { Account } from "../types";
@@ -16,17 +17,7 @@ function formatType(type: string): string {
         .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-function formatCurrency(amount: number, currency: string): string {
-    try {
-        return new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency,
-            maximumFractionDigits: 2,
-        }).format(amount);
-    } catch {
-        return `${currency} ${amount.toFixed(2)}`;
-    }
-}
+
 
 export function AccountTable({
     accounts,
@@ -34,6 +25,7 @@ export function AccountTable({
     onEdit,
     onDelete,
 }: AccountTableProps) {
+    const formatMoney = useMoneyFormatter();
     return (
         <div className="overflow-x-auto">
             <table className="w-full text-left">
@@ -102,10 +94,9 @@ export function AccountTable({
                             </td>
 
                             <td className="px-4 py-3 text-right text-sm font-medium text-slate-800">
-                                {formatCurrency(
-                                    Number(account.openingBalance ?? 0),
-                                    account.currencyId
-                                )}
+                                {account.type === "INVESTMENT"
+                                    ? "—"
+                                    : formatMoney(Number(account.openingBalance ?? 0), account.currencyId)}
                             </td>
 
                             <td className="px-4 py-3 text-center">
@@ -160,4 +151,7 @@ export function AccountTable({
         </div>
     );
 }
+
+
+
 

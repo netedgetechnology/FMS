@@ -185,6 +185,40 @@ export class AccountRepository extends Repository {
             [id]
         );
     }
+
+    /**
+     * Keeps an account that is owned 1:1 by another record (e.g. an
+     * investment) in sync without disturbing its other columns.
+     *
+     * The monetary worth of such a record lives in its own domain, so this
+     * deliberately does NOT touch opening_balance - the linked account stays
+     * at 0 and never contributes to balance/net-worth aggregates.
+     */
+    async syncLinkedAccount(params: {
+        id: string;
+        name: string;
+        currencyId: string;
+        isActive: boolean;
+    }): Promise<void> {
+        await this.execute(
+            `
+            UPDATE accounts
+            SET
+                name = ?,
+                currency_id = ?,
+                is_active = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND deleted_at IS NULL
+            `,
+            [
+                params.name,
+                params.currencyId,
+                params.isActive ? 1 : 0,
+                params.id,
+            ]
+        );
+    }
 }
 
 

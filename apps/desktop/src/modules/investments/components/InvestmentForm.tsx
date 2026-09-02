@@ -14,6 +14,7 @@ import {
 
 import { FormField } from "@/components/forms";
 import { useCurrencies } from "@/modules/currencies";
+import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
 
 import {
     investmentSchema,
@@ -25,14 +26,26 @@ import { InvestmentStatus } from "../types";
 
 const INVESTMENT_TYPES = [
     "Stocks",
-    "Mutual Fund",
-    "ETF",
+    "Mutual Funds",
+    "Fixed Deposits",
     "Bonds",
-    "Fixed Deposit",
+    "PPF",
+    "EPF",
+    "NPS",
     "Gold",
-    "Crypto",
     "Real Estate",
-    "Other",
+    "REIT",
+    "International Investments",
+    "Cryptocurrency",
+];
+
+const GOLD_INVESTMENT_TYPE = "Gold";
+
+const GOLD_SUBTYPES = [
+    "Physical Gold",
+    "Digital Gold",
+    "Gold ETF",
+    "Sovereign Gold Bond",
 ];
 
 export interface InvestmentFormProps {
@@ -73,11 +86,13 @@ export function InvestmentForm({
     onSubmit,
 }: InvestmentFormProps) {
     const { currencies } = useCurrencies();
+    const { defaultCurrency } = useDisplaySettings();
 
     const {
         register,
         control,
         handleSubmit,
+        watch,
         formState: { errors },
     } = useForm<
         InvestmentFormInput,
@@ -90,9 +105,12 @@ export function InvestmentForm({
             accountId: "",
             name: "",
             investmentType: "",
+            investmentSubtype: "",
             symbol: "",
             isin: "",
-            currencyId: "",
+            currencyId: currencies.find(
+                (currency) => currency.code === defaultCurrency,
+            )?.id ?? "",
             brokerInstitutionId: "",
             brokerInstitutionName: "",
             quantity: 0,
@@ -106,9 +124,19 @@ export function InvestmentForm({
         },
     });
 
+    const investmentType = watch("investmentType");
+    const isGold = investmentType === GOLD_INVESTMENT_TYPE;
+
     return (
         <form
-            onSubmit={handleSubmit(onSubmit)}
+            onSubmit={handleSubmit((values) =>
+                onSubmit({
+                    ...values,
+                    investmentSubtype: isGold
+                        ? values.investmentSubtype
+                        : "",
+                })
+            )}
             className="space-y-6"
         >
             <Section title="Investment Details">
@@ -156,6 +184,40 @@ export function InvestmentForm({
                             )}
                         />
                     </FormField>
+
+                    {isGold && (
+                        <FormField
+                            label="Gold Type"
+                            htmlFor="investmentSubtype"
+                            error={errors.investmentSubtype?.message}
+                        >
+                            <Controller
+                                name="investmentSubtype"
+                                control={control}
+                                render={({ field }) => (
+                                    <Select
+                                        value={field.value ?? ""}
+                                        onValueChange={field.onChange}
+                                    >
+                                        <SelectTrigger id="investmentSubtype">
+                                            <SelectValue placeholder="Select gold type" />
+                                        </SelectTrigger>
+
+                                        <SelectContent>
+                                            {GOLD_SUBTYPES.map((subtype) => (
+                                                <SelectItem
+                                                    key={subtype}
+                                                    value={subtype}
+                                                >
+                                                    {subtype}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            />
+                        </FormField>
+                    )}
 
                     <FormField
                         label="Symbol"
@@ -380,6 +442,7 @@ export function InvestmentForm({
         </form>
     );
 }
+
 
 
 

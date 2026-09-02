@@ -9,6 +9,8 @@ export interface CreateInvestmentRequest {
 
     investmentType: string;
 
+    investmentSubtype?: string | null;
+
     symbol?: string | null;
 
     isin?: string | null;

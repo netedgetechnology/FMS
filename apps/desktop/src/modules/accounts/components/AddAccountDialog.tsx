@@ -14,17 +14,20 @@ import {
 import { AccountForm } from "./AccountForm";
 import { AccountService } from "../services";
 import { AccountFormValues } from "../validation";
+import { AccountTypeOption } from "../constants";
 
 export interface AddAccountDialogProps {
     onSuccess?: () => Promise<void> | void;
     defaultValues?: Partial<AccountFormValues>;
     trigger?: ReactElement;
+    typeOptions?: AccountTypeOption[];
 }
 
 export function AddAccountDialog({
     onSuccess,
     defaultValues,
     trigger,
+    typeOptions,
 }: AddAccountDialogProps) {
 
     const service = new AccountService();
@@ -104,6 +107,7 @@ export function AddAccountDialog({
                 <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-4">
                     <AccountForm
                     defaultValues={defaultValues}
+                        typeOptions={typeOptions}
                         loading={loading}
                         submitLabel="Create Account"
                         onSubmit={handleSubmit}

@@ -1,3 +1,4 @@
+import { useMoneyFormatter } from "@/core/formatting";
 import {
     CreditCard,
     Eye,
@@ -32,11 +33,18 @@ import {
     ViewAccountDialog,
 } from "../components";
 
+import { AddInvestmentDialog } from "@/modules/investments/components";
+
+import {
+    BANK_ACCOUNT_TYPE_OPTIONS,
+    CREDIT_CARD_TYPE_OPTIONS,
+} from "../constants";
 import { useAccounts } from "../hooks";
 import { AccountService } from "../services";
 import { Account } from "../types";
 import { AccountType } from "../types/AccountType";
 export default function AccountsPage() {
+    const formatMoney = useMoneyFormatter();
 
     const {
         accounts,
@@ -127,19 +135,14 @@ const walletAccounts = accounts.filter(
 
 const totalBalance = accounts.reduce(
         (total, account) =>
-            total + Number(account.openingBalance ?? 0),
+            account.type === AccountType.INVESTMENT
+                ? total
+                : total + Number(account.openingBalance ?? 0),
         0
     );
 
 
-    const formattedBalance = new Intl.NumberFormat(
-        "en-IN",
-        {
-            style: "currency",
-            currency: "INR",
-            maximumFractionDigits: 2,
-        }
-    ).format(totalBalance);
+    const formattedBalance = formatMoney(totalBalance);
 
 
     return (
@@ -206,7 +209,7 @@ const totalBalance = accounts.reduce(
             </button>
 
             <AddAccountDialog
-                defaultValues={{ type: AccountType.SAVINGS }}
+                typeOptions={BANK_ACCOUNT_TYPE_OPTIONS}
                 onSuccess={refresh}
                 trigger={
                     <button
@@ -302,7 +305,7 @@ const totalBalance = accounts.reduce(
             </button>
 
             <AddAccountDialog
-                defaultValues={{ type: AccountType.CREDIT_CARD }}
+                typeOptions={CREDIT_CARD_TYPE_OPTIONS}
                 onSuccess={refresh}
                 trigger={
                     <button
@@ -347,15 +350,16 @@ const totalBalance = accounts.reduce(
                 <Eye size={14} />
             </button>
 
-            <AddAccountDialog
-                defaultValues={{ type: AccountType.INVESTMENT }}
+            <AddInvestmentDialog
                 onSuccess={refresh}
+                title="Add Investment Account"
+                description="Add an investment account. It will appear in both Investments and Accounts."
                 trigger={
                     <button
                         type="button"
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                        title="Add investment"
-                        aria-label="Add investment"
+                        title="Add investment account"
+                        aria-label="Add investment account"
                     >
                         <Plus size={16} />
                     </button>

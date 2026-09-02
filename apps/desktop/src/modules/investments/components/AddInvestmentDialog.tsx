@@ -19,12 +19,16 @@ export interface AddInvestmentDialogProps {
     onSuccess?: () => Promise<void> | void;
     defaultValues?: Partial<InvestmentFormValues>;
     trigger?: ReactElement;
+    title?: string;
+    description?: string;
 }
 
 export function AddInvestmentDialog({
     onSuccess,
     defaultValues,
     trigger,
+    title = "Add Investment",
+    description = "Add an investment and track its holding, cost and current value.",
 }: AddInvestmentDialogProps) {
     const service = new InvestmentService();
 
@@ -100,12 +104,11 @@ export function AddInvestmentDialog({
             >
                 <DialogHeader className="shrink-0 px-7 pb-4 pt-5">
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        Add Investment
+                        {title}
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm text-slate-500">
-                        Add an investment and track its
-                        holding, cost and current value.
+                        {description}
                     </DialogDescription>
                 </DialogHeader>
 

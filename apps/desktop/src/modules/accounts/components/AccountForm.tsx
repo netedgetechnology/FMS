@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 
 import { FormField } from "@/components/forms";
+import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
 import { useCurrencies } from "@/modules/currencies";
 import { useBusinessEntities } from "@/modules/business-entities";
 
@@ -23,11 +24,12 @@ import {
     AccountFormValues,
 } from "../validation";
 
-import { ACCOUNT_TYPE_OPTIONS } from "../constants";
+import { ACCOUNT_TYPE_OPTIONS, AccountTypeOption } from "../constants";
 import { AccountType } from "../types";
 
 export interface AccountFormProps {
     defaultValues?: Partial<AccountFormValues>;
+    typeOptions?: AccountTypeOption[];
     loading?: boolean;
     submitLabel?: string;
     onCancel?(): void;
@@ -56,6 +58,7 @@ function Section({
 
 export function AccountForm({
     defaultValues,
+    typeOptions = ACCOUNT_TYPE_OPTIONS,
     loading = false,
     submitLabel = "Save",
     onCancel,
@@ -63,6 +66,33 @@ export function AccountForm({
 }: AccountFormProps) {
     const { currencies } = useCurrencies();
     const { businessEntities } = useBusinessEntities();
+    const { defaultCurrency } = useDisplaySettings();
+
+    const fallbackCurrencyId = useMemo(
+        () =>
+            currencies.find(
+                currency => currency.code === defaultCurrency
+            )?.id ?? "",
+        [currencies, defaultCurrency]
+    );
+
+    const isBankOnlyForm = useMemo(
+        () =>
+            typeOptions.length > 0 &&
+            typeOptions.every(
+                option =>
+                    option.value === AccountType.SAVINGS ||
+                    option.value === AccountType.CURRENT
+            ),
+        [typeOptions]
+    );
+
+    const lockAccountType = typeOptions.length === 1;
+
+    const defaultAccountType =
+        lockAccountType || isBankOnlyForm
+            ? typeOptions[0].value
+            : undefined;
 
     const {
         register,
@@ -70,15 +100,16 @@ export function AccountForm({
         handleSubmit,
         watch,
     reset,
+    setValue,
     formState: { errors },
     } = useForm<AccountFormInput, unknown, AccountFormValues>({
         resolver: zodResolver(accountSchema),
         defaultValues: {
             name: "",
-            type: undefined,
+            type: defaultAccountType,
             institutionName: "",
             businessEntityId: "",
-            currencyId: "",
+            currencyId: fallbackCurrencyId,
             openingBalance: 0,
             accountNumber: "",
             branchName: "",
@@ -110,10 +141,10 @@ export function AccountForm({
         if (defaultValues) {
             reset({
                 name: defaultValues.name ?? "",
-                type: defaultValues.type,
+                type: defaultValues.type ?? defaultAccountType,
                 institutionName: defaultValues.institutionName ?? "",
                 businessEntityId: defaultValues.businessEntityId ?? "",
-                currencyId: defaultValues.currencyId ?? "",
+                currencyId: defaultValues.currencyId ?? fallbackCurrencyId,
                 openingBalance: defaultValues.openingBalance ?? 0,
                 accountNumber: defaultValues.accountNumber ?? "",
                 branchName: defaultValues.branchName ?? "",
@@ -129,7 +160,17 @@ export function AccountForm({
                 isActive: defaultValues.isActive ?? true,
             });
         }
-    }, [defaultValues, reset]);
+    }, [defaultValues, reset, fallbackCurrencyId, defaultAccountType]);
+
+    const currencyId = watch("currencyId");
+
+    useEffect(() => {
+        if (defaultValues?.currencyId || currencyId || !fallbackCurrencyId) {
+            return;
+        }
+
+        setValue("currencyId", fallbackCurrencyId);
+    }, [defaultValues?.currencyId, currencyId, fallbackCurrencyId, setValue]);
 
     return (
         <form
@@ -149,6 +190,54 @@ export function AccountForm({
         >
             <Section title="Basic Information">
                 <div className="grid grid-cols-2 gap-x-5 gap-y-2.5">
+
+                    <FormField
+                        label="Business Entity"
+                        htmlFor="businessEntityId"
+                        required
+                        error={errors.businessEntityId?.message}
+                    >
+                        <Controller
+                            control={control}
+                            name="businessEntityId"
+                            render={({ field }) => {
+                                const selectedEntity = businessEntities.find(
+                                    entity => entity.id === field.value
+                                );
+
+                                return (
+                                    <Select
+                                        value={field.value}
+                                        onValueChange={field.onChange}
+                                    >
+                                        <SelectTrigger id="businessEntityId">
+                                            <SelectValue placeholder="Select Business Entity">
+                                                {selectedEntity?.name}
+                                            </SelectValue>
+                                        </SelectTrigger>
+
+                                        <SelectContent>
+                                            <SelectItem
+                                                value="__placeholder"
+                                                disabled
+                                            >
+                                                Select Business Entity
+                                            </SelectItem>
+
+                                            {businessEntities.map(entity => (
+                                                <SelectItem
+                                                    key={entity.id}
+                                                    value={entity.id}
+                                                >
+                                                    {entity.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                );
+                            }}
+                        />
+                    </FormField>
 
                     <FormField
                         label="Account Name"
@@ -173,7 +262,7 @@ export function AccountForm({
                             control={control}
                             name="type"
                             render={({ field }) => {
-                                const selected = ACCOUNT_TYPE_OPTIONS.find(
+                                const selected = typeOptions.find(
                                     option => option.value === field.value
                                 );
 
@@ -181,6 +270,7 @@ export function AccountForm({
                                     <Select
                                         value={field.value}
                                         onValueChange={field.onChange}
+                                        disabled={lockAccountType}
                                     >
                                         <SelectTrigger>
                                             <SelectValue placeholder="Select Account Type">
@@ -196,7 +286,7 @@ export function AccountForm({
                                                 Select Account Type
                                             </SelectItem>
 
-                                            {ACCOUNT_TYPE_OPTIONS.map(option => (
+                                            {typeOptions.map(option => (
                                                 <SelectItem
                                                     key={option.value}
                                                     value={option.value}
@@ -211,49 +301,9 @@ export function AccountForm({
                         />
                     </FormField>
 
-                    <FormField
-                        label="Business Entity"
-                        htmlFor="businessEntityId"
-                        required
-                        error={errors.businessEntityId?.message}
-                    >
-                        <Controller
-                            control={control}
-                            name="businessEntityId"
-                            render={({ field }) => (
-                                <Select
-                                    value={field.value}
-                                    onValueChange={field.onChange}
-                                >
-                                    <SelectTrigger id="businessEntityId">
-                                        <SelectValue placeholder="Select Business Entity" />
-                                    </SelectTrigger>
-
-                                    <SelectContent>
-                                        <SelectItem
-                                            value="__placeholder"
-                                            disabled
-                                        >
-                                            Select Business Entity
-                                        </SelectItem>
-
-                                        {businessEntities.map(entity => (
-                                            <SelectItem
-                                                key={entity.id}
-                                                value={entity.id}
-                                            >
-                                                {entity.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-                        />
-                    </FormField>
-
                     {!isCashOrWallet && (
                         <FormField
-                            label="Bank"
+                            label="Bank Name"
                             htmlFor="institutionName"
                             error={errors.institutionName?.message}
                         >

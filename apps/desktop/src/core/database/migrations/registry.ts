@@ -13,6 +13,8 @@ import { FinancialGoalCategoriesMigration } from "./012_financial_goal_categorie
 import { ImportDuplicateCountMigration } from "./013_import_duplicate_count";
 import { TransactionDetailsMigration } from "./014_transaction_details";
 import { AccountBusinessEntityMigration } from "./015_account_business_entity";
+import { InvestmentAccountLinkMigration } from "./016_investment_account_link";
+import { InvestmentAccountZeroBalanceMigration } from "./017_investment_account_zero_balance";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -30,5 +32,7 @@ export const migrations = [
     ImportDuplicateCountMigration,
     TransactionDetailsMigration,
     AccountBusinessEntityMigration,
+    InvestmentAccountLinkMigration,
+    InvestmentAccountZeroBalanceMigration,
 ];
 

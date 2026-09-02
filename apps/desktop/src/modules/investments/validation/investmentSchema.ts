@@ -12,6 +12,8 @@ export const investmentSchema = z.object({
         .trim()
         .min(1, "Investment type is required."),
 
+    investmentSubtype: z.string().trim().optional(),
+
     symbol: z.string().trim().optional(),
 
     isin: z.string().trim().optional(),

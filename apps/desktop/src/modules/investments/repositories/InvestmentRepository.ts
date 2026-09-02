@@ -14,6 +14,7 @@ export class InvestmentRepository extends Repository {
                 account_id AS accountId,
                 name,
                 investment_type AS investmentType,
+                investment_subtype AS investmentSubtype,
                 symbol,
                 isin,
                 currency_id AS currencyId,
@@ -44,6 +45,7 @@ export class InvestmentRepository extends Repository {
                 account_id AS accountId,
                 name,
                 investment_type AS investmentType,
+                investment_subtype AS investmentSubtype,
                 symbol,
                 isin,
                 currency_id AS currencyId,
@@ -78,6 +80,7 @@ export class InvestmentRepository extends Repository {
                 account_id,
                 name,
                 investment_type,
+                investment_subtype,
                 symbol,
                 isin,
                 currency_id,
@@ -93,13 +96,14 @@ export class InvestmentRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 investment.id,
                 investment.accountId,
                 investment.name,
                 investment.investmentType,
+                investment.investmentSubtype ?? null,
                 investment.symbol,
                 investment.isin,
                 investment.currencyId,
@@ -129,6 +133,7 @@ export class InvestmentRepository extends Repository {
                 account_id = ?,
                 name = ?,
                 investment_type = ?,
+                investment_subtype = ?,
                 symbol = ?,
                 isin = ?,
                 currency_id = ?,
@@ -148,6 +153,7 @@ export class InvestmentRepository extends Repository {
                 investment.accountId,
                 investment.name,
                 investment.investmentType,
+                investment.investmentSubtype ?? null,
                 investment.symbol,
                 investment.isin,
                 investment.currencyId,

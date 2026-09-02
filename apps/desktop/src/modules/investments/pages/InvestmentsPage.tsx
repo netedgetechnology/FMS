@@ -1,3 +1,4 @@
+import { useDateFormatter } from "@/core/formatting";
 import {
     useCallback,
     useEffect,
@@ -509,9 +510,9 @@ export default function InvestmentsPage() {
                                                     </td>
 
                                                     <td className="px-5 py-4 text-sm text-slate-600">
-                                                        {
-                                                            investment.investmentType
-                                                        }
+                                                        {investment.investmentSubtype
+                                                            ? `${investment.investmentType} · ${investment.investmentSubtype}`
+                                                            : investment.investmentType}
                                                     </td>
 
                                                     <td className="px-5 py-4 text-sm font-medium text-slate-700">
@@ -680,6 +681,7 @@ function TransactionHistory({
     error: string | null;
     onRefresh(): void | Promise<void>;
 }) {
+    const formatDate = useDateFormatter();
     return (
         <div className="border-t border-slate-200 bg-slate-50/40">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -782,7 +784,7 @@ function TransactionHistory({
                                         className="border-b border-slate-100 last:border-b-0 hover:bg-white"
                                     >
                                         <td className="px-4 py-2 text-sm text-slate-600">
-                                            {transaction.transactionDate}
+                                            {formatDate(transaction.transactionDate)}
                                         </td>
 
                                         <td className="px-4 py-2.5">
@@ -970,11 +972,16 @@ function formatAmount(
     return new Intl.NumberFormat(
         undefined,
         {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
+            minimumFractionDigits: 0,
+              maximumFractionDigits: 4,
         }
     ).format(value);
 }
+
+
+
+
+
 
 
 

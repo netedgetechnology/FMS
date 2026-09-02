@@ -549,7 +549,10 @@ export class DashboardService {
                         break;
 
                     case AccountType.INVESTMENT:
-                        netWorth += balance;
+                        // Investment worth is added once from the investments
+                        // domain below (totalInvestmentValue). The linked
+                        // account carries no balance, so it must not be
+                        // counted here or the value is double-counted.
                         break;
 
                     default:
@@ -996,6 +999,8 @@ export class DashboardService {
                     ),
                 0
             );
+
+        netWorth += totalInvestmentValue;
 
         const investmentByType =
             new Map<string, number>();

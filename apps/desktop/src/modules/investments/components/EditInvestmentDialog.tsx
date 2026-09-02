@@ -40,6 +40,7 @@ export function EditInvestmentDialog({
         accountId: investment.accountId ?? "",
         name: investment.name,
         investmentType: investment.investmentType,
+        investmentSubtype: investment.investmentSubtype ?? "",
         symbol: investment.symbol ?? "",
         isin: investment.isin ?? "",
         currencyId: investment.currencyId,
