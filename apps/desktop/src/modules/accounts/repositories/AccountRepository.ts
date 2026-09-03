@@ -198,6 +198,7 @@ export class AccountRepository extends Repository {
         id: string;
         name: string;
         currencyId: string;
+        businessEntityId: string | null;
         isActive: boolean;
     }): Promise<void> {
         await this.execute(
@@ -206,6 +207,7 @@ export class AccountRepository extends Repository {
             SET
                 name = ?,
                 currency_id = ?,
+                business_entity_id = ?,
                 is_active = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -214,6 +216,7 @@ export class AccountRepository extends Repository {
             [
                 params.name,
                 params.currencyId,
+                params.businessEntityId,
                 params.isActive ? 1 : 0,
                 params.id,
             ]

@@ -1,3 +1,4 @@
+import { useEffect, useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
@@ -14,6 +15,7 @@ import {
 
 import { FormField } from "@/components/forms";
 import { useCurrencies } from "@/modules/currencies";
+import { useBusinessEntities } from "@/modules/business-entities";
 import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
 
 import {
@@ -86,13 +88,23 @@ export function InvestmentForm({
     onSubmit,
 }: InvestmentFormProps) {
     const { currencies } = useCurrencies();
+    const { businessEntities } = useBusinessEntities();
     const { defaultCurrency } = useDisplaySettings();
+
+    const fallbackCurrencyId = useMemo(
+        () =>
+            currencies.find(
+                (currency) => currency.code === defaultCurrency,
+            )?.id ?? "",
+        [currencies, defaultCurrency],
+    );
 
     const {
         register,
         control,
         handleSubmit,
         watch,
+        setValue,
         formState: { errors },
     } = useForm<
         InvestmentFormInput,
@@ -102,15 +114,13 @@ export function InvestmentForm({
         resolver: zodResolver(investmentSchema),
 
         defaultValues: {
-            accountId: "",
+            businessEntityId: "",
             name: "",
             investmentType: "",
             investmentSubtype: "",
             symbol: "",
             isin: "",
-            currencyId: currencies.find(
-                (currency) => currency.code === defaultCurrency,
-            )?.id ?? "",
+            currencyId: fallbackCurrencyId,
             brokerInstitutionId: "",
             brokerInstitutionName: "",
             quantity: 0,
@@ -127,6 +137,25 @@ export function InvestmentForm({
     const investmentType = watch("investmentType");
     const isGold = investmentType === GOLD_INVESTMENT_TYPE;
 
+    const currencyId = watch("currencyId");
+
+    useEffect(() => {
+        if (
+            defaultValues?.currencyId ||
+            currencyId ||
+            !fallbackCurrencyId
+        ) {
+            return;
+        }
+
+        setValue("currencyId", fallbackCurrencyId);
+    }, [
+        defaultValues?.currencyId,
+        currencyId,
+        fallbackCurrencyId,
+        setValue,
+    ]);
+
     return (
         <form
             onSubmit={handleSubmit((values) =>
@@ -141,6 +170,49 @@ export function InvestmentForm({
         >
             <Section title="Investment Details">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <FormField
+                        label="Business Entity"
+                        htmlFor="businessEntityId"
+                        required
+                        error={errors.businessEntityId?.message}
+                    >
+                        <Controller
+                            name="businessEntityId"
+                            control={control}
+                            render={({ field }) => {
+                                const selectedEntity =
+                                    businessEntities.find(
+                                        (entity) =>
+                                            entity.id === field.value,
+                                    );
+
+                                return (
+                                    <Select
+                                        value={field.value}
+                                        onValueChange={field.onChange}
+                                    >
+                                        <SelectTrigger id="businessEntityId">
+                                            <SelectValue placeholder="Select business entity">
+                                                {selectedEntity?.name}
+                                            </SelectValue>
+                                        </SelectTrigger>
+
+                                        <SelectContent>
+                                            {businessEntities.map((entity) => (
+                                                <SelectItem
+                                                    key={entity.id}
+                                                    value={entity.id}
+                                                >
+                                                    {entity.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                );
+                            }}
+                        />
+                    </FormField>
+
                     <FormField
                         label="Investment Name"
                         htmlFor="name"

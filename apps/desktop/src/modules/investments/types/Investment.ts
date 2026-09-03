@@ -5,6 +5,8 @@ export interface Investment {
 
     accountId: string | null;
 
+    businessEntityId: string | null;
+
     name: string;
 
     investmentType: string;

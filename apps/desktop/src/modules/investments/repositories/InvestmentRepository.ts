@@ -12,6 +12,7 @@ export class InvestmentRepository extends Repository {
             SELECT
                 id,
                 account_id AS accountId,
+                business_entity_id AS businessEntityId,
                 name,
                 investment_type AS investmentType,
                 investment_subtype AS investmentSubtype,
@@ -43,6 +44,7 @@ export class InvestmentRepository extends Repository {
             SELECT
                 id,
                 account_id AS accountId,
+                business_entity_id AS businessEntityId,
                 name,
                 investment_type AS investmentType,
                 investment_subtype AS investmentSubtype,
@@ -69,6 +71,49 @@ export class InvestmentRepository extends Repository {
         return rows[0] ?? null;
     }
 
+    /**
+     * Re-establishes the 1:1 link for an investment whose linked account
+     * went missing. Only the service's repair path calls this - a normal
+     * edit can never change account_id (it is not in update()'s SET clause).
+     */
+    async linkAccount(
+        investmentId: string,
+        accountId: string
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE investments
+            SET account_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND deleted_at IS NULL
+            `,
+            [accountId, investmentId]
+        );
+    }
+
+    /**
+     * The linked account id, resolved even for a soft-deleted investment,
+     * so delete() can always clean up the 1:1 account.
+     */
+    async getLinkedAccountId(
+        id: string
+    ): Promise<string | null> {
+        const rows = await this.select<{
+            accountId: string | null;
+        }>(
+            `
+            SELECT account_id AS accountId
+            FROM investments
+            WHERE id = ?
+            LIMIT 1
+            `,
+            [id]
+        );
+
+        return rows[0]?.accountId ?? null;
+    }
+
     async create(
         investment: Investment
     ): Promise<void> {
@@ -78,6 +123,7 @@ export class InvestmentRepository extends Repository {
             (
                 id,
                 account_id,
+                business_entity_id,
                 name,
                 investment_type,
                 investment_subtype,
@@ -96,11 +142,12 @@ export class InvestmentRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 investment.id,
                 investment.accountId,
+                investment.businessEntityId ?? null,
                 investment.name,
                 investment.investmentType,
                 investment.investmentSubtype ?? null,
@@ -130,7 +177,7 @@ export class InvestmentRepository extends Repository {
             `
             UPDATE investments
             SET
-                account_id = ?,
+                business_entity_id = ?,
                 name = ?,
                 investment_type = ?,
                 investment_subtype = ?,
@@ -150,7 +197,7 @@ export class InvestmentRepository extends Repository {
               AND deleted_at IS NULL
             `,
             [
-                investment.accountId,
+                investment.businessEntityId ?? null,
                 investment.name,
                 investment.investmentType,
                 investment.investmentSubtype ?? null,

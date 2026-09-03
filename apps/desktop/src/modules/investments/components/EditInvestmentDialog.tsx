@@ -37,7 +37,7 @@ export function EditInvestmentDialog({
     const [loading, setLoading] = useState(false);
 
     const defaultValues: Partial<InvestmentFormValues> = {
-        accountId: investment.accountId ?? "",
+        businessEntityId: investment.businessEntityId ?? "",
         name: investment.name,
         investmentType: investment.investmentType,
         investmentSubtype: investment.investmentSubtype ?? "",

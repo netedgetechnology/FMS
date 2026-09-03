@@ -5,7 +5,7 @@ import {
 export interface UpdateInvestmentRequest {
     id: string;
 
-    accountId?: string | null;
+    businessEntityId: string;
 
     name: string;
 

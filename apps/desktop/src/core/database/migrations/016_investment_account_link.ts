@@ -10,7 +10,7 @@ export const InvestmentAccountLinkMigration: IMigration = {
     sql: `
 ALTER TABLE investments ADD COLUMN investment_subtype TEXT;
 
-INSERT INTO accounts (
+INSERT OR IGNORE INTO accounts (
     id,
     currency_id,
     name,
@@ -38,6 +38,9 @@ WHERE investments.deleted_at IS NULL
 UPDATE investments
 SET account_id = 'inv-' || id
 WHERE deleted_at IS NULL
-  AND (account_id IS NULL OR account_id = '');
+  AND (account_id IS NULL OR account_id = '')
+  AND EXISTS (
+    SELECT 1 FROM accounts WHERE accounts.id = 'inv-' || investments.id
+  );
 `
 };

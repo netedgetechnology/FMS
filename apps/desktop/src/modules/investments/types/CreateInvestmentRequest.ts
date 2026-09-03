@@ -3,7 +3,7 @@ import {
 } from "./InvestmentStatus";
 
 export interface CreateInvestmentRequest {
-    accountId?: string | null;
+    businessEntityId: string;
 
     name: string;
 

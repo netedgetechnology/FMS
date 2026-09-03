@@ -3,7 +3,10 @@ import { z } from "zod";
 import { InvestmentStatus } from "../types";
 
 export const investmentSchema = z.object({
-    accountId: z.string().trim().optional(),
+    businessEntityId: z
+        .string()
+        .trim()
+        .min(1, "Business entity is required."),
 
     name: z.string().trim().min(1, "Investment name is required."),
 

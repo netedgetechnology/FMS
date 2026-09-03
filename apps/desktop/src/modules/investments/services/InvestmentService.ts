@@ -35,25 +35,31 @@ export class InvestmentService {
      */
     private buildLinkedAccount(
         accountId: string,
-        request: CreateInvestmentRequest,
+        source: {
+            name: string;
+            currencyId: string;
+            businessEntityId: string;
+            status: InvestmentStatus;
+            notes?: string;
+        },
         brokerInstitutionId: string | null,
         now: string
     ): Account {
         return {
             id: accountId,
-            name: request.name,
+            name: source.name,
             type: AccountType.INVESTMENT,
             institutionId: brokerInstitutionId,
-            businessEntityId: null,
-            currencyId: request.currencyId,
+            businessEntityId: source.businessEntityId,
+            currencyId: source.currencyId,
             // Identity only - the investment's worth is tracked in the
             // investments domain, so this stays at 0 and never feeds
             // account balance / net-worth aggregates.
             openingBalance: 0,
             description:
-                request.notes ?? "Investment account",
+                source.notes ?? "Investment account",
             isActive:
-                request.status === InvestmentStatus.ACTIVE,
+                source.status === InvestmentStatus.ACTIVE,
             createdAt: now,
             updatedAt: now,
         };
@@ -132,6 +138,9 @@ export class InvestmentService {
             id: crypto.randomUUID(),
 
             accountId,
+
+            businessEntityId:
+                request.businessEntityId,
 
             name:
                 request.name,
@@ -224,44 +233,77 @@ export class InvestmentService {
     async update(
         request: UpdateInvestmentRequest
     ): Promise<void> {
+        const now = new Date().toISOString();
+
         const brokerInstitutionId =
             await this.resolveBrokerInstitutionId(
                 request.brokerInstitutionName,
                 request.brokerInstitutionId
             );
 
-        const accountId =
-            request.accountId?.trim() || null;
+        /*
+         * The linked account is established once at creation and is never
+         * editable through the form. Resolve it from the database, and if it
+         * is somehow missing (legacy / unmigrated row) repair the 1:1 link
+         * by creating a fresh linked account rather than leaving the
+         * investment orphaned.
+         */
+        const existing =
+            await this.repository.getById(request.id);
+
+        if (!existing) {
+            throw new Error("Investment not found.");
+        }
+
+        let accountId =
+            existing.accountId?.trim() || null;
+
+        if (!accountId) {
+            accountId = crypto.randomUUID();
+
+            await this.accountRepository.create(
+                this.buildLinkedAccount(
+                    accountId,
+                    request,
+                    brokerInstitutionId,
+                    now
+                )
+            );
+
+            await this.repository.linkAccount(
+                request.id,
+                accountId
+            );
+        }
 
         await this.repository.update({
             ...request,
-            accountId,
             brokerInstitutionId,
         });
 
-        if (accountId) {
-            await this.accountRepository.syncLinkedAccount({
-                id: accountId,
-                name: request.name,
-                currencyId: request.currencyId,
-                isActive:
-                    request.status === InvestmentStatus.ACTIVE,
-            });
-        }
+        await this.accountRepository.syncLinkedAccount({
+            id: accountId,
+            name: request.name,
+            currencyId: request.currencyId,
+            businessEntityId: request.businessEntityId,
+            isActive:
+                request.status === InvestmentStatus.ACTIVE,
+        });
     }
 
     async delete(
         id: string
     ): Promise<void> {
-        const investment =
-            await this.repository.getById(id);
+        // Read the link before deleting, and without the deleted_at filter,
+        // so a retry after a partially-failed delete still finds and soft-
+        // deletes the linked account (it can never become orphaned).
+        const accountId =
+            await this.repository.getLinkedAccountId(id);
 
         await this.repository.delete(id);
 
-        if (investment?.accountId) {
-            await this.accountRepository.delete(
-                investment.accountId
-            );
+        if (accountId) {
+            await this.accountRepository.delete(accountId);
         }
     }
 }
