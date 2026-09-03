@@ -1,7 +1,11 @@
 import { LoanRepository } from "../repositories/LoanRepository";
 import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentScheduleRepository";
 import { EMIScheduleGenerator } from "./EMIScheduleGenerator";
-import { LoanPaymentSchedule } from "../types";
+import { LoanPaymentSchedule, LoanPaymentStatus } from "../types";
+
+function roundMoney(value: number): number {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 export class EMIScheduleService {
     private readonly loanRepository =
@@ -80,6 +84,8 @@ export class EMIScheduleService {
                     loan.emiAmount,
                 startDate:
                     loan.startDate,
+                paidInstallments:
+                    loan.paidInstallments,
             });
 
         for (const installment of schedule) {
@@ -87,6 +93,46 @@ export class EMIScheduleService {
                 installment
             );
         }
+
+        /*
+         * Reconcile the loan's outstanding balances with the freshly built
+         * schedule so an imported / already-running loan (paid_installments
+         * > 0) shows its correct current state. EMI amount and maturity date
+         * are untouched - they come from the original loan terms.
+         */
+        const paidCount = schedule.filter(
+            installment =>
+                installment.status === LoanPaymentStatus.PAID
+        ).length;
+
+        const outstandingPrincipal = roundMoney(
+            paidCount === 0
+                ? loan.principalAmount
+                : schedule[paidCount - 1]?.outstandingPrincipal ?? 0
+        );
+
+        const outstandingInterest = roundMoney(
+            schedule
+                .slice(paidCount)
+                .reduce(
+                    (sum, installment) =>
+                        sum + installment.interestAmount,
+                    0
+                )
+        );
+
+        const nextStatus: typeof loan.status =
+            outstandingPrincipal <= 0 &&
+            outstandingInterest <= 0
+                ? "CLOSED"
+                : loan.status;
+
+        await this.loanRepository.updateAccountingBalances(
+            loan.id,
+            outstandingPrincipal,
+            outstandingInterest,
+            nextStatus
+        );
 
         return schedule;
     }

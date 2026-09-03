@@ -32,10 +32,20 @@ export function AddLoanDialog({
 
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    function handleOpenChange(next: boolean) {
+        if (next) {
+            setError(null);
+        }
+
+        setOpen(next);
+    }
 
     async function handleSubmit(values: LoanFormValues) {
         try {
             setLoading(true);
+            setError(null);
 
             const loanId = await service.create(values);
             await emiScheduleService.generateSchedule(loanId);
@@ -50,11 +60,13 @@ export function AddLoanDialog({
                 error
             );
 
-            toast.error(
+            const message =
                 error instanceof Error
                     ? error.message
-                    : "Failed to create loan. Please try again."
-            );
+                    : "Failed to create loan. Please try again.";
+
+            setError(message);
+            toast.error(message);
         } finally {
             setLoading(false);
         }
@@ -63,7 +75,7 @@ export function AddLoanDialog({
     return (
         <Dialog
             open={open}
-            onOpenChange={setOpen}
+            onOpenChange={handleOpenChange}
         >
             <DialogTrigger
                 render={
@@ -104,6 +116,12 @@ export function AddLoanDialog({
                         outstanding balances.
                     </DialogDescription>
                 </DialogHeader>
+
+                {error && (
+                    <div className="mx-7 mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+                        {error}
+                    </div>
+                )}
 
                 <div className="max-h-[calc(100vh-180px)] overflow-y-auto border-t border-slate-100 px-7 py-5">
                     <LoanForm

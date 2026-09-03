@@ -18,6 +18,7 @@ import { InvestmentAccountZeroBalanceMigration } from "./017_investment_account_
 import { InvestmentBusinessEntityMigration } from "./018_investment_business_entity";
 import { RestoreOrphanedInvestmentAccountsMigration } from "./019_restore_orphaned_investment_accounts";
 import { LoanAccountLinkMigration } from "./021_loan_account_link";
+import { LoanPaidInstallmentsMigration } from "./022_loan_paid_installments";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -40,5 +41,6 @@ export const migrations = [
     InvestmentBusinessEntityMigration,
     RestoreOrphanedInvestmentAccountsMigration,
     LoanAccountLinkMigration,
+    LoanPaidInstallmentsMigration,
 ];
 

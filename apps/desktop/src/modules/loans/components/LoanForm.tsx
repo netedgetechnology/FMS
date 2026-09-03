@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
@@ -15,8 +15,11 @@ import {
 
 import { FormField } from "@/components/forms";
 import { useCurrencies } from "@/modules/currencies";
+import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
 import { AccountService } from "@/modules/accounts/services";
 import { AccountType, type Account } from "@/modules/accounts/types";
+
+import { estimateLoan } from "../services/loanEstimate";
 
 import {
     loanSchema,
@@ -91,6 +94,16 @@ function Section({
     );
 }
 
+function toNumberOrNull(value: unknown): number | null {
+    if (value === null || value === undefined || value === "") {
+        return null;
+    }
+
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function LoanForm({
     defaultValues,
     loading = false,
@@ -100,6 +113,15 @@ export function LoanForm({
     onSubmit,
 }: LoanFormProps) {
     const { currencies } = useCurrencies();
+    const { defaultCurrency } = useDisplaySettings();
+
+    const fallbackCurrencyId = useMemo(
+        () =>
+            currencies.find(
+                currency => currency.code === defaultCurrency
+            )?.id ?? "",
+        [currencies, defaultCurrency]
+    );
 
     const [accounts, setAccounts] = useState<Account[]>([]);
 
@@ -108,6 +130,8 @@ export function LoanForm({
         control,
         handleSubmit,
         reset,
+        watch,
+        setValue,
         formState: { errors },
     } = useForm<LoanFormInput, unknown, LoanFormValues>({
         resolver: zodResolver(loanSchema),
@@ -117,12 +141,13 @@ export function LoanForm({
             loanType: "",
             lenderInstitutionName: "",
             accountId: "",
-            currencyId: "",
+            currencyId: fallbackCurrencyId,
             principalAmount: 0,
             interestRate: 0,
             interestType: "REDUCING",
             tenureMonths: undefined,
             emiAmount: undefined,
+            paidInstallments: 0,
             startDate: "",
             maturityDate: "",
             outstandingPrincipal: 0,
@@ -170,7 +195,8 @@ export function LoanForm({
             lenderInstitutionName:
                 defaultValues.lenderInstitutionName ?? "",
             accountId: defaultValues.accountId ?? "",
-            currencyId: defaultValues.currencyId ?? "",
+            currencyId:
+                defaultValues.currencyId ?? fallbackCurrencyId,
             principalAmount:
                 defaultValues.principalAmount ?? 0,
             interestRate:
@@ -181,6 +207,8 @@ export function LoanForm({
                 defaultValues.tenureMonths ?? undefined,
             emiAmount:
                 defaultValues.emiAmount ?? undefined,
+            paidInstallments:
+                defaultValues.paidInstallments ?? 0,
             startDate:
                 defaultValues.startDate ?? "",
             maturityDate:
@@ -194,7 +222,117 @@ export function LoanForm({
             notes:
                 defaultValues.notes ?? "",
         });
-    }, [defaultValues, reset]);
+    }, [defaultValues, reset, fallbackCurrencyId]);
+
+    // Preselect the Settings default currency for a new loan, even if the
+    // currency list resolves after the form mounts. Never touches an
+    // existing loan's saved currency or a user's explicit choice.
+    const currencyId = watch("currencyId");
+
+    useEffect(() => {
+        if (
+            defaultValues?.currencyId ||
+            currencyId ||
+            !fallbackCurrencyId
+        ) {
+            return;
+        }
+
+        setValue("currencyId", fallbackCurrencyId);
+    }, [
+        defaultValues?.currencyId,
+        currencyId,
+        fallbackCurrencyId,
+        setValue,
+    ]);
+
+    // Auto-calculate EMI / maturity / opening outstanding balances from the
+    // loan terms, reusing the existing EMIScheduleGenerator maths.
+    const principalAmount = watch("principalAmount");
+    const interestRate = watch("interestRate");
+    const interestType = watch("interestType");
+    const tenureMonths = watch("tenureMonths");
+    const startDate = watch("startDate");
+    const paidInstallments = watch("paidInstallments");
+
+    const loadedTermsSignature = useMemo(() => {
+        if (!editMode || !defaultValues) {
+            return null;
+        }
+
+        return JSON.stringify([
+            toNumberOrNull(defaultValues.principalAmount),
+            toNumberOrNull(defaultValues.interestRate),
+            defaultValues.interestType === "FLAT"
+                ? "FLAT"
+                : "REDUCING",
+            toNumberOrNull(defaultValues.tenureMonths),
+            defaultValues.startDate ?? "",
+        ]);
+    }, [editMode, defaultValues]);
+
+    useEffect(() => {
+        const currentTermsSignature = JSON.stringify([
+            toNumberOrNull(principalAmount),
+            toNumberOrNull(interestRate),
+            interestType === "FLAT" ? "FLAT" : "REDUCING",
+            toNumberOrNull(tenureMonths),
+            typeof startDate === "string" ? startDate : "",
+        ]);
+
+        // Editing: keep the loan's stored EMI / maturity / outstanding
+        // values until one of the driving inputs actually changes.
+        if (
+            editMode &&
+            loadedTermsSignature !== null &&
+            currentTermsSignature === loadedTermsSignature
+        ) {
+            return;
+        }
+
+        const estimate = estimateLoan({
+            principalAmount: Number(principalAmount),
+            interestRate: Number(interestRate),
+            interestType:
+                interestType === "FLAT" ? "FLAT" : "REDUCING",
+            tenureMonths: Number(tenureMonths),
+            startDate:
+                typeof startDate === "string" ? startDate : "",
+            paidInstallments: toNumberOrNull(paidInstallments) ?? 0,
+        });
+
+        if (!estimate) {
+            return;
+        }
+
+        // EMI and maturity depend only on the original terms.
+        setValue("emiAmount", estimate.emiAmount);
+        setValue("maturityDate", estimate.maturityDate);
+
+        // Outstanding balances reflect the terms AND the paid-installment
+        // count. Only set on a new loan - an existing loan's outstanding
+        // state is tracked through real EMI payments.
+        if (!editMode) {
+            setValue(
+                "outstandingPrincipal",
+                estimate.outstandingPrincipal
+            );
+            setValue(
+                "outstandingInterest",
+                estimate.outstandingInterest
+            );
+        }
+    }, [
+        principalAmount,
+        interestRate,
+        interestType,
+        tenureMonths,
+        startDate,
+        paidInstallments,
+        editMode,
+        loadedTermsSignature,
+        setValue,
+    ]);
 
     return (
         <form
@@ -434,23 +572,6 @@ export function LoanForm({
                     </FormField>
 
                     <FormField
-                        label="EMI Amount"
-                        htmlFor="emi-amount"
-                        error={errors.emiAmount?.message}
-                    >
-                        <Input
-                            id="emi-amount"
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            placeholder="0.00"
-                            {...register("emiAmount", {
-                                valueAsNumber: true,
-                            })}
-                        />
-                    </FormField>
-
-                    <FormField
                         label="Start Date"
                         htmlFor="start-date"
                         required
@@ -472,6 +593,40 @@ export function LoanForm({
                             id="maturity-date"
                             type="date"
                             {...register("maturityDate")}
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="EMI Amount"
+                        htmlFor="emi-amount"
+                        error={errors.emiAmount?.message}
+                    >
+                        <Input
+                            id="emi-amount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                            {...register("emiAmount", {
+                                valueAsNumber: true,
+                            })}
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="Number of Paid Installments"
+                        htmlFor="paid-installments"
+                        error={errors.paidInstallments?.message}
+                    >
+                        <Input
+                            id="paid-installments"
+                            type="number"
+                            min="0"
+                            step="1"
+                            placeholder="0"
+                            {...register("paidInstallments", {
+                                valueAsNumber: true,
+                            })}
                         />
                     </FormField>
                 </div>

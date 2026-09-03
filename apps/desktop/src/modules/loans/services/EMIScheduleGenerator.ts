@@ -11,6 +11,12 @@ export interface GenerateEMIScheduleRequest {
     tenureMonths: number;
     emiAmount?: number | null;
     startDate: string;
+    /**
+     * Number of leading instalments that were already paid before FinanceOS
+     * started tracking the loan. Those rows are returned with status PAID
+     * (no transaction is created); EMI / dates are unaffected.
+     */
+    paidInstallments?: number | null;
 }
 
 export class EMIScheduleGenerator {
@@ -50,9 +56,41 @@ export class EMIScheduleGenerator {
             throw new Error("EMI amount cannot be negative.");
         }
 
-        return interestType === "FLAT"
-            ? this.generateFlatSchedule(request)
-            : this.generateReducingSchedule(request);
+        const schedule =
+            interestType === "FLAT"
+                ? this.generateFlatSchedule(request)
+                : this.generateReducingSchedule(request);
+
+        return this.markPaidInstallments(
+            schedule,
+            request.paidInstallments
+        );
+    }
+
+    /**
+     * Marks the first N instalments as already paid (imported / running
+     * loan). No transaction is attached - this only reflects historical
+     * state so the remaining schedule and outstanding balances are correct.
+     */
+    private markPaidInstallments(
+        schedule: LoanPaymentSchedule[],
+        paidInstallments?: number | null
+    ): LoanPaymentSchedule[] {
+        const paid = Math.max(
+            0,
+            Math.min(
+                Math.floor(Number(paidInstallments) || 0),
+                schedule.length
+            )
+        );
+
+        for (let index = 0; index < paid; index++) {
+            schedule[index].status = LoanPaymentStatus.PAID;
+            schedule[index].paidDate = schedule[index].dueDate;
+            schedule[index].paidAmount = schedule[index].totalAmount;
+        }
+
+        return schedule;
     }
 
     private generateReducingSchedule(

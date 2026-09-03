@@ -151,6 +151,9 @@ export class LoanService {
             outstandingInterest:
                 request.outstandingInterest,
 
+            paidInstallments:
+                request.paidInstallments ?? 0,
+
             currencyId: request.currencyId,
 
             status: request.status,

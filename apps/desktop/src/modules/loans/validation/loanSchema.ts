@@ -51,6 +51,12 @@ export const loanSchema = z.object({
         .min(0, "EMI amount cannot be negative.")
         .optional(),
 
+    paidInstallments: z.coerce
+        .number()
+        .int()
+        .min(0, "Paid installments cannot be negative.")
+        .catch(0),
+
     startDate: z
         .string()
         .trim()

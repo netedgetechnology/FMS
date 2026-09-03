@@ -24,6 +24,7 @@ export class LoanRepository extends Repository {
                 maturity_date AS maturityDate,
                 outstanding_principal AS outstandingPrincipal,
                 outstanding_interest AS outstandingInterest,
+                paid_installments AS paidInstallments,
                 currency_id AS currencyId,
                 status,
                 notes,
@@ -57,6 +58,7 @@ export class LoanRepository extends Repository {
                 maturity_date AS maturityDate,
                 outstanding_principal AS outstandingPrincipal,
                 outstanding_interest AS outstandingInterest,
+                paid_installments AS paidInstallments,
                 currency_id AS currencyId,
                 status,
                 notes,
@@ -91,6 +93,7 @@ export class LoanRepository extends Repository {
                 maturity_date,
                 outstanding_principal,
                 outstanding_interest,
+                paid_installments,
                 currency_id,
                 status,
                 notes,
@@ -98,7 +101,7 @@ export class LoanRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 loan.id,
@@ -113,6 +116,9 @@ export class LoanRepository extends Repository {
                 loan.emiAmount,
                 loan.startDate,
                 loan.maturityDate,
+                loan.outstandingPrincipal,
+                loan.outstandingInterest,
+                loan.paidInstallments,
                 loan.currencyId,
                 loan.status,
                 loan.notes ?? null,
@@ -140,6 +146,7 @@ export class LoanRepository extends Repository {
                 emi_amount = ?,
                 start_date = ?,
                 maturity_date = ?,
+                paid_installments = ?,
                 currency_id = ?,
                 status = ?,
                 notes = ?,
@@ -159,6 +166,7 @@ export class LoanRepository extends Repository {
                 loan.emiAmount,
                 loan.startDate,
                 loan.maturityDate,
+                loan.paidInstallments,
                 loan.currencyId,
                 loan.status,
                 loan.notes ?? null,

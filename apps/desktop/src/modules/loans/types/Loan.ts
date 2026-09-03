@@ -33,6 +33,11 @@ export interface Loan {
 
     outstandingInterest: number;
 
+    // EMIs already paid before the loan was tracked in FinanceOS (for
+    // importing an already-running loan). Drives the initial outstanding
+    // balances and which schedule rows start as paid; never creates payments.
+    paidInstallments: number;
+
     currencyId: string;
 
     status: "ACTIVE" | "CLOSED" | "ON_HOLD" | "DEFAULTED";
