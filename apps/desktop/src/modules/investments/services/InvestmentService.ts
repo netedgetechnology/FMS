@@ -243,10 +243,12 @@ export class InvestmentService {
 
         /*
          * The linked account is established once at creation and is never
-         * editable through the form. Resolve it from the database, and if it
-         * is somehow missing (legacy / unmigrated row) repair the 1:1 link
-         * by creating a fresh linked account rather than leaving the
-         * investment orphaned.
+         * editable through the form. Resolve the *live* linked account from
+         * the database; if the link is missing (legacy / unmigrated row) or
+         * points at an account that no longer exists or was soft-deleted
+         * (e.g. deleted from the Accounts page), repair the 1:1 link by
+         * creating a fresh linked account rather than leaving the investment
+         * orphaned.
          */
         const existing =
             await this.repository.getById(request.id);
@@ -255,8 +257,16 @@ export class InvestmentService {
             throw new Error("Investment not found.");
         }
 
-        let accountId =
+        const linkedAccountId =
             existing.accountId?.trim() || null;
+
+        const linkedAccount = linkedAccountId
+            ? await this.accountRepository.getById(
+                  linkedAccountId
+              )
+            : null;
+
+        let accountId = linkedAccount?.id ?? null;
 
         if (!accountId) {
             accountId = crypto.randomUUID();
