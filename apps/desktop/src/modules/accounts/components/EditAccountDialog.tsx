@@ -94,8 +94,11 @@ export function EditAccountDialog({
             <DialogContent
                 showCloseButton
                 className="
+                    flex
                     w-[780px]
                     max-w-[calc(100vw-48px)]
+                    max-h-[calc(100vh-48px)]
+                    flex-col
                     gap-0
                     overflow-hidden
                     rounded-[28px]
@@ -105,7 +108,7 @@ export function EditAccountDialog({
                     shadow-lg
                 "
             >
-                <DialogHeader className="px-7 pb-4 pt-5">
+                <DialogHeader className="shrink-0 px-7 pb-4 pt-5">
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
                         Edit Account
                     </DialogTitle>
@@ -116,12 +119,12 @@ export function EditAccountDialog({
                 </DialogHeader>
 
                 {error && (
-                    <div className="mx-7 mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+                    <div className="mx-7 mb-3 shrink-0 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
                         {error}
                     </div>
                 )}
 
-                <div className="relative z-10 border-t border-slate-100 px-7 py-4">
+                <div className="relative z-10 min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-4">
                     <AccountForm
                         key={account.id}
                         defaultValues={{

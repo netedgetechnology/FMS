@@ -8,6 +8,7 @@ export type CreateLoanRequest =
         | "createdAt"
         | "updatedAt"
         | "accountId"
+        | "loanAccountId"
         | "tenureMonths"
         | "emiAmount"
         | "maturityDate"

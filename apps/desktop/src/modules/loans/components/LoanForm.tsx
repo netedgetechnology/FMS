@@ -16,7 +16,7 @@ import {
 import { FormField } from "@/components/forms";
 import { useCurrencies } from "@/modules/currencies";
 import { AccountService } from "@/modules/accounts/services";
-import type { Account } from "@/modules/accounts/types";
+import { AccountType, type Account } from "@/modules/accounts/types";
 
 import {
     loanSchema,
@@ -31,6 +31,42 @@ export interface LoanFormProps {
     editMode?: boolean;
     onCancel?(): void;
     onSubmit(values: LoanFormValues): void | Promise<void>;
+}
+
+// The "Linked Account" here is the EMI/payment source account. Loan accounts
+// (the loan's own liability row) and investment accounts are never a valid
+// payment source, so they are excluded from the picker.
+const NON_PAYMENT_ACCOUNT_TYPES: ReadonlySet<AccountType> = new Set([
+    AccountType.LOAN,
+    AccountType.INVESTMENT,
+]);
+
+function formatAccountType(type: string): string {
+    return type
+        .toLowerCase()
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, character => character.toUpperCase());
+}
+
+// Last 4 digits of the account number, masked. Never exposes the full
+// number; omitted entirely when there is no account number.
+function maskedAccountTail(account: Account): string {
+    const tail = (account.accountNumber ?? "")
+        .replace(/\D/g, "")
+        .slice(-4);
+
+    return tail ? `****${tail}` : "";
+}
+
+function accountOptionLabel(account: Account): string {
+    return [
+        account.name,
+        account.institutionName,
+        formatAccountType(account.type),
+        maskedAccountTail(account),
+    ]
+        .filter(Boolean)
+        .join(" — ");
 }
 
 function Section({
@@ -216,45 +252,6 @@ export function LoanForm({
                     </FormField>
 
                     <FormField
-                        label="Linked Account"
-                        htmlFor="loan-account"
-                        error={errors.accountId?.message}
-                    >
-                        <Controller
-                            control={control}
-                            name="accountId"
-                            render={({ field }) => (
-                                <Select
-                                    value={field.value || ""}
-                                    onValueChange={field.onChange}
-                                >
-                                    <SelectTrigger id="loan-account">
-                                        <SelectValue placeholder="Select account">
-                                            {
-                                                accounts.find(
-                                                    account =>
-                                                        account.id === field.value
-                                                )?.name
-                                            }
-                                        </SelectValue>
-                                    </SelectTrigger>
-
-                                    <SelectContent>
-                                        {accounts.map(account => (
-                                            <SelectItem
-                                                key={account.id}
-                                                value={account.id}
-                                            >
-                                                {account.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-                        />
-                    </FormField>
-
-                    <FormField
                         label="Currency"
                         htmlFor="loan-currency"
                         required
@@ -285,6 +282,66 @@ export function LoanForm({
                                     </SelectContent>
                                 </Select>
                             )}
+                        />
+                    </FormField>
+
+                    {/* Full width: the option labels (Name — Institution —
+                       Type — ****LAST4) need the room to stay readable. */}
+                    <FormField
+                        className="col-span-2"
+                        label="Linked Account"
+                        htmlFor="loan-account"
+                        error={errors.accountId?.message}
+                    >
+                        <Controller
+                            control={control}
+                            name="accountId"
+                            render={({ field }) => {
+                                const paymentAccounts = accounts.filter(
+                                    account =>
+                                        !NON_PAYMENT_ACCOUNT_TYPES.has(
+                                            account.type
+                                        ) ||
+                                        // keep an already-linked account
+                                        // visible even if its type would
+                                        // otherwise be excluded
+                                        account.id === field.value
+                                );
+
+                                const selectedAccount = accounts.find(
+                                    account => account.id === field.value
+                                );
+
+                                return (
+                                    <Select
+                                        value={field.value || ""}
+                                        onValueChange={field.onChange}
+                                    >
+                                        <SelectTrigger id="loan-account">
+                                            <SelectValue placeholder="Select account">
+                                                {selectedAccount
+                                                    ? accountOptionLabel(
+                                                          selectedAccount
+                                                      )
+                                                    : null}
+                                            </SelectValue>
+                                        </SelectTrigger>
+
+                                        <SelectContent>
+                                            {paymentAccounts.map(account => (
+                                                <SelectItem
+                                                    key={account.id}
+                                                    value={account.id}
+                                                >
+                                                    {accountOptionLabel(
+                                                        account
+                                                    )}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                );
+                            }}
                         />
                     </FormField>
                 </div>

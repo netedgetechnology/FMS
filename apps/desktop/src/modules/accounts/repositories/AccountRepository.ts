@@ -17,7 +17,14 @@ export class AccountRepository extends Repository {
                 accounts.business_entity_id AS businessEntityId,
                 business_entities.name AS businessEntityName,
                 accounts.currency_id AS currencyId,
-                accounts.opening_balance AS openingBalance,
+                CASE
+                    WHEN accounts.account_type = 'LOAN' THEN
+                        -(
+                            COALESCE(loan_link.outstanding_principal, 0)
+                            + COALESCE(loan_link.outstanding_interest, 0)
+                        )
+                    ELSE accounts.opening_balance
+                END AS openingBalance,
                 accounts.account_number AS accountNumber,
                 accounts.branch_name AS branchName,
                 accounts.ifsc_code AS ifscCode,
@@ -32,6 +39,9 @@ export class AccountRepository extends Repository {
                 ON institutions.id = accounts.institution_id
             LEFT JOIN business_entities
                 ON business_entities.id = accounts.business_entity_id
+            LEFT JOIN loans AS loan_link
+                ON loan_link.loan_account_id = accounts.id
+                AND loan_link.deleted_at IS NULL
             WHERE accounts.deleted_at IS NULL
             ORDER BY accounts.name
             `
@@ -55,7 +65,14 @@ export class AccountRepository extends Repository {
                 accounts.business_entity_id AS businessEntityId,
                 business_entities.name AS businessEntityName,
                 accounts.currency_id AS currencyId,
-                accounts.opening_balance AS openingBalance,
+                CASE
+                    WHEN accounts.account_type = 'LOAN' THEN
+                        -(
+                            COALESCE(loan_link.outstanding_principal, 0)
+                            + COALESCE(loan_link.outstanding_interest, 0)
+                        )
+                    ELSE accounts.opening_balance
+                END AS openingBalance,
                 accounts.account_number AS accountNumber,
                 accounts.branch_name AS branchName,
                 accounts.ifsc_code AS ifscCode,
@@ -70,6 +87,9 @@ export class AccountRepository extends Repository {
                 ON institutions.id = accounts.institution_id
             LEFT JOIN business_entities
                 ON business_entities.id = accounts.business_entity_id
+            LEFT JOIN loans AS loan_link
+                ON loan_link.loan_account_id = accounts.id
+                AND loan_link.deleted_at IS NULL
             WHERE accounts.id = ?
               AND accounts.deleted_at IS NULL
             `,

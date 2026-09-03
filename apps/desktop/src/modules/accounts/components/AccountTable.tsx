@@ -55,8 +55,12 @@ export function AccountTable({
                             Status
                         </th>
 
-                        <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
-                            Actions
+                        <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                            {/* Width matches the row action group (3 × w-8 buttons + 2 × gap-1)
+                               so the centered label sits directly above the middle Edit button. */}
+                            <span className="ml-auto block w-[104px] text-center">
+                                Actions
+                            </span>
                         </th>
                     </tr>
                 </thead>
@@ -112,7 +116,7 @@ export function AccountTable({
                             </td>
 
                             <td className="px-4 py-3">
-                                <div className="flex items-center justify-end gap-1">
+                                <div className="ml-auto flex w-[104px] items-center justify-end gap-1">
                                     <button
                                         type="button"
                                         onClick={() => onView(account)}

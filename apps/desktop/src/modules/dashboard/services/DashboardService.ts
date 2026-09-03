@@ -555,6 +555,13 @@ export class DashboardService {
                         // counted here or the value is double-counted.
                         break;
 
+                    case AccountType.LOAN:
+                        // Loan liability is subtracted once from the loans
+                        // domain below (loanLiability). The linked account's
+                        // balance is a read-time projection of that same
+                        // liability, so it must not be counted here too.
+                        break;
+
                     default:
                         break;
                 }

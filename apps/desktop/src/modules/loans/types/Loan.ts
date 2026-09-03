@@ -1,7 +1,13 @@
 export interface Loan {
     id: string;
 
+    // Bank account used for EMI payments (chosen in the loan form).
     accountId: string | null;
+
+    // 1:1 liability account (account_type = LOAN) that represents this loan in
+    // the unified Accounts list. Managed by LoanService, never edited via the
+    // form. Analogous to investments.account_id / the Investment ↔ Account link.
+    loanAccountId: string | null;
 
     lenderInstitutionId: string | null;
 

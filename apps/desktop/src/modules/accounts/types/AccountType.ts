@@ -4,5 +4,6 @@ export enum AccountType {
     CURRENT = "CURRENT",
     CREDIT_CARD = "CREDIT_CARD",
     INVESTMENT = "INVESTMENT",
+    LOAN = "LOAN",
     WALLET = "WALLET",
 }

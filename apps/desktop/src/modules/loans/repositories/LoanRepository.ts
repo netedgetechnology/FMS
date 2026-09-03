@@ -11,6 +11,7 @@ export class LoanRepository extends Repository {
             SELECT
                 id,
                 account_id AS accountId,
+                loan_account_id AS loanAccountId,
                 lender_institution_id AS lenderInstitutionId,
                 loan_type AS loanType,
                 name,
@@ -43,6 +44,7 @@ export class LoanRepository extends Repository {
             SELECT
                 id,
                 account_id AS accountId,
+                loan_account_id AS loanAccountId,
                 lender_institution_id AS lenderInstitutionId,
                 loan_type AS loanType,
                 name,
@@ -201,6 +203,49 @@ export class LoanRepository extends Repository {
             `,
             [id]
         );
+    }
+
+    /**
+     * Sets/repairs the 1:1 loan-account link. Only the service's create and
+     * repair paths call this - a normal edit never changes loan_account_id
+     * (it is not in update()'s SET clause).
+     */
+    async linkLoanAccount(
+        loanId: string,
+        loanAccountId: string
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE loans
+            SET loan_account_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND deleted_at IS NULL
+            `,
+            [loanAccountId, loanId]
+        );
+    }
+
+    /**
+     * The linked loan-account id, resolved even for a soft-deleted loan, so
+     * delete() can always clean up the 1:1 account.
+     */
+    async getLinkedLoanAccountId(
+        id: string
+    ): Promise<string | null> {
+        const rows = await this.select<{
+            loanAccountId: string | null;
+        }>(
+            `
+            SELECT loan_account_id AS loanAccountId
+            FROM loans
+            WHERE id = ?
+            LIMIT 1
+            `,
+            [id]
+        );
+
+        return rows[0]?.loanAccountId ?? null;
     }
 }
 

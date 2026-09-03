@@ -21,6 +21,8 @@ export interface AddAccountDialogProps {
     defaultValues?: Partial<AccountFormValues>;
     trigger?: ReactElement;
     typeOptions?: AccountTypeOption[];
+    title?: string;
+    description?: string;
 }
 
 export function AddAccountDialog({
@@ -28,6 +30,8 @@ export function AddAccountDialog({
     defaultValues,
     trigger,
     typeOptions,
+    title = "Add Account",
+    description = "Add a bank account, credit card, wallet or investment account.",
 }: AddAccountDialogProps) {
 
     const service = new AccountService();
@@ -96,11 +100,11 @@ export function AddAccountDialog({
             >
                 <DialogHeader className="shrink-0 px-7 pb-4 pt-5">
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        Add Account
+                        {title}
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm text-slate-500">
-                        Add a bank account, credit card, wallet or investment account.
+                        {description}
                     </DialogDescription>
                 </DialogHeader>
 
