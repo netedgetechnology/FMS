@@ -6,6 +6,15 @@ export const SETTING_KEYS = {
     THEME: "display.theme",
     COMPACT_MODE: "display.compact_mode",
     SHOW_DECIMALS: "display.show_decimals",
+    PROFILE_AVATAR: "profile.avatar",
+    PROFILE_FULL_NAME: "profile.full_name",
+    PROFILE_EMAIL: "profile.email",
+    PROFILE_PHONE: "profile.phone",
+    PROFILE_DATE_OF_BIRTH: "profile.date_of_birth",
+    PROFILE_ADDRESS: "profile.address",
+    PROFILE_CITY: "profile.city",
+    PROFILE_COUNTRY: "profile.country",
+    PROFILE_CREATED_AT: "profile.created_at",
 } as const;
 
 export const DEFAULT_SETTINGS = {
@@ -16,4 +25,13 @@ export const DEFAULT_SETTINGS = {
     [SETTING_KEYS.THEME]: "System",
     [SETTING_KEYS.COMPACT_MODE]: "false",
     [SETTING_KEYS.SHOW_DECIMALS]: "true",
+    [SETTING_KEYS.PROFILE_AVATAR]: "",
+    [SETTING_KEYS.PROFILE_FULL_NAME]: "",
+    [SETTING_KEYS.PROFILE_EMAIL]: "",
+    [SETTING_KEYS.PROFILE_PHONE]: "",
+    [SETTING_KEYS.PROFILE_DATE_OF_BIRTH]: "",
+    [SETTING_KEYS.PROFILE_ADDRESS]: "",
+    [SETTING_KEYS.PROFILE_CITY]: "",
+    [SETTING_KEYS.PROFILE_COUNTRY]: "",
+    [SETTING_KEYS.PROFILE_CREATED_AT]: "",
 } as const;

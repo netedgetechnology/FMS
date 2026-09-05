@@ -1,4 +1,5 @@
 import finwealogo from "@/assets/icons/finwealogo.png";
+import { useState } from "react";
 import {
   IconDashboard,
   IconBuildingBank,
@@ -15,10 +16,12 @@ import {
   IconScale,
   IconSettings,
   IconUserCircle,
+  IconChevronUp,
   IconChevronDown,
 } from "@tabler/icons-react";
 import { NavLink } from "react-router-dom";
 import { useSettings } from "@/modules/settings/hooks/useSettings";
+import { useProfile } from "@/modules/profile/hooks/useProfile";
 
 
 const menu = [
@@ -27,7 +30,6 @@ const menu = [
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
   { icon: IconFileImport, label: "Imports", path: "/imports" },
-  { icon: IconFileDescription, label: "Document Vault", path: "/documents" },
   { icon: IconWallet, label: "Budgets", path: "/budgets" },
   { icon: IconWallet, label: "Financial Plans", path: "/financial-plans" },
   { icon: IconTarget, label: "Financial Goals", path: "/financial-goals" },
@@ -36,11 +38,18 @@ const menu = [
   { icon: IconReportAnalytics, label: "Reports", path: "/reports" },
   { icon: IconCategory, label: "Categories", path: "/categories" },
   { icon: IconScale, label: "Reconciliation", path: "/reconciliation" },
+];
+
+const workspaceMenu = [
+  { icon: IconUserCircle, label: "Profile", path: "/profile" },
   { icon: IconSettings, label: "Settings", path: "/settings" },
+  { icon: IconFileDescription, label: "Document Vault", path: "/documents" },
 ];
 
 export default function AppSidebar() {
   const { settings } = useSettings();
+  const { profile } = useProfile();
+  const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
   return (
     <aside className="flex h-screen w-[220px] shrink-0 flex-col border-r border-slate-100 bg-white dark:border-slate-800 dark:bg-[#111827]">
 
@@ -92,10 +101,52 @@ export default function AppSidebar() {
 
         <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2.5">
 
-          <div className="flex items-center gap-2.5">
+          {isWorkspaceMenuOpen && (
+            <div className="mb-2 space-y-0.5 border-b border-slate-200 pb-2">
+              {workspaceMenu.map((item) => (
+                <NavLink
+                  key={item.label}
+                  to={item.path}
+                  className={({ isActive }) =>
+                    [
+                      "flex h-9 items-center gap-3 rounded-xl px-3 text-[14px] transition-all",
+                      isActive
+                        ? "bg-[#EEF4FF] font-semibold text-[#2563EB]"
+                        : "text-slate-700 hover:bg-slate-100",
+                    ].join(" ")
+                  }
+                >
+                  <item.icon
+                    size={18}
+                    stroke={1.8}
+                    className="shrink-0"
+                  />
 
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#F0EAFE] text-[#7C3AED]">
-              <IconUserCircle size={18} stroke={1.8} />
+                  <span className="truncate">
+                    {item.label}
+                  </span>
+                </NavLink>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsWorkspaceMenuOpen((open) => !open)}
+            aria-expanded={isWorkspaceMenuOpen}
+            className="flex w-full items-center gap-2.5 text-left"
+          >
+
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#F0EAFE] text-[#7C3AED]">
+              {profile.avatar ? (
+                <img
+                  src={profile.avatar}
+                  alt="Profile"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <IconUserCircle size={18} stroke={1.8} />
+              )}
             </div>
 
             <div className="min-w-0 flex-1">
@@ -108,12 +159,19 @@ export default function AppSidebar() {
               </div>
             </div>
 
-            <IconChevronDown
-              size={16}
-              className="shrink-0 text-slate-500"
-            />
+            {isWorkspaceMenuOpen ? (
+              <IconChevronDown
+                size={16}
+                className="shrink-0 text-slate-500"
+              />
+            ) : (
+              <IconChevronUp
+                size={16}
+                className="shrink-0 text-slate-500"
+              />
+            )}
 
-          </div>
+          </button>
 
         </div>
 

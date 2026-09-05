@@ -16,6 +16,7 @@ import { ImportsPage } from "@/modules/imports/pages";
 import ReconciliationPage from "@/modules/reconciliation/pages";
 import { DocumentsPage } from "@/modules/documents/pages/DocumentsPage";
 import SettingsPage from "@/modules/settings/pages/SettingsPage";
+import ProfilePage from "@/modules/profile/pages/ProfilePage";
 
 export default function AppRoutes() {
   return (
@@ -78,6 +79,11 @@ export default function AppRoutes() {
         <Route
           path="/settings"
           element={<SettingsPage />}
+        />
+
+        <Route
+          path="/profile"
+          element={<ProfilePage />}
         />
       </Route>
     </Routes>
