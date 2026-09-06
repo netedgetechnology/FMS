@@ -15,6 +15,7 @@ import {
 import { FormField } from "@/components/forms";
 
 import { useAccounts } from "@/modules/accounts/hooks";
+import { AccountType, type Account } from "@/modules/accounts/types";
 import { useCategories } from "@/modules/categories";
 
 import {
@@ -29,6 +30,25 @@ export interface TransactionFormProps {
     submitLabel?: string;
     onCancel?(): void;
     onSubmit(values: TransactionFormValues): void | Promise<void>;
+}
+
+// Last 4 digits of the card number, masked, for the Card Reference picker.
+function maskedCardTail(account: Account): string {
+    const tail = (account.accountNumber ?? "")
+        .replace(/\D/g, "")
+        .slice(-4);
+
+    return tail ? `••${tail}` : "";
+}
+
+function creditCardOptionLabel(account: Account): string {
+    return [
+        account.name,
+        account.institutionName,
+        maskedCardTail(account),
+    ]
+        .filter(Boolean)
+        .join(" — ");
 }
 
 function Section({
@@ -76,6 +96,7 @@ export function TransactionForm({
             categoryId: "",
             subcategoryId: "",
             payee: "",
+            description: "",
             type: "expense",
             amount: 0,
             transactionDate: new Date()
@@ -99,6 +120,10 @@ export function TransactionForm({
 
     const activeCategories = categories.filter(
         category => category.isActive
+    );
+
+    const creditCardAccounts = activeAccounts.filter(
+        account => account.type === AccountType.CREDIT_CARD
     );
 
     const paymentMethod = watch("paymentMethod");
@@ -218,7 +243,7 @@ export function TransactionForm({
                                     >
                                         <SelectTrigger id="categoryId">
                                             <SelectValue placeholder="None">
-                                                {selectedCategory?.name}
+                                                {selectedCategory?.name ?? "None"}
                                             </SelectValue>
                                         </SelectTrigger>
 
@@ -277,6 +302,18 @@ export function TransactionForm({
                             id="payee"
                             placeholder="e.g. Grocery Store"
                             {...register("payee")}
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="Description"
+                        htmlFor="description"
+                        error={errors.description?.message}
+                    >
+                        <Input
+                            id="description"
+                            placeholder="Original transaction description (optional)"
+                            {...register("description")}
                         />
                     </FormField>
 
@@ -451,7 +488,59 @@ export function TransactionForm({
                         </FormField>
                     )}
 
-                    {(paymentMethod === "CARD" || paymentMethod === "DEBIT_CARD") && (
+                    {paymentMethod === "CARD" && (
+                        <FormField
+                            label="Card Reference"
+                            htmlFor="cardReference"
+                            error={errors.cardReference?.message}
+                        >
+                            <Controller
+                                control={control}
+                                name="cardReference"
+                                render={({ field }) => {
+                                    const selectedCard =
+                                        creditCardAccounts.find(
+                                            account =>
+                                                account.id === field.value
+                                        );
+
+                                    return (
+                                        <Select
+                                            value={field.value || ""}
+                                            onValueChange={field.onChange}
+                                        >
+                                            <SelectTrigger id="cardReference">
+                                                <SelectValue placeholder="Select credit card">
+                                                    {selectedCard
+                                                        ? creditCardOptionLabel(
+                                                              selectedCard
+                                                          )
+                                                        : null}
+                                                </SelectValue>
+                                            </SelectTrigger>
+
+                                            <SelectContent>
+                                                {creditCardAccounts.map(
+                                                    account => (
+                                                        <SelectItem
+                                                            key={account.id}
+                                                            value={account.id}
+                                                        >
+                                                            {creditCardOptionLabel(
+                                                                account
+                                                            )}
+                                                        </SelectItem>
+                                                    )
+                                                )}
+                                            </SelectContent>
+                                        </Select>
+                                    );
+                                }}
+                            />
+                        </FormField>
+                    )}
+
+                    {paymentMethod === "DEBIT_CARD" && (
                         <FormField
                             label="Card Reference"
                             htmlFor="cardReference"

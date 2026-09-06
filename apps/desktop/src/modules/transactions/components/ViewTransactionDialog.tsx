@@ -1,3 +1,7 @@
+import {
+    signedTransactionAmount,
+    useDateFormatter,
+} from "@/core/formatting";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 import type { Transaction } from "../types";
@@ -17,29 +21,13 @@ function formatType(type: Transaction["type"]): string {
         .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-function formatDate(value: string): string {
-    if (!value) {
-        return "—";
-    }
-
-    const date = new Date(`${value}T00:00:00`);
-
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
-    return new Intl.DateTimeFormat("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-    }).format(date);
-}
 
 function formatAmount(amount: number): string {
     return new Intl.NumberFormat("en-IN", {
         style: "currency",
         currency: "INR",
         maximumFractionDigits: 2,
+        signDisplay: "exceptZero",
     }).format(Number(amount ?? 0));
 }
 
@@ -70,6 +58,7 @@ export function ViewTransactionDialog({
     open,
     onOpenChange,
 }: ViewTransactionDialogProps) {
+    const formatDate = useDateFormatter();
     if (!transaction) {
         return null;
     }
@@ -111,7 +100,12 @@ export function ViewTransactionDialog({
 
                         <Detail
                             label="Amount"
-                            value={formatAmount(transaction.amount)}
+                            value={formatAmount(
+                                signedTransactionAmount(
+                                    transaction.amount,
+                                    transaction.type
+                                )
+                            )}
                         />
 
                         <Detail
@@ -145,7 +139,7 @@ export function ViewTransactionDialog({
 
                         <Detail
                             label="Created"
-                            value={transaction.createdAt || "—"}
+                            value={formatDate(transaction.createdAt)}
                         />
 
                         <div className="col-span-2 space-y-1">
@@ -163,3 +157,7 @@ export function ViewTransactionDialog({
         </Dialog>
     );
 }
+
+
+
+

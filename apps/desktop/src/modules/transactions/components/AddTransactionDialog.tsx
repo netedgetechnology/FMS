@@ -35,7 +35,12 @@ export function AddTransactionDialog({
         try {
             setLoading(true);
 
-            await service.create(values);
+            const { description, ...rest } = values;
+
+            await service.create({
+                ...rest,
+                originalNarration: description,
+            });
             await onSuccess?.();
 
             toast.success("Transaction created successfully.");

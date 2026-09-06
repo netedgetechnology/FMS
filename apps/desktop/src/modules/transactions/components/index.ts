@@ -7,3 +7,5 @@ export * from "./ViewTransactionDialog";
 export * from "./EditTransactionDialog";
 
 export * from "./DeleteTransactionDialog";
+
+export * from "./BulkDeleteTransactionsDialog";

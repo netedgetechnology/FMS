@@ -27,6 +27,15 @@ export const transactionSchema = z.object({
                 "Payee is required."
             ),
 
+    // The original transaction narration/description - stored as
+    // `originalNarration`, the same field imported transactions populate
+    // from their source statement (see ImportService). Independent from
+    // Payee and Notes.
+    description:
+        z.string()
+            .trim()
+            .optional(),
+
     type:
         z.enum([
             "income",

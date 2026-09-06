@@ -30,6 +30,7 @@ function getDefaultValues(
         categoryId: transaction.categoryId ?? "",
         subcategoryId: transaction.subcategoryId ?? "",
         payee: transaction.payee,
+        description: transaction.originalNarration ?? "",
         type: transaction.type,
         amount: Number(transaction.amount ?? 0),
         transactionDate: transaction.transactionDate,
@@ -69,9 +70,18 @@ export function EditTransactionDialog({
         try {
             setLoading(true);
 
+            const { description, ...rest } = values;
+
             await service.update({
                 id: transaction.id,
-                ...values,
+                ...rest,
+                originalNarration: description,
+                // Not a form field - never user-editable on the manual
+                // Edit dialog. TransactionService.update rewrites every
+                // field, so this must be carried through explicitly or an
+                // edit to any imported transaction would silently erase
+                // its Mapping Name (sourceStatement).
+                sourceStatement: transaction.sourceStatement,
             });
 
             await onSuccess?.();
