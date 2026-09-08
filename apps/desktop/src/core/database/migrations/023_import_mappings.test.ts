@@ -274,4 +274,65 @@ describe("migration 023 - import mappings", () => {
             JSON.parse(found?.mapping as string)
         ).toEqual({ date: "A", amount: "B" });
     });
+
+    // Mirrors ImportMappingRepository.rename's exact SQL - renaming a
+    // saved mapping (see ImportsPage's "Saved Mappings" section) must
+    // change only name/updated_at; header_signature/headers/mapping stay
+    // exactly as saved, so future auto-reuse and self-learning are
+    // unaffected.
+    it("renames a saved mapping's name only - header_signature/headers/mapping are unchanged", () => {
+        const db = createDb();
+
+        const signature =
+            "BANK_CSV::amount|date|description";
+
+        saveMapping(db, {
+            id: "map-1",
+            name: "Axisbank",
+            institutionName: "Axis Bank",
+            importType: "BANK_CSV",
+            headerSignature: signature,
+            headers: ["Date", "Description", "Amount"],
+            mapping: {
+                date: "Date",
+                description: "Description",
+                amount: "Amount",
+            },
+        });
+
+        db.prepare(
+            `
+            UPDATE import_mappings
+            SET name = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            `
+        ).run("Axis Bank - Savings", "map-1");
+
+        const found = findBySignature(
+            db,
+            signature
+        );
+
+        expect(found?.name).toBe(
+            "Axis Bank - Savings"
+        );
+        expect(found?.header_signature).toBe(
+            signature
+        );
+        expect(
+            JSON.parse(found?.headers as string)
+        ).toEqual([
+            "Date",
+            "Description",
+            "Amount",
+        ]);
+        expect(
+            JSON.parse(found?.mapping as string)
+        ).toEqual({
+            date: "Date",
+            description: "Description",
+            amount: "Amount",
+        });
+    });
 });

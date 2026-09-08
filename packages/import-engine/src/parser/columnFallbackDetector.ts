@@ -87,6 +87,35 @@ const FALLBACK_RULES: FallbackRule[] = [
             /\butr\b/i,
         ],
     },
+    {
+        field: "balance",
+        confidence: "medium",
+        patterns: [
+            /\bbal\b/i,
+            /\bbalance\b/i,
+        ],
+    },
+    {
+        field: "branch",
+        confidence: "medium",
+        // Deliberately keyed on the word "branch" itself (never just
+        // "code" or "location" alone), so e.g. "Branch Name/Location" and
+        // "Branch Code" match while unrelated "*Code"/"*Location" columns
+        // (IFSC Code, Cheque No, ...) never do.
+        patterns: [/\bbranch\b/i],
+    },
+];
+
+// Last-resort, deliberately broad patterns for a generic amount column
+// (e.g. "Amt", "Txn Value"). Checked only when none of the more specific
+// fields above matched, so a genuinely specific column - like
+// "Withdrawal Amt." - is never mistaken for a generic amount just because
+// it also happens to contain the word "amt".
+const GENERIC_AMOUNT_PATTERNS: RegExp[] = [
+    /\bamt\b/i,
+    /\bamount\b/i,
+    /\btxn\b.*\bvalue\b/i,
+    /\btransaction\b.*\bvalue\b/i,
 ];
 
 export function detectFallbackColumn(
@@ -100,19 +129,31 @@ export function detectFallbackColumn(
             )
         );
 
-    if (matches.length !== 1) {
+    if (matches.length > 1) {
         return null;
     }
 
     const rule = matches[0];
 
-    if (!rule) {
-        return null;
+    if (rule) {
+        return {
+            header,
+            field: rule.field,
+            confidence: rule.confidence,
+        };
     }
 
-    return {
-        header,
-        field: rule.field,
-        confidence: rule.confidence,
-    };
+    if (
+        GENERIC_AMOUNT_PATTERNS.some(
+            pattern => pattern.test(header)
+        )
+    ) {
+        return {
+            header,
+            field: "amount",
+            confidence: "medium",
+        };
+    }
+
+    return null;
 }

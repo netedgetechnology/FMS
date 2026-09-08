@@ -68,6 +68,12 @@ export class TransactionService {
             payee:
                 request.payee?.trim() || "",
 
+            counterparty:
+                request.counterparty?.trim() || null,
+
+            branch:
+                request.branch?.trim() || null,
+
             type:
                 request.type,
 
@@ -100,6 +106,9 @@ export class TransactionService {
 
             cardReference:
                 request.cardReference?.trim() || null,
+
+            transactionType:
+                request.transactionType ?? null,
 
             reconciled:
                 request.reconciled ?? false,
@@ -147,6 +156,12 @@ export class TransactionService {
 
             payee:
                 request.payee?.trim() || "",
+
+            counterparty:
+                request.counterparty?.trim() || null,
+
+            branch:
+                request.branch?.trim() || null,
 
             referenceNumber:
                 request.referenceNumber?.trim() || null,

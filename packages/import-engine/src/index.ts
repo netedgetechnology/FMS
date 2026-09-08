@@ -3,3 +3,4 @@ export * from "./parser";
 export * from "./normalizer";
 export * from "./validation";
 export * from "./pipeline";
+export * from "./mapping";

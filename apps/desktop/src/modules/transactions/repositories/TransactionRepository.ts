@@ -5,6 +5,35 @@ import {
     UpdateTransactionRequest,
 } from "../types";
 
+// A reference/cheque number that carries no real identifying
+// information - a blank/whitespace-only value, or one of the common
+// "not applicable" placeholders banks put in that column (e.g. Axis
+// Bank leaves "-" for most non-cheque rows). Never a genuine
+// transaction identifier, so it must never be used to match two
+// transactions as duplicates of each other.
+export function isPlaceholderReference(
+    value: string | null | undefined
+): boolean {
+    if (!value) {
+        return true;
+    }
+
+    const normalized = value.trim().toUpperCase();
+
+    if (normalized === "") {
+        return true;
+    }
+
+    if (/^-+$/.test(normalized)) {
+        return true;
+    }
+
+    return (
+        normalized === "NA" ||
+        normalized === "N/A"
+    );
+}
+
 export class TransactionRepository extends Repository {
 
     private readonly selectFields = `
@@ -13,6 +42,8 @@ export class TransactionRepository extends Repository {
         category_id AS categoryId,
         subcategory_id AS subcategoryId,
         payee,
+        counterparty,
+        branch,
         type,
         amount,
         transaction_date AS transactionDate,
@@ -24,6 +55,7 @@ export class TransactionRepository extends Repository {
         upi_reference AS upiReference,
         bank_transaction_reference AS bankTransactionReference,
         card_reference AS cardReference,
+        transaction_type AS transactionType,
         reconciled,
         reconciled_at AS reconciledAt,
         is_imported AS isImported,
@@ -72,6 +104,8 @@ export class TransactionRepository extends Repository {
                 category_id,
                 subcategory_id,
                 payee,
+                counterparty,
+                branch,
                 type,
                 amount,
                 transaction_date,
@@ -83,6 +117,7 @@ export class TransactionRepository extends Repository {
                 upi_reference,
                 bank_transaction_reference,
                 card_reference,
+                transaction_type,
                 reconciled,
                 reconciled_at,
                 is_imported,
@@ -93,7 +128,7 @@ export class TransactionRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 transaction.id,
@@ -101,6 +136,8 @@ export class TransactionRepository extends Repository {
                 transaction.categoryId,
                 transaction.subcategoryId,
                 transaction.payee,
+                transaction.counterparty,
+                transaction.branch,
                 transaction.type,
                 transaction.amount,
                 transaction.transactionDate,
@@ -112,6 +149,7 @@ export class TransactionRepository extends Repository {
                 transaction.upiReference,
                 transaction.bankTransactionReference,
                 transaction.cardReference,
+                transaction.transactionType,
                 transaction.reconciled ? 1 : 0,
                 transaction.reconciledAt,
                 transaction.isImported ? 1 : 0,
@@ -135,6 +173,8 @@ export class TransactionRepository extends Repository {
                 category_id = ?,
                 subcategory_id = ?,
                 payee = ?,
+                counterparty = ?,
+                branch = ?,
                 type = ?,
                 amount = ?,
                 transaction_date = ?,
@@ -146,6 +186,7 @@ export class TransactionRepository extends Repository {
                 upi_reference = ?,
                 bank_transaction_reference = ?,
                 card_reference = ?,
+                transaction_type = ?,
                 reconciled = ?,
                 reconciled_at = ?,
                 is_imported = ?,
@@ -160,6 +201,8 @@ export class TransactionRepository extends Repository {
                 transaction.categoryId,
                 transaction.subcategoryId ?? null,
                 transaction.payee,
+                transaction.counterparty ?? null,
+                transaction.branch ?? null,
                 transaction.type,
                 transaction.amount,
                 transaction.transactionDate,
@@ -171,6 +214,7 @@ export class TransactionRepository extends Repository {
                 transaction.upiReference ?? null,
                 transaction.bankTransactionReference ?? null,
                 transaction.cardReference ?? null,
+                transaction.transactionType ?? null,
                 transaction.reconciled ? 1 : 0,
                 transaction.reconciledAt ?? null,
                 transaction.isImported ? 1 : 0,
@@ -182,6 +226,34 @@ export class TransactionRepository extends Repository {
         );
     }
 
+    // A transaction is a duplicate only when it's for the same account,
+    // same date, same type, and same amount (never touched or relaxed -
+    // this is what actually distinguishes one transaction from
+    // another), AND its identity is then confirmed by a priority/
+    // fallback chain - never by treating Payee, narration, and
+    // reference as three independent, equally-weighted signals (Payee
+    // in particular is often a short/generic label - and, since the
+    // account-scoped Payee/Type/Notes learning feature deliberately
+    // gives many genuinely different transactions sharing a narration
+    // pattern the *same* Payee, trusting it alone would make same-day/
+    // same-amount/same-payee transactions falsely collapse into
+    // "duplicates" and silently vanish on import):
+    //
+    //   1. A matching *real* reference number (both sides non-
+    //      placeholder - see isPlaceholderReference) is sufficient on
+    //      its own; a bank-assigned reference/UTR is effectively a
+    //      unique transaction id.
+    //   2. Otherwise, when the incoming transaction has real narration
+    //      text, that narration must match - Payee is never consulted
+    //      while usable narration exists to check instead.
+    //   3. Only when the incoming transaction has no narration text at
+    //      all does Payee serve as the fallback identity signal.
+    //
+    // A blank/placeholder reference never participates in matching, on
+    // either side - so many genuinely different transactions that all
+    // happen to share a bank's "no reference" placeholder can never
+    // collapse into duplicates of each other. Soft-deleted transactions
+    // (deleted_at IS NOT NULL) never participate at all.
     async findDuplicate(
         accountId: string,
         transactionDate: string,
@@ -191,29 +263,11 @@ export class TransactionRepository extends Repository {
         payee: string,
         description: string
     ): Promise<Transaction | null> {
+        const hasReference =
+            !isPlaceholderReference(referenceNumber);
 
-        if (referenceNumber) {
-            const referenceMatches =
-                await this.select<Transaction>(
-                    `
-                    SELECT
-                        ${this.selectFields}
-                    FROM transactions
-                    WHERE account_id = ?
-                      AND reference_number = ?
-                      AND deleted_at IS NULL
-                    LIMIT 1
-                    `,
-                    [
-                        accountId,
-                        referenceNumber,
-                    ]
-                );
-
-            if (referenceMatches[0]) {
-                return referenceMatches[0];
-            }
-        }
+        const hasNarration =
+            description.trim().length > 0;
 
         const matches =
             await this.select<Transaction>(
@@ -228,14 +282,26 @@ export class TransactionRepository extends Repository {
                   AND deleted_at IS NULL
                   AND (
                       (
-                          ? <> ''
-                          AND LOWER(TRIM(payee)) =
+                          ? = 1
+                          AND reference_number IS NOT NULL
+                          AND TRIM(reference_number) <> ''
+                          AND UPPER(TRIM(reference_number))
+                              NOT IN ('NA', 'N/A')
+                          AND TRIM(TRIM(reference_number), '-') <> ''
+                          AND LOWER(TRIM(reference_number)) =
                               LOWER(TRIM(?))
                       )
                       OR
                       (
-                          ? <> ''
-                          AND LOWER(TRIM(notes)) =
+                          ? = 1
+                          AND LOWER(TRIM(original_narration)) =
+                              LOWER(TRIM(?))
+                      )
+                      OR
+                      (
+                          ? = 0
+                          AND ? <> ''
+                          AND LOWER(TRIM(payee)) =
                               LOWER(TRIM(?))
                       )
                   )
@@ -246,10 +312,13 @@ export class TransactionRepository extends Repository {
                     transactionDate,
                     type,
                     amount,
+                    hasReference ? 1 : 0,
+                    referenceNumber,
+                    hasNarration ? 1 : 0,
+                    description,
+                    hasNarration ? 1 : 0,
                     payee,
                     payee,
-                    description,
-                    description,
                 ]
             );
 
@@ -264,6 +333,27 @@ export class TransactionRepository extends Repository {
             WHERE id = ?
             `,
             [id]
+        );
+    }
+
+    // Keeps every already-imported transaction's Mapping Name
+    // (source_statement) in sync when a Saved Mapping is renamed (see
+    // ImportService.renameMapping) - matched by the mapping's exact prior
+    // name, since source_statement stores that name as free text, not a
+    // foreign key to import_mappings. Never touches any other field.
+    async renameSourceStatement(
+        oldName: string,
+        newName: string
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE transactions
+            SET source_statement = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE source_statement = ?
+              AND deleted_at IS NULL
+            `,
+            [newName, oldName]
         );
     }
 }

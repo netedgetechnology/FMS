@@ -20,6 +20,11 @@ import { RestoreOrphanedInvestmentAccountsMigration } from "./019_restore_orphan
 import { LoanAccountLinkMigration } from "./021_loan_account_link";
 import { LoanPaidInstallmentsMigration } from "./022_loan_paid_installments";
 import { ImportMappingsMigration } from "./023_import_mappings";
+import { TransactionChannelTypeMigration } from "./024_transaction_type";
+import { TransactionCounterpartyBranchMigration } from "./025_transaction_counterparty_branch";
+import { CounterpartyRulesMigration } from "./026_counterparty_rules";
+import { CounterpartyRulesAccountScopeMigration } from "./027_counterparty_rules_account_scope";
+import { CounterpartyRulesTypeNotesMigration } from "./028_counterparty_rules_type_notes";
 import { BackfillImportMappingNameMigration } from "./029_backfill_import_mapping_name";
 
 export const migrations = [
@@ -45,6 +50,11 @@ export const migrations = [
     LoanAccountLinkMigration,
     LoanPaidInstallmentsMigration,
     ImportMappingsMigration,
+    TransactionChannelTypeMigration,
+    TransactionCounterpartyBranchMigration,
+    CounterpartyRulesMigration,
+    CounterpartyRulesAccountScopeMigration,
+    CounterpartyRulesTypeNotesMigration,
     BackfillImportMappingNameMigration,
 ];
 

@@ -1,5 +1,9 @@
+// Kept in sync with @financeos/import-engine's CsvImportType - an
+// ImportBatch always records the same Import Type value the preview/
+// import was run with.
 export type ImportType =
     | "BANK_CSV"
+    | "BANK_EXCEL"
     | "CREDIT_CARD_CSV";
 
 export type ImportBatchStatus =

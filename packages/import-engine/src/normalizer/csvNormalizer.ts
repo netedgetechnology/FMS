@@ -4,6 +4,11 @@ import type {
     NormalizedTransactionCandidate,
 } from "../types";
 
+import {
+    detectTransactionChannel,
+    normalizeTransactionChannel,
+} from "./transactionChannelDetector";
+
 function cleanText(value: unknown): string {
     if (
         value === null ||
@@ -272,8 +277,14 @@ function buildRawData(
     return rawData;
 }
 
+// BANK_EXCEL identifies an Excel-sourced (.xlsx/.xls) bank statement -
+// it is otherwise treated exactly like BANK_CSV by every heuristic below
+// (resolveAmountAndType only ever special-cases CREDIT_CARD_CSV; a bank
+// statement's shape doesn't depend on which file format carried it), so
+// no new branch is needed anywhere in this normalizer for it.
 export type CsvImportType =
     | "BANK_CSV"
+    | "BANK_EXCEL"
     | "CREDIT_CARD_CSV";
 
 function resolveAmountAndType(
@@ -329,6 +340,31 @@ function resolveAmountAndType(
             )
         );
 
+    // When separate Debit/Credit columns are available, they are the
+    // authoritative transaction amounts. Do NOT prefer a generic
+    // "Amount" column because bank statements often use it for the
+    // running balance.
+    if (
+        debit !== null &&
+        debit !== 0
+    ) {
+        return {
+            amount: Math.abs(debit),
+            type: explicitType ?? "expense",
+        };
+    }
+
+    if (
+        credit !== null &&
+        credit !== 0
+    ) {
+        return {
+            amount: Math.abs(credit),
+            type: explicitType ?? "income",
+        };
+    }
+
+    // Fall back to Amount only when no Debit/Credit value exists.
     if (explicitAmount !== null) {
         return {
             amount: Math.abs(
@@ -349,26 +385,6 @@ function resolveAmountAndType(
                             explicitAmount
                         )
                 ),
-        };
-    }
-
-    if (
-        debit !== null &&
-        debit !== 0
-    ) {
-        return {
-            amount: Math.abs(debit),
-            type: "expense",
-        };
-    }
-
-    if (
-        credit !== null &&
-        credit !== 0
-    ) {
-        return {
-            amount: Math.abs(credit),
-            type: "income",
         };
     }
 
@@ -412,6 +428,14 @@ export function normalizeCsvRows(
                 headerIndex
             );
 
+        const externalTransactionId =
+            getValue(
+                row,
+                mapping,
+                "externalTransactionId",
+                headerIndex
+            );
+
         const resolved =
             resolveAmountAndType(
                 row,
@@ -419,6 +443,45 @@ export function normalizeCsvRows(
                 headerIndex,
                 importType
             );
+
+        const balance =
+            normalizeAmount(
+                getValue(
+                    row,
+                    mapping,
+                    "balance",
+                    headerIndex
+                )
+            );
+
+        const branch =
+            getValue(
+                row,
+                mapping,
+                "branch",
+                headerIndex
+            );
+
+        // An explicit "Mode"/"Channel" source column (rare) is
+        // authoritative when mapped; otherwise fall back to detecting the
+        // channel from whatever narration text is available. Never
+        // derived from - and never overwrites - the DR/CR direction
+        // resolved above.
+        const transactionType =
+            mapping.transactionType
+                ? normalizeTransactionChannel(
+                      getValue(
+                          row,
+                          mapping,
+                          "transactionType",
+                          headerIndex
+                      )
+                  )
+                : detectTransactionChannel(
+                      description,
+                      payee,
+                      referenceNumber
+                  );
 
         return {
             rowNumber:
@@ -450,6 +513,25 @@ export function normalizeCsvRows(
                 referenceNumber ||
                 null,
 
+            externalTransactionId:
+                externalTransactionId ||
+                null,
+
+            balance,
+
+            branch:
+                branch || null,
+
+            transactionType,
+
+            // Filled in by the desktop layer (learned counterparty
+            // association) and/or manual per-row entry, never here.
+            counterparty: null,
+
+            // Independent from description; filled in only via manual
+            // per-row entry.
+            notes: null,
+
             rawData:
                 buildRawData(
                     row,
@@ -458,5 +540,6 @@ export function normalizeCsvRows(
         };
     });
 }
+
 
 

@@ -15,7 +15,13 @@ export type ColumnMappingField =
     | "debit"
     | "credit"
     | "type"
-    | "referenceNumber";
+    | "referenceNumber"
+    | "balance"
+    | "branch"
+    | "transactionType"
+    // Manual-only - deliberately never assigned by HEADER_RULES/
+    // FALLBACK_RULES below, so it is never auto-detected.
+    | "externalTransactionId";
 
 export interface DetectedColumn {
     header: string;
@@ -162,7 +168,63 @@ const HEADER_RULES: HeaderRule[] = [
             "check_number",
         ],
     },
+    {
+        field: "balance",
+        confidence: "high",
+        names: [
+            "balance",
+            "closing balance",
+            "closing_balance",
+            "available balance",
+            "available_balance",
+            "running balance",
+            "running_balance",
+            "ledger balance",
+            "ledger_balance",
+        ],
+    },
+    {
+        field: "branch",
+        confidence: "high",
+        names: [
+            "branch",
+            "branch name",
+            "branch_name",
+            "bank branch",
+            "bank_branch",
+        ],
+    },
+    {
+        // The transaction *channel* (UPI/IMPS/NEFT/RTGS/Cash/Cheque) -
+        // a rarely-present explicit source column. Deliberately named
+        // distinctly from the "type" field above (which is DR/CR
+        // direction) so a column literally called "Type" or "Transaction
+        // Type" keeps meaning direction, not channel.
+        field: "transactionType",
+        confidence: "high",
+        names: [
+            "mode",
+            "transaction mode",
+            "transaction_mode",
+            "txn mode",
+            "txn_mode",
+            "payment mode",
+            "payment_mode",
+            "mode of payment",
+            "channel",
+            "transaction channel",
+            "transaction_channel",
+        ],
+    },
 ];
+
+// Common currency-code/symbol suffixes banks append to header names
+// (e.g. "Amount(INR)", "Balance (Rs.)"). Stripped before matching so the
+// underlying field name ("amount", "balance", ...) can match exactly,
+// without discarding other parenthetical qualifiers (like "(Dr)"/"(Cr)")
+// that carry real meaning.
+const CURRENCY_SUFFIX_PATTERN =
+    /\(\s*(?:inr|rs\.?|usd|eur|gbp|aed|₹|\$|€|£)\s*\)/gi;
 
 function normalizeHeader(
     header: string
@@ -171,8 +233,10 @@ function normalizeHeader(
         .trim()
         .toLowerCase()
         .replace(/["']/g, "")
+        .replace(CURRENCY_SUFFIX_PATTERN, "")
         .replace(/[_-]+/g, " ")
-        .replace(/\s+/g, " ");
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 function findMatchingRules(
@@ -207,6 +271,15 @@ function assignDetection(
     };
 }
 
+const CONFIDENCE_RANK: Record<
+    DetectedColumn["confidence"],
+    number
+> = {
+    high: 3,
+    medium: 2,
+    low: 1,
+};
+
 export function detectCsvColumns(
     document: CsvDocument
 ): ColumnDetectionResult {
@@ -217,10 +290,10 @@ export function detectCsvColumns(
     const ambiguousFields =
         new Set<ColumnMappingField>();
 
-    const usedFields =
+    const candidatesByField =
         new Map<
             ColumnMappingField,
-            string
+            DetectedColumn[]
         >();
 
     for (const header of document.headers) {
@@ -238,28 +311,49 @@ export function detectCsvColumns(
             continue;
         }
 
-        const existingHeader =
-            usedFields.get(
+        const existing =
+            candidatesByField.get(
                 detection.field
-            );
+            ) ?? [];
 
-        if (existingHeader) {
-            ambiguousFields.add(
-                detection.field
-            );
-            continue;
-        }
+        existing.push(detection);
 
-        usedFields.set(
+        candidatesByField.set(
             detection.field,
-            header
+            existing
+        );
+    }
+
+    // When multiple columns map to the same field (e.g. both "Tran Date"
+    // and "Value Date"), prefer the highest-confidence match rather than
+    // whichever column happened to come first. Only flag the field as
+    // ambiguous when the top confidence is genuinely tied, since that is
+    // when the user actually needs to pick.
+    for (const [
+        field,
+        candidates,
+    ] of candidatesByField) {
+        const sorted = [...candidates].sort(
+            (a, b) =>
+                CONFIDENCE_RANK[b.confidence] -
+                CONFIDENCE_RANK[a.confidence]
         );
 
-        mapping[
-            detection.field
-        ] = header;
+        const winner = sorted[0];
 
-        detected.push(detection);
+        mapping[field] = winner.header;
+
+        detected.push(winner);
+
+        const tiedAtTop = sorted.filter(
+            candidate =>
+                candidate.confidence ===
+                winner.confidence
+        );
+
+        if (tiedAtTop.length > 1) {
+            ambiguousFields.add(field);
+        }
     }
 
     const hasDebit =

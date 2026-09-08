@@ -16,6 +16,21 @@ export type PaymentMethod =
     | "DIRECT_DEBIT"
     | "OTHER";
 
+// The transaction *channel* - which rail carried the money (UPI/IMPS/
+// NEFT/RTGS/Cash/Cheque). Separate from PaymentMethod (a broader,
+// manually-selected category) and from TransactionType above (DR/CR
+// direction, i.e. income/expense/transfer): this never overwrites either.
+export type TransactionChannel =
+    | "UPI"
+    | "IMPS"
+    | "NEFT"
+    | "RTGS"
+    | "CASH"
+    | "CHEQUE"
+    | "EMANDATE"
+    | "NET_BANKING"
+    | "MOBILE_APP";
+
 export interface Transaction {
 
     id: string;
@@ -27,6 +42,14 @@ export interface Transaction {
     subcategoryId: string | null;
 
     payee: string;
+
+    // The person/company on the other side of the transaction. Distinct
+    // from payee/description/referenceNumber/notes - never merged into
+    // any of them.
+    counterparty: string | null;
+
+    // The bank branch a transaction was processed at.
+    branch: string | null;
 
     type: TransactionType;
 
@@ -49,6 +72,8 @@ export interface Transaction {
     bankTransactionReference: string | null;
 
     cardReference: string | null;
+
+    transactionType: TransactionChannel | null;
 
     reconciled: boolean;
 
@@ -78,6 +103,10 @@ export interface CreateTransactionRequest {
 
     payee: string;
 
+    counterparty?: string | null;
+
+    branch?: string | null;
+
     type: TransactionType;
 
     amount: number;
@@ -99,6 +128,8 @@ export interface CreateTransactionRequest {
     bankTransactionReference?: string | null;
 
     cardReference?: string | null;
+
+    transactionType?: TransactionChannel | null;
 
     reconciled?: boolean;
 

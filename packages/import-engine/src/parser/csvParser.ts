@@ -3,52 +3,18 @@ import type {
     CsvRow,
 } from "../types";
 
-function parseCsvLine(
-    line: string
-): string[] {
-    const values: string[] = [];
-    let current = "";
-    let quoted = false;
+import {
+    detectDelimiterAndHeader,
+    splitDelimitedLine,
+} from "./tableDetector";
 
-    for (
-        let index = 0;
-        index < line.length;
-        index += 1
-    ) {
-        const character = line[index];
-
-        if (character === '"') {
-            if (
-                quoted &&
-                line[index + 1] === '"'
-            ) {
-                current += '"';
-                index += 1;
-                continue;
-            }
-
-            quoted = !quoted;
-            continue;
-        }
-
-        if (
-            character === "," &&
-            !quoted
-        ) {
-            values.push(current.trim());
-            current = "";
-            continue;
-        }
-
-        current += character;
-    }
-
-    values.push(current.trim());
-
-    return values;
+export function stripBom(content: string): string {
+    return content.charCodeAt(0) === 0xfeff
+        ? content.slice(1)
+        : content;
 }
 
-function splitCsvLines(
+export function splitCsvLines(
     content: string
 ): string[] {
     const lines: string[] = [];
@@ -108,11 +74,50 @@ function splitCsvLines(
     return lines;
 }
 
+// Reconciles a data row's field count against the header's, tolerating the
+// common real-world messiness of unquoted delimiters inside a trailing
+// value (e.g. an address column containing a comma). Extra trailing
+// fields are folded back into the last column instead of being dropped or
+// left misaligned; missing trailing fields are padded with "".
+function reconcileFieldCount(
+    values: string[],
+    headerCount: number,
+    delimiter: string
+): string[] {
+    if (
+        headerCount === 0 ||
+        values.length === headerCount
+    ) {
+        return values;
+    }
+
+    if (values.length > headerCount) {
+        const head = values.slice(
+            0,
+            headerCount - 1
+        );
+
+        const overflow = values
+            .slice(headerCount - 1)
+            .join(delimiter);
+
+        return [...head, overflow];
+    }
+
+    return [
+        ...values,
+        ...Array(
+            headerCount - values.length
+        ).fill(""),
+    ];
+}
+
 export function parseCsv(
     content: string
 ): CsvDocument {
-    const lines =
-        splitCsvLines(content);
+    const lines = splitCsvLines(
+        stripBom(content)
+    );
 
     if (lines.length === 0) {
         return {
@@ -121,16 +126,37 @@ export function parseCsv(
         };
     }
 
-    const headers =
-        parseCsvLine(lines[0]).map(
-            header => header.trim()
-        );
+    const { delimiter, headerIndex, bodyLength } =
+        detectDelimiterAndHeader(lines);
+
+    const headerLine = lines[headerIndex];
+
+    const headers = splitDelimitedLine(
+        headerLine,
+        delimiter
+    ).map(header => header.trim());
 
     const rows: CsvRow[] = [];
 
+    // Bound the transaction body to the contiguous, structurally-consistent
+    // run right after the header (bodyLength) so trailing non-tabular
+    // content - footers, disclaimers, legends - is never treated as
+    // transaction rows. A malformed row *inside* that run still has the
+    // right shape (same field count), so it stays in and is reported as a
+    // validation error downstream, rather than being silently dropped.
+    // `bodyLength` is null only when no reliable structure was found at
+    // all, in which case every line through EOF is kept (prior behavior).
+    const bodyEndIndex =
+        bodyLength === null
+            ? lines.length
+            : Math.min(
+                  lines.length,
+                  headerIndex + 1 + bodyLength
+              );
+
     for (
-        let index = 1;
-        index < lines.length;
+        let index = headerIndex + 1;
+        index < bodyEndIndex;
         index += 1
     ) {
         const line = lines[index];
@@ -139,9 +165,18 @@ export function parseCsv(
             continue;
         }
 
+        const values = reconcileFieldCount(
+            splitDelimitedLine(
+                line,
+                delimiter
+            ),
+            headers.length,
+            delimiter
+        );
+
         rows.push({
             rowNumber: index + 1,
-            values: parseCsvLine(line),
+            values,
         });
     }
 
