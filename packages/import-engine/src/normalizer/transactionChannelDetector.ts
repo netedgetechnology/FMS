@@ -10,6 +10,7 @@ const KNOWN_CHANNELS: ReadonlySet<TransactionChannel> = new Set([
     "EMANDATE",
     "NET_BANKING",
     "MOBILE_APP",
+    "CREDIT_CARD",
 ]);
 
 // Ordered, most-specific tokens first. Each is a whole-word,
@@ -33,6 +34,10 @@ const CHANNEL_PATTERNS: ReadonlyArray<{
     {
         channel: "CHEQUE",
         pattern: /\bCHQ\b|\bCHEQUE\b/i,
+    },
+    {
+        channel: "CREDIT_CARD",
+        pattern: /\bCREDIT CARD\b/i,
     },
 ];
 

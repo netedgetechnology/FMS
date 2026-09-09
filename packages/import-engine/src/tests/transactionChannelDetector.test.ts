@@ -121,6 +121,20 @@ describe("detectTransactionChannel", () => {
         ).toBeNull();
     });
 
+    it("detects Credit Card from a credit card bill payment narration", () => {
+        expect(
+            detectTransactionChannel(
+                "CREDIT CARD BILL PAYMENT - XXXX1234"
+            )
+        ).toBe("CREDIT_CARD");
+    });
+
+    it("is case-insensitive for Credit Card too", () => {
+        expect(
+            detectTransactionChannel("credit card payment received")
+        ).toBe("CREDIT_CARD");
+    });
+
     it("checks multiple text sources together (description, payee, reference)", () => {
         expect(
             detectTransactionChannel(
@@ -141,6 +155,16 @@ describe("normalizeTransactionChannel", () => {
         expect(
             normalizeTransactionChannel("Cheque")
         ).toBe("CHEQUE");
+    });
+
+    it("normalizes an explicit 'Credit Card' column value", () => {
+        expect(
+            normalizeTransactionChannel("credit_card")
+        ).toBe("CREDIT_CARD");
+
+        expect(
+            normalizeTransactionChannel(" Credit_Card ")
+        ).toBe("CREDIT_CARD");
     });
 
     it("returns null for an unrecognized explicit value rather than guessing", () => {

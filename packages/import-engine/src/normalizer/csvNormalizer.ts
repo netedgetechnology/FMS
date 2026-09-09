@@ -277,15 +277,24 @@ function buildRawData(
     return rawData;
 }
 
-// BANK_EXCEL identifies an Excel-sourced (.xlsx/.xls) bank statement -
-// it is otherwise treated exactly like BANK_CSV by every heuristic below
-// (resolveAmountAndType only ever special-cases CREDIT_CARD_CSV; a bank
-// statement's shape doesn't depend on which file format carried it), so
-// no new branch is needed anywhere in this normalizer for it.
+// BANK_EXCEL/BANK_PDF identify an Excel- or PDF-sourced bank statement -
+// each is otherwise treated exactly like BANK_CSV by every heuristic
+// below (resolveAmountAndType only ever special-cases the two
+// CREDIT_CARD_* values; a bank statement's shape doesn't depend on
+// which file format carried it), so no new branch is needed anywhere in
+// this normalizer for either. CREDIT_CARD_PDF is the PDF counterpart of
+// CREDIT_CARD_CSV for the same reason - the credit-card sign convention
+// is a property of the data, not the file format, so it takes the exact
+// same branch as CREDIT_CARD_CSV below rather than a parallel one. This
+// package has no PDF-specific (let alone bank/provider-specific) parsing
+// logic for either PDF value - both flow through the same universal,
+// bank-agnostic PDF extraction (see parser/pdfParser.ts).
 export type CsvImportType =
     | "BANK_CSV"
     | "BANK_EXCEL"
-    | "CREDIT_CARD_CSV";
+    | "BANK_PDF"
+    | "CREDIT_CARD_CSV"
+    | "CREDIT_CARD_PDF";
 
 function resolveAmountAndType(
     row: CsvRow,
@@ -373,7 +382,8 @@ function resolveAmountAndType(
             type:
                 explicitType ??
                 (
-                    importType === "CREDIT_CARD_CSV"
+                    importType === "CREDIT_CARD_CSV" ||
+                    importType === "CREDIT_CARD_PDF"
                         ? (
                             explicitAmount < 0
                                 ? "expense"

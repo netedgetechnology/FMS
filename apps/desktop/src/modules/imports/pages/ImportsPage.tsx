@@ -93,6 +93,7 @@ const TRANSACTION_CHANNEL_OPTIONS: Array<{
     { value: "EMANDATE", label: "E-Mandate" },
     { value: "NET_BANKING", label: "Net Banking" },
     { value: "MOBILE_APP", label: "Mobile App" },
+    { value: "CREDIT_CARD", label: "Credit Card" },
 ];
 
 export interface PreviewOverrides {
@@ -1766,6 +1767,10 @@ export default function ImportsPage() {
 
                                 <option value="CREDIT_CARD_CSV">
                                     Credit Card CSV
+                                </option>
+
+                                <option value="CREDIT_CARD_PDF">
+                                    Credit Card PDF
                                 </option>
                             </select>
                         </div>

@@ -495,6 +495,212 @@ describe("normalizeCsvRows", () => {
         });
     });
 
+    // BANK_PDF (a PDF-sourced bank statement, see ImportsPage's "Bank
+    // PDF" Import Type) must behave exactly like BANK_CSV here too -
+    // resolveAmountAndType only ever special-cases the CREDIT_CARD_*
+    // values, so a bank statement's shape heuristics don't depend on
+    // which file format carried it. This package has no PDF-specific
+    // parsing logic of its own here - normalizeCsvRows runs on whatever
+    // rows the universal, bank-agnostic PDF extraction already produced.
+    describe("BANK_PDF is a real CsvImportType value, treated like BANK_CSV (never like CREDIT_CARD_CSV/CREDIT_CARD_PDF)", () => {
+        it("a positive explicit Amount (no Debit/Credit) is bank income, exactly like BANK_CSV", () => {
+            const mapping = {
+                date: "Date",
+                description: "Description",
+                amount: "Amount",
+            };
+
+            const headers = [
+                "Date",
+                "Description",
+                "Amount",
+            ];
+
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Salary",
+                    "750",
+                ],
+            };
+
+            const bankCsvResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "BANK_CSV"
+            );
+
+            const bankPdfResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "BANK_PDF"
+            );
+
+            expect(bankPdfResult[0]?.amount).toBe(
+                750
+            );
+            expect(bankPdfResult[0]?.type).toBe(
+                "income"
+            );
+            // Identical outcome to BANK_CSV for the same row - proving
+            // BANK_PDF reuses the exact same heuristic, not a
+            // duplicated/diverging one.
+            expect(bankPdfResult[0]?.type).toBe(
+                bankCsvResult[0]?.type
+            );
+            expect(bankPdfResult[0]?.amount).toBe(
+                bankCsvResult[0]?.amount
+            );
+        });
+
+        it("a negative explicit Amount is bank expense under BANK_PDF - never the CREDIT_CARD_CSV/CREDIT_CARD_PDF heuristic", () => {
+            const mapping = {
+                date: "Date",
+                description: "Description",
+                amount: "Amount",
+            };
+
+            const headers = [
+                "Date",
+                "Description",
+                "Amount",
+            ];
+
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "ATM Withdrawal",
+                    "-500",
+                ],
+            };
+
+            const result = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "BANK_PDF"
+            );
+
+            expect(result[0]?.amount).toBe(500);
+            expect(result[0]?.type).toBe(
+                "expense"
+            );
+        });
+    });
+
+    // CREDIT_CARD_PDF is the PDF counterpart of CREDIT_CARD_CSV: the
+    // same credit-card sign convention (negative = expense, positive =
+    // income for a single Amount column), because that convention is a
+    // property of the data, not the file format. This is the one case
+    // where a PDF-sourced import type does NOT behave like its BANK_PDF/
+    // BANK_CSV sibling - it must diverge exactly the same way
+    // CREDIT_CARD_CSV already diverges from BANK_CSV.
+    describe("CREDIT_CARD_PDF uses the credit-card sign convention, exactly like CREDIT_CARD_CSV (never like BANK_PDF)", () => {
+        const mapping = {
+            date: "Date",
+            description: "Description",
+            amount: "Amount",
+        };
+
+        const headers = [
+            "Date",
+            "Description",
+            "Amount",
+        ];
+
+        it("a positive explicit Amount is income, matching CREDIT_CARD_CSV exactly", () => {
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Refund",
+                    "750",
+                ],
+            };
+
+            const creditCardCsvResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_CSV"
+            );
+
+            const creditCardPdfResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_PDF"
+            );
+
+            expect(creditCardPdfResult[0]?.amount).toBe(750);
+            expect(creditCardPdfResult[0]?.type).toBe("income");
+            expect(creditCardPdfResult[0]?.type).toBe(
+                creditCardCsvResult[0]?.type
+            );
+        });
+
+        it("a negative explicit Amount is expense, matching CREDIT_CARD_CSV exactly - the point where it would diverge from BANK_PDF if it were mishandled as a bank type", () => {
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Restaurant",
+                    "-500",
+                ],
+            };
+
+            const result = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_PDF"
+            );
+
+            expect(result[0]?.amount).toBe(500);
+            expect(result[0]?.type).toBe("expense");
+        });
+
+        it("Debit/Credit columns remain authoritative for CREDIT_CARD_PDF too, exactly like every other import type", () => {
+            const debitCreditMapping = {
+                date: "Date",
+                description: "Description",
+                debit: "Debit",
+                credit: "Credit",
+            };
+
+            const debitCreditHeaders = [
+                "Date",
+                "Description",
+                "Debit",
+                "Credit",
+            ];
+
+            const debitRow = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Coffee Shop",
+                    "250",
+                    "",
+                ],
+            };
+
+            const result = normalizeCsvRows(
+                [debitRow],
+                debitCreditMapping,
+                debitCreditHeaders,
+                "CREDIT_CARD_PDF"
+            );
+
+            expect(result[0]?.amount).toBe(250);
+            expect(result[0]?.type).toBe("expense");
+        });
+    });
+
     it("normalizes a mapped balance column", () => {
         const result = normalizeCsvRows(
             [
@@ -706,6 +912,71 @@ describe("normalizeCsvRows", () => {
         expect(result[0]?.transactionDate).toBe(
             "2026-08-01"
         );
+    });
+
+    it("accepts Credit Card as a valid Transaction Type, detected from narration", () => {
+        const result = normalizeCsvRows(
+            [
+                {
+                    rowNumber: 2,
+                    values: [
+                        "01-08-2026",
+                        "CREDIT CARD BILL PAYMENT - XXXX1234",
+                        "5000.00",
+                    ],
+                },
+            ],
+            {
+                date: "Date",
+                description: "Description",
+                amount: "Amount",
+            },
+            [
+                "Date",
+                "Description",
+                "Amount",
+            ]
+        );
+
+        expect(
+            result[0]?.transactionType
+        ).toBe("CREDIT_CARD");
+    });
+
+    it("accepts an explicit Credit Card Transaction Type source column, taking priority over text detection", () => {
+        const result = normalizeCsvRows(
+            [
+                {
+                    rowNumber: 2,
+                    // Description mentions NEFT, but the file explicitly
+                    // provides a Mode column saying Credit Card - the
+                    // explicit column must win, exactly like any other
+                    // channel.
+                    values: [
+                        "01-08-2026",
+                        "NEFT/IN123/Some Corp",
+                        "150.00",
+                        "Credit_Card",
+                    ],
+                },
+            ],
+            {
+                date: "Date",
+                description: "Description",
+                amount: "Amount",
+                transactionType: "Mode",
+            },
+            [
+                "Date",
+                "Description",
+                "Amount",
+                "Mode",
+            ]
+        );
+
+        expect(
+            result[0]?.transactionType
+        ).toBe("CREDIT_CARD");
     });
 
     it("keeps Transaction Type (channel) independent of DR/CR direction", () => {

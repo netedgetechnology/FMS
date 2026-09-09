@@ -4,7 +4,9 @@
 export type ImportType =
     | "BANK_CSV"
     | "BANK_EXCEL"
-    | "CREDIT_CARD_CSV";
+    | "BANK_PDF"
+    | "CREDIT_CARD_CSV"
+    | "CREDIT_CARD_PDF";
 
 export type ImportBatchStatus =
     | "PENDING"

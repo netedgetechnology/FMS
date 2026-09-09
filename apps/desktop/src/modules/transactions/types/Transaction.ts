@@ -17,9 +17,13 @@ export type PaymentMethod =
     | "OTHER";
 
 // The transaction *channel* - which rail carried the money (UPI/IMPS/
-// NEFT/RTGS/Cash/Cheque). Separate from PaymentMethod (a broader,
-// manually-selected category) and from TransactionType above (DR/CR
-// direction, i.e. income/expense/transfer): this never overwrites either.
+// NEFT/RTGS/Cash/Cheque/Credit Card). Separate from PaymentMethod (a
+// broader, manually-selected category) and from TransactionType above
+// (DR/CR direction, i.e. income/expense/transfer): this never
+// overwrites either. Kept in sync with @financeos/import-engine's own
+// TransactionChannel. CREDIT_CARD is a generic payment rail like every
+// other value here, independent of an account's own
+// AccountType.CREDIT_CARD.
 export type TransactionChannel =
     | "UPI"
     | "IMPS"
@@ -29,7 +33,8 @@ export type TransactionChannel =
     | "CHEQUE"
     | "EMANDATE"
     | "NET_BANKING"
-    | "MOBILE_APP";
+    | "MOBILE_APP"
+    | "CREDIT_CARD";
 
 export interface Transaction {
 

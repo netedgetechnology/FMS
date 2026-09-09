@@ -9,9 +9,12 @@ export interface CsvDocument {
 }
 
 // The transaction *channel* - how the money moved (UPI/IMPS/NEFT/RTGS/
-// Cash/Cheque). Distinct from and never derived from DR/CR direction:
-// direction says money in vs. money out (-> the existing "type" field,
-// income/expense/transfer); channel says which rail carried it. Optional.
+// Cash/Cheque/Credit Card). Distinct from and never derived from DR/CR
+// direction: direction says money in vs. money out (-> the existing
+// "type" field, income/expense/transfer); channel says which rail
+// carried it. Optional. CREDIT_CARD is a generic payment rail like every
+// other value here (not a card network or issuer) - independent of, and
+// never derived from, an account's own AccountType.CREDIT_CARD.
 export type TransactionChannel =
     | "UPI"
     | "IMPS"
@@ -21,7 +24,8 @@ export type TransactionChannel =
     | "CHEQUE"
     | "EMANDATE"
     | "NET_BANKING"
-    | "MOBILE_APP";
+    | "MOBILE_APP"
+    | "CREDIT_CARD";
 
 export interface NormalizedTransactionCandidate {
     rowNumber: number;

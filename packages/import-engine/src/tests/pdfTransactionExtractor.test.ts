@@ -164,6 +164,40 @@ describe("PDF transaction extractor", () => {
             .toHaveLength(3);
     });
 
+    // Regression test: DATE_PATTERN used to require a 4-digit year for
+    // every date shape except plain YYYY-MM-DD, so a genuinely generic
+    // (non-bank-structured) document using 2-digit years had every one
+    // of its dated rows silently treated as non-dated continuation
+    // text instead of its own transaction - exactly what happened to a
+    // real SBI Credit Card statement's "16 Jul 26"-style dates. Widened
+    // to accept 2-4 digit years, matching pdfParser.ts's own date
+    // matching - not a bank-specific fix, just a real date format this
+    // pattern previously couldn't recognise at all.
+    it("supports 2-digit-year dates (DD Mon YY and DD/MM/YY), not just 4-digit years", () => {
+        const result = extractPdfTransactions({
+            headers: ["Date", "Description"],
+            rows: [
+                {
+                    rowNumber: 2,
+                    values: [
+                        "16 Jul 26",
+                        "Payment Received",
+                    ],
+                },
+                {
+                    rowNumber: 3,
+                    values: [
+                        "01/08/26",
+                        "ATM Withdrawal",
+                    ],
+                },
+            ],
+        });
+
+        expect(result.transactionLines)
+            .toHaveLength(2);
+    });
+
     it("does not mutate the original document", () => {
         const document = {
             headers: ["Date", "Description"],
@@ -194,3 +228,16 @@ describe("PDF transaction extractor", () => {
             .toHaveLength(1);
     });
 });
+
+// A previous version of this module had a second, bank-specific
+// extraction path (extractAxisRows/parseTransactionRow) that only
+// activated for single-value rows whose text started with two numeric
+// dates - the shape a real PDF line took when pdfParser.ts's own
+// extraction found no transactions and fell back to one-column-per-line
+// text. pdfParser.ts's structural heuristic (date-led block + qualifying
+// trailing amount/balance tail) now extracts these transactions directly
+// instead of ever falling back to that shape, so the bank-specific path
+// was removed as dead code. The real-Axis-line regression scenarios it
+// used to cover (amount/balance not swapped, multiple consecutive DR/CR
+// transactions, no-trailing-branch-text, header-leak into description)
+// are covered against the new unified path in pdfParser.test.ts instead.

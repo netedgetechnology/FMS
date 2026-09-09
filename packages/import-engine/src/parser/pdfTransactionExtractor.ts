@@ -13,14 +13,15 @@ export interface PdfExtractionResult {
     transactionLines: PdfTransactionLine[];
 }
 
+// Years are 2-4 digits (\d{2,4}) everywhere a date includes a month
+// name or a slash/dash separator, matching pdfParser.ts's own date
+// matching (DATE_FRAGMENTS/parseDateSortKey) exactly - a statement
+// using a 2-digit year (e.g. "16 Jul 26") must be recognised here too,
+// or a row using one is silently treated as non-dated continuation
+// text instead of its own transaction. YYYY-MM-DD keeps a literal
+// \d{4} since a 4-digit leading year is what defines that format.
 const DATE_PATTERN =
-    /\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b/i;
-
-const DATE_PAIR_PATTERN =
-    /^\s*(\d{1,2}[-/]\d{1,2}[-/]\d{4})\s+(\d{1,2}[-/]\d{1,2}[-/]\d{4})\b/;
-
-const AMOUNT_TYPE_BALANCE_PATTERN =
-    /([\d,]+\.\d{2})\s+(DR|CR)\s+([\d,]+\.\d{2})(?:\s+(.*))?$/i;
+    /\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})\b/i;
 
 const HEADER_WORDS = new Set([
     "date",
@@ -75,7 +76,11 @@ const NOISE_PATTERNS = [
     /^legends\s*:/i,
 ];
 
-function rowText(row: CsvRow): string {
+// Exported for reuse by pipeline.ts, which builds transactionLines the
+// same way when pdfParser.ts's own structured extraction already
+// produced the document directly (see processPdf) - the shape of a
+// PdfExtractionResult's transactionLines must stay identical either way.
+export function rowText(row: CsvRow): string {
     return row.values
         .filter(Boolean)
         .map(value => value.trim())
@@ -85,10 +90,19 @@ function rowText(row: CsvRow): string {
         .trim();
 }
 
-function isTransactionStart(
-    text: string,
+// True for a header row's text even when it arrives as a single combined
+// string rather than separate per-column values - e.g. "Tran Date Value
+// Date ... Amount(INR) DR/CR ...". Shared with isLikelyHeaderRow below,
+// which additionally checks per-column HEADER_WORDS matches for
+// already-column-split rows.
+function isCombinedHeaderText(
+    normalizedText: string,
 ): boolean {
-    return DATE_PAIR_PATTERN.test(text);
+    return (
+        normalizedText.includes("tran date") &&
+        normalizedText.includes("value date") &&
+        normalizedText.includes("amount")
+    );
 }
 
 function isNoise(text: string): boolean {
@@ -104,135 +118,21 @@ function isNoise(text: string): boolean {
         return true;
     }
 
+    // Without this, a single-line-per-row header (a real single-value
+    // PDF text row) is neither an exact HEADER_WORDS match nor a
+    // NOISE_PATTERNS match, so it would otherwise be treated as
+    // ordinary row text instead of being skipped.
+    if (
+        isCombinedHeaderText(
+            text.toLowerCase(),
+        )
+    ) {
+        return true;
+    }
+
     return NOISE_PATTERNS.some(
         pattern => pattern.test(text),
     );
-}
-
-function parseTransactionRow(
-    row: CsvRow,
-    precedingText: string[],
-): CsvRow | null {
-    const text = rowText(row);
-
-    const dateMatch =
-        text.match(DATE_PAIR_PATTERN);
-
-    if (!dateMatch) {
-        return null;
-    }
-
-    const amountMatch =
-        text.match(
-            AMOUNT_TYPE_BALANCE_PATTERN,
-        );
-
-    if (!amountMatch) {
-        return null;
-    }
-
-    const [
-        ,
-        transactionDate,
-        valueDate,
-        amount,
-        type,
-        balance,
-        branch = "",
-    ] = amountMatch;
-
-    const afterDates =
-        text
-            .slice(
-                dateMatch[0].length,
-            )
-            .trim();
-
-    const amountIndex =
-        afterDates.search(
-            /\s+[\d,]+\.\d{2}\s+(?:DR|CR)\s+[\d,]+\.\d{2}/i,
-        );
-
-    const currentDescription =
-        amountIndex >= 0
-            ? afterDates
-                .slice(0, amountIndex)
-                .trim()
-            : afterDates;
-
-    const descriptionParts = [
-        ...precedingText,
-        currentDescription,
-    ]
-        .map(value =>
-            value
-                .replace(/\s+/g, " ")
-                .trim(),
-        )
-        .filter(Boolean);
-
-    const description =
-        descriptionParts.join(" ");
-
-    return {
-        rowNumber: row.rowNumber,
-        values: [
-            transactionDate,
-            valueDate,
-            description,
-            "",
-            amount,
-            type.toUpperCase(),
-            balance,
-            branch.trim(),
-        ],
-    };
-}
-
-function extractAxisRows(
-    rows: CsvRow[],
-): CsvRow[] {
-    const transactions: CsvRow[] = [];
-    let pending: string[] = [];
-
-    for (const row of rows) {
-        const text = rowText(row);
-
-        if (!text) {
-            continue;
-        }
-
-        if (isNoise(text)) {
-            continue;
-        }
-
-        if (isTransactionStart(text)) {
-            const transaction =
-                parseTransactionRow(
-                    row,
-                    pending,
-                );
-
-            if (transaction) {
-                transactions.push(
-                    transaction,
-                );
-                pending = [];
-                continue;
-            }
-        }
-
-        if (
-            DATE_PATTERN.test(text)
-        ) {
-            pending = [];
-            continue;
-        }
-
-        pending.push(text);
-    }
-
-    return transactions;
 }
 
 function isLikelyHeaderRow(
@@ -241,11 +141,7 @@ function isLikelyHeaderRow(
     const normalized =
         rowText(row).toLowerCase();
 
-    if (
-        normalized.includes("tran date") &&
-        normalized.includes("value date") &&
-        normalized.includes("amount")
-    ) {
+    if (isCombinedHeaderText(normalized)) {
         return true;
     }
 
@@ -369,44 +265,6 @@ export function extractPdfTransactions(
         };
     }
 
-    const sourceLooksLikePdfText =
-        sourceRows.some(row =>
-            row.values.length === 1 &&
-            DATE_PAIR_PATTERN.test(
-                row.values[0]?.trim() ?? "",
-            ),
-        );
-
-    if (!sourceLooksLikePdfText) {
-        return extractGenericRows(
-            document,
-        );
-    }
-
-    const transactionRows =
-        extractAxisRows(sourceRows);
-
-    const headers = [
-        "Tran Date",
-        "Value Date",
-        "Transaction Particulars",
-        "Chq No",
-        "Amount(INR)",
-        "DR/CR",
-        "Balance(INR)",
-        "Branch Name",
-    ];
-
-    return {
-        document: {
-            headers,
-            rows: transactionRows,
-        },
-        transactionLines:
-            transactionRows.map(row => ({
-                rowNumber: row.rowNumber,
-                text: rowText(row),
-            })),
-    };
+    return extractGenericRows(document);
 }
 
