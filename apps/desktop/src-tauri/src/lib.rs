@@ -1,3 +1,4 @@
+mod db_backup;
 mod documents;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -15,6 +16,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             documents::store_document_file,
+            db_backup::begin_daily_backup,
+            db_backup::finalize_daily_backup,
             documents::delete_document_file,
             documents::open_document_file,        ])
         .run(tauri::generate_context!())

@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles/globals.css";
 import { initializeDatabase } from "./core/database/bootstrap";
+import { runDailyDatabaseBackup } from "./core/database/dailyDatabaseBackup";
 
 
 async function startApplication() {
@@ -22,6 +23,13 @@ async function startApplication() {
                 </BrowserRouter>
             </React.StrictMode>
         );
+
+        // Local, once-per-day database backup. Fire-and-forget and
+        // deferred so it never delays startup; all failures are handled
+        // inside runDailyDatabaseBackup and can never reach here.
+        setTimeout(() => {
+            void runDailyDatabaseBackup();
+        }, 3000);
 
     } catch (error) {
 
