@@ -5,3 +5,4 @@ export * from "./useDateFormatter";
 export * from "./signedTransactionAmount";
 
 export * from './week';
+export * from './month';

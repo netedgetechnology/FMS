@@ -50,6 +50,8 @@ export function EditBudgetDialog({
     const service = new BudgetService();
 
     const [loading, setLoading] = useState(false);
+    const [submitError, setSubmitError] =
+        useState<string | null>(null);
 
     async function handleSubmit(
         values: BudgetFormValues
@@ -60,6 +62,7 @@ export function EditBudgetDialog({
 
         try {
             setLoading(true);
+            setSubmitError(null);
 
             await service.update({
                 id: budget.id,
@@ -85,11 +88,13 @@ export function EditBudgetDialog({
                 error
             );
 
-            toast.error(
+            const message =
                 error instanceof Error
                     ? error.message
-                    : "Failed to update budget."
-            );
+                    : "Failed to update budget.";
+
+            setSubmitError(message);
+            toast.error(message);
         } finally {
             setLoading(false);
         }
@@ -104,6 +109,10 @@ export function EditBudgetDialog({
             open={open}
             onOpenChange={open => {
                 if (!loading) {
+                    if (!open) {
+                        setSubmitError(null);
+                    }
+
                     onOpenChange(open);
                 }
             }}
@@ -136,6 +145,12 @@ export function EditBudgetDialog({
                 </DialogHeader>
 
                 <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-5">
+                    {submitError && (
+                        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                            {submitError}
+                        </div>
+                    )}
+
                     <BudgetForm
                         defaultValues={getDefaultValues(
                             budget

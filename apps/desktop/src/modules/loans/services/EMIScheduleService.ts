@@ -25,6 +25,57 @@ export class EMIScheduleService {
         );
     }
 
+    /**
+     * Map of transaction id -> interest portion, for every EMI payment
+     * that has been recorded as a real transaction (a LoanPaymentSchedule
+     * row with a linked transaction_id - see
+     * LoanPaymentService.processPayment, which creates a single
+     * full-instalment expense transaction on the borrower's bank
+     * account).
+     *
+     * The budget spending engine uses this to count only the interest
+     * part of an EMI as expense; the principal repayment is a liability
+     * movement and never counts. All loans are included, not just ACTIVE
+     * ones - a closed loan's past EMI payments split the same way.
+     */
+    async getInterestByTransactionId(): Promise<
+        Map<string, number>
+    > {
+        const loans =
+            await this.loanRepository.getAll();
+
+        const schedules = (
+            await Promise.all(
+                loans.map(loan =>
+                    this.scheduleRepository.getAllByLoanId(
+                        loan.id
+                    )
+                )
+            )
+        ).flat();
+
+        const interestByTransactionId =
+            new Map<string, number>();
+
+        for (const schedule of schedules) {
+            if (!schedule.transactionId) {
+                continue;
+            }
+
+            const interest =
+                Number(schedule.interestAmount);
+
+            interestByTransactionId.set(
+                schedule.transactionId,
+                Number.isFinite(interest)
+                    ? interest
+                    : 0
+            );
+        }
+
+        return interestByTransactionId;
+    }
+
     async generateSchedule(
         loanId: string
     ): Promise<LoanPaymentSchedule[]> {

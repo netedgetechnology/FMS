@@ -56,6 +56,41 @@ export function BudgetForm({
         loading: currenciesLoading,
     } = useCurrencies();
 
+    // Only active EXPENSE categories can be assigned to a budget (the
+    // service enforces the same rule). When editing a budget whose
+    // category has since been deactivated or changed type, that category
+    // is still shown - marked - so the edit does not silently drop it.
+    const budgetCategoryOptions = useMemo(() => {
+        const eligible = categories.filter(
+            category =>
+                category.categoryType === "EXPENSE" &&
+                category.isActive
+        );
+
+        const currentId = defaultValues?.categoryId;
+
+        if (
+            currentId &&
+            !eligible.some(
+                category =>
+                    String(category.id) ===
+                    String(currentId)
+            )
+        ) {
+            const current = categories.find(
+                category =>
+                    String(category.id) ===
+                    String(currentId)
+            );
+
+            if (current) {
+                return [current, ...eligible];
+            }
+        }
+
+        return eligible;
+    }, [categories, defaultValues?.categoryId]);
+
     const initialValues = useMemo<BudgetFormValues>(
         () => ({
             name: "",
@@ -236,14 +271,30 @@ useEffect(() => {
                             All Categories
                         </option>
 
-                        {categories.map(category => (
-                            <option
-                                key={category.id}
-                                value={category.id}
-                            >
-                                {category.name}
-                            </option>
-                        ))}
+                        {budgetCategoryOptions.map(
+                            category => {
+                                const ineligible =
+                                    !category.isActive ||
+                                    category.categoryType !==
+                                        "EXPENSE";
+
+                                return (
+                                    <option
+                                        key={
+                                            category.id
+                                        }
+                                        value={
+                                            category.id
+                                        }
+                                    >
+                                        {category.name}
+                                        {ineligible
+                                            ? " (unavailable)"
+                                            : ""}
+                                    </option>
+                                );
+                            }
+                        )}
                     </select>
 
                     {form.formState.errors.categoryId && (

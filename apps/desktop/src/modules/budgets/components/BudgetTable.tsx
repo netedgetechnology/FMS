@@ -1,3 +1,4 @@
+import { useMoneyFormatter, useDateFormatter } from "@/core/formatting";
 import { Eye, Pencil, Trash2 } from "lucide-react";
 
 import type { Budget } from "../types";
@@ -12,16 +13,6 @@ export interface BudgetTableProps {
     onDelete: (budget: Budget) => void;
 }
 
-function formatAmount(
-    amount: number,
-    currencyCode?: string
-) {
-    return new Intl.NumberFormat("en-IN", {
-        style: "currency",
-        currency: currencyCode || "INR",
-        maximumFractionDigits: 2,
-    }).format(Number(amount));
-}
 
 function formatPeriod(
     periodType: Budget["periodType"]
@@ -49,6 +40,8 @@ export function BudgetTable({
     onEdit,
     onDelete,
 }: BudgetTableProps) {
+    const formatMoney = useMoneyFormatter();
+    const formatDate = useDateFormatter();
     return (
         <div className="overflow-x-auto">
             <table className="w-full text-left">
@@ -138,19 +131,16 @@ export function BudgetTable({
                                     </div>
 
                                     <div className="mt-1 text-xs text-slate-400">
-                                        {budget.startDate}
+                                        {formatDate(budget.startDate)}
                                         {budget.endDate
-                                            ? ` → ${budget.endDate}`
+                                            ? ` → ${formatDate(budget.endDate)}`
                                             : ""}
                                     </div>
                                 </td>
 
                                 <td className="px-5 py-4">
                                     <div className="text-sm font-medium text-slate-800">
-                                        {formatAmount(
-                                            budget.amount,
-                                            currency?.code
-                                        )}
+                                        {formatMoney(budget.amount)}
                                     </div>
 
                                     <div className="mt-1 text-xs text-slate-400">

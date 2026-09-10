@@ -1,17 +1,33 @@
-import { formatDateValue } from "@/core/formatting";
+import { currentMonth, formatDateValue } from "@/core/formatting";
 import { DEFAULT_SETTINGS, SETTING_KEYS } from "@/modules/settings/constants";
 import { AccountService } from "@/modules/accounts/services";
 import { AccountType } from "@/modules/accounts/types";
 import { TransactionService } from "@/modules/transactions/services";
 import { LoanService } from "@/modules/loans/services";
 import { LoanPaymentScheduleRepository } from "@/modules/loans/repositories/LoanPaymentScheduleRepository";
+import { EMIScheduleService } from "@/modules/loans/services/EMIScheduleService";
 import { InstitutionService } from "@/modules/institutions/services/InstitutionService";
-import { BudgetService } from "@/modules/budgets/services";
+import {
+    BudgetService,
+    buildBudgetReportRows,
+    calculateBudgetSpending,
+    resolveBudgetCurrencyScopes,
+    selectBudgetsForMonth,
+} from "@/modules/budgets/services";
+import type {
+    BudgetLedgerEntry,
+    CurrencyScopeOption,
+} from "@/modules/budgets/services";
+import type { Budget } from "@/modules/budgets/types";
+import { CurrencyService } from "@/modules/currencies/services/CurrencyService";
 import { FinancialGoalService } from "@/modules/financial-goals/services";
 import { InvestmentService } from "@/modules/investments/services";
 import { CategoryService } from "@/modules/categories/services";
 
-import type { DashboardSummary } from "../types";
+import type {
+    DashboardBudgetOverview,
+    DashboardSummary,
+} from "../types";
 
 export interface DashboardDateRange {
     /** Inclusive start date, formatted as YYYY-MM-DD. */
@@ -338,6 +354,118 @@ export function computeExpensesByCategory(
         .map(([name, value]) => ({ name, value }));
 }
 
+
+/*
+ * ---------------------------------------------------------------------
+ * BUDGET OVERVIEW (Phase 6 - Dashboard Integration)
+ *
+ * The dashboard's current-month budget-vs-actual, derived ENTIRELY from
+ * the budgets module's calculateBudgetSpending() - the single source of
+ * truth also used by BudgetsPage. Nothing about spending, remaining,
+ * percentages or status is recomputed here.
+ *
+ * - Month boundaries: the current calendar month (Phase 1
+ *   selectBudgetsForMonth / calculateBudgetSpending), NOT the dashboard's
+ *   rolling range selector.
+ * - Currency: a single scope, resolved exactly like BudgetsPage
+ *   (resolveBudgetCurrencyScopes - default currency first). When budgets
+ *   exist in more than one currency, only the primary scope is shown
+ *   here and `hasOtherCurrencies` is set; the Budgets page shows them
+ *   all. Amounts are never summed or converted across currencies.
+ * ---------------------------------------------------------------------
+ */
+
+const EMPTY_BUDGET_OVERVIEW: DashboardBudgetOverview = {
+    currencyId: null,
+    currencyCode: null,
+    hasOtherCurrencies: false,
+    totalBudget: 0,
+    actualSpending: 0,
+    remaining: 0,
+    percentageUsed: 0,
+    overBudget: false,
+    unbudgetedSpending: 0,
+    uncategorizedSpending: 0,
+    categories: [],
+};
+
+export function computeDashboardBudgetOverview(input: {
+    budgets: readonly Budget[];
+    transactions: readonly BudgetLedgerEntry[];
+    currencies: readonly CurrencyScopeOption[];
+    categoryNameById: ReadonlyMap<string, string>;
+    /** Any date within the calendar month to report on. */
+    month: Date;
+    emiInterestByTransactionId?: ReadonlyMap<string, number>;
+    creditCardAccountIds?: ReadonlySet<string>;
+}): DashboardBudgetOverview {
+    const applicableBudgets = selectBudgetsForMonth(
+        input.budgets,
+        input.month
+    );
+
+    const scopeIds = resolveBudgetCurrencyScopes(
+        applicableBudgets,
+        input.currencies
+    );
+
+    const currencyId = scopeIds[0] ?? null;
+
+    if (currencyId === null) {
+        return EMPTY_BUDGET_OVERVIEW;
+    }
+
+    const summary = calculateBudgetSpending({
+        budgets: input.budgets,
+        transactions: input.transactions,
+        month: input.month,
+        currencyId,
+        emiInterestByTransactionId:
+            input.emiInterestByTransactionId,
+        creditCardAccountIds:
+            input.creditCardAccountIds,
+    });
+
+    const rows = buildBudgetReportRows(
+        summary,
+        input.categoryNameById
+    );
+
+    const currencyCode =
+        input.currencies.find(
+            currency => currency.id === currencyId
+        )?.code ?? null;
+
+    return {
+        currencyId,
+        currencyCode,
+        hasOtherCurrencies: scopeIds.length > 1,
+        totalBudget: summary.totalBudgetAmount,
+        actualSpending: summary.budgetedActual,
+        remaining: summary.totalRemaining,
+        percentageUsed: summary.totalPercentageUsed,
+        overBudget:
+            summary.budgetedActual >
+            summary.totalBudgetAmount,
+        unbudgetedSpending:
+            summary.unbudgetedSpending,
+        uncategorizedSpending:
+            summary.uncategorizedSpending,
+        categories: rows.map(row => ({
+            budgetId: row.budgetId,
+            label: row.categoryLabel,
+            isOverallBudget: row.isOverallBudget,
+            budgetAmount: row.budgetAmount,
+            actualAmount: row.actualAmount,
+            remainingAmount: row.remainingAmount,
+            percentageUsed: row.percentageUsed,
+            overBudget: row.overBudget,
+            statusKey: row.status.key,
+            statusLabel: row.status.label,
+        })),
+    };
+}
+
 function getDaysUntil(date: string): number {
     const today = new Date();
     const target = new Date(`${date}T00:00:00`);
@@ -389,6 +517,12 @@ export class DashboardService {
     private readonly budgetService =
         new BudgetService();
 
+    private readonly currencyService =
+        new CurrencyService();
+
+    private readonly emiScheduleService =
+        new EMIScheduleService();
+
     private readonly goalService =
         new FinancialGoalService();
 
@@ -410,6 +544,8 @@ export class DashboardService {
             investments,
             categories,
             institutions,
+            currencies,
+            emiInterestByTransactionId,
         ] = await Promise.all([
             this.accountService.getAll(),
             this.transactionService.getAll(),
@@ -419,6 +555,8 @@ export class DashboardService {
             this.investmentService.getAll(),
             this.categoryService.getAll(),
             this.institutionService.getAll(),
+            this.currencyService.getAll(),
+            this.emiScheduleService.getInterestByTransactionId(),
         ]);
 
         const rangeStart = range.start;
@@ -811,121 +949,41 @@ export class DashboardService {
             .slice(0, 5);
         /*
          * ---------------------------------------------------------
-         * BUDGET OVERVIEW
+         * BUDGET OVERVIEW - current calendar month, engine-backed.
+         * Uses calculateBudgetSpending() (same source of truth as
+         * BudgetsPage), NOT the dashboard's rolling `range`. See
+         * computeDashboardBudgetOverview above.
          * ---------------------------------------------------------
          */
 
-        const today = new Date();
+        const budgetCategoryNameById = new Map(
+            categories.map(category => [
+                category.id,
+                category.name,
+            ])
+        );
 
-        const todayString =
-            today.toISOString().slice(0, 10);
+        const creditCardAccountIds = new Set(
+            accounts
+                .filter(
+                    account =>
+                        account.type ===
+                        AccountType.CREDIT_CARD
+                )
+                .map(account => account.id)
+        );
 
-        const applicableBudgets =
-            budgets.filter(
-                budget => {
-                    if (!budget.isActive) {
-                        return false;
-                    }
-
-                    if (
-                        budget.startDate >
-                        todayString
-                    ) {
-                        return false;
-                    }
-
-                    if (
-                        budget.endDate !== null &&
-                        budget.endDate <
-                            todayString
-                    ) {
-                        return false;
-                    }
-
-                    return true;
-                }
-            );
-
-        const totalBudget =
-            applicableBudgets.reduce(
-                (sum, budget) =>
-                    sum +
-                    toNumber(
-                        budget.amount
-                    ),
-                0
-            );
-
-        const budgetSpent =
-            transactions.reduce(
-                (total, transaction) => {
-                    if (
-                        transaction.type !==
-                        "expense"
-                    ) {
-                        return total;
-                    }
-
-                    if (
-                        transaction.transactionDate <
-                            rangeStart ||
-                        transaction.transactionDate >
-                            rangeEnd
-                    ) {
-                        return total;
-                    }
-
-                    const matchesBudget =
-                        applicableBudgets.some(
-                            budget => {
-                                if (
-                                    budget.categoryId !==
-                                        null &&
-                                    budget.categoryId !==
-                                        transaction.categoryId
-                                ) {
-                                    return false;
-                                }
-
-                                return true;
-                            }
-                        );
-
-                    if (!matchesBudget) {
-                        return total;
-                    }
-
-                    return (
-                        total +
-                        Math.abs(
-                            toNumber(
-                                transaction.amount
-                            )
-                        )
-                    );
-                },
-                0
-            );
-
-        const budgetRemaining =
-            Math.max(
-                0,
-                totalBudget -
-                    budgetSpent
-            );
-
-        const budgetPercentage =
-            totalBudget > 0
-                ? Math.min(
-                      100,
-                      Math.round(
-                          (
-                              budgetSpent /
-                              totalBudget
-                          ) * 10000
-                      ) / 100
-                  )
-                : 0;
+        const budgetOverview =
+            computeDashboardBudgetOverview({
+                budgets,
+                transactions,
+                currencies,
+                categoryNameById:
+                    budgetCategoryNameById,
+                month: currentMonth(),
+                emiInterestByTransactionId,
+                creditCardAccountIds,
+            });
         /*
          * ---------------------------------------------------------
          * GOALS
@@ -1071,14 +1129,7 @@ export class DashboardService {
 
             upcomingEMIs,
 
-            budgetOverview: {
-                totalBudget,
-                spent: budgetSpent,
-                remaining:
-                    budgetRemaining,
-                percentage:
-                    budgetPercentage,
-            },
+            budgetOverview,
 
             goalsProgress,
 

@@ -1,3 +1,4 @@
+import { useMoneyFormatter, useDateFormatter } from "@/core/formatting";
 import {
     Dialog,
     DialogContent,
@@ -15,35 +16,6 @@ export interface ViewBudgetDialogProps {
     businessEntityName?: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
-}
-
-function formatDate(value: string | null) {
-    if (!value) {
-        return "—";
-    }
-
-    const date = new Date(`${value}T00:00:00`);
-
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
-    return new Intl.DateTimeFormat("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-    }).format(date);
-}
-
-function formatAmount(
-    amount: number,
-    currencyCode?: string
-) {
-    return new Intl.NumberFormat("en-IN", {
-        style: "currency",
-        currency: currencyCode || "INR",
-        maximumFractionDigits: 2,
-    }).format(Number(amount));
 }
 
 function formatPeriod(
@@ -91,6 +63,9 @@ export function ViewBudgetDialog({
     open,
     onOpenChange,
 }: ViewBudgetDialogProps) {
+    const formatMoney = useMoneyFormatter();
+    const formatDate = useDateFormatter();
+
     if (!budget) {
         return null;
     }
@@ -156,10 +131,7 @@ export function ViewBudgetDialog({
 
                         <Detail
                             label="Budget Amount"
-                            value={formatAmount(
-                                budget.amount,
-                                currencyCode
-                            )}
+                            value={formatMoney(budget.amount)}
                         />
 
                         <Detail

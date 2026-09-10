@@ -4,3 +4,4 @@ export * from "./EditBudgetDialog";
 export * from "./ViewBudgetDialog";
 export * from "./DeleteBudgetDialog";
 export * from "./BudgetTable";
+export * from "./BudgetMonthReport";

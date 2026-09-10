@@ -16,9 +16,11 @@ export const budgetSchema = z.object({
         .optional()
         .or(z.literal("")),
 
+    // Zero is allowed - the data model and the spending engine both
+    // handle a zero budget; only negatives are rejected.
     amount: z
         .number()
-        .positive("Budget amount must be greater than zero."),
+        .min(0, "Budget amount cannot be negative."),
 
     periodType: z.enum([
         "MONTHLY",

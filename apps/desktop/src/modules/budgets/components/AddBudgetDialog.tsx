@@ -28,12 +28,15 @@ export function AddBudgetDialog({
     const service = new BudgetService();
 
     const [loading, setLoading] = useState(false);
+    const [submitError, setSubmitError] =
+        useState<string | null>(null);
 
     async function handleSubmit(
         values: BudgetFormValues
     ) {
         try {
             setLoading(true);
+            setSubmitError(null);
 
             await service.create({
                 ...values,
@@ -58,11 +61,13 @@ export function AddBudgetDialog({
                 error
             );
 
-            toast.error(
+            const message =
                 error instanceof Error
                     ? error.message
-                    : "Failed to create budget."
-            );
+                    : "Failed to create budget.";
+
+            setSubmitError(message);
+            toast.error(message);
         } finally {
             setLoading(false);
         }
@@ -73,6 +78,10 @@ export function AddBudgetDialog({
             open={open}
             onOpenChange={open => {
                 if (!loading) {
+                    if (!open) {
+                        setSubmitError(null);
+                    }
+
                     onOpenChange(open);
                 }
             }}
@@ -105,6 +114,12 @@ export function AddBudgetDialog({
                 </DialogHeader>
 
                 <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-5">
+                    {submitError && (
+                        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                            {submitError}
+                        </div>
+                    )}
+
                     <BudgetForm
                         loading={loading}
                         submitLabel="Create Budget"
