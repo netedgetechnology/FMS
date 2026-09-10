@@ -701,6 +701,159 @@ describe("normalizeCsvRows", () => {
         });
     });
 
+    // CREDIT_CARD_EXCEL is the Excel counterpart of CREDIT_CARD_CSV: the
+    // same credit-card sign convention (negative = expense, positive =
+    // income for a single Amount column), because that convention is a
+    // property of the data, not the file format. Like CREDIT_CARD_PDF,
+    // this is a case where an Excel-sourced import type does NOT behave
+    // like its BANK_EXCEL/BANK_CSV sibling - it must diverge exactly the
+    // same way CREDIT_CARD_CSV already diverges from BANK_CSV.
+    describe("CREDIT_CARD_EXCEL uses the credit-card sign convention, exactly like CREDIT_CARD_CSV (never like BANK_EXCEL)", () => {
+        const mapping = {
+            date: "Date",
+            description: "Description",
+            amount: "Amount",
+        };
+
+        const headers = [
+            "Date",
+            "Description",
+            "Amount",
+        ];
+
+        it("a positive explicit Amount is income, matching CREDIT_CARD_CSV exactly", () => {
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Refund",
+                    "750",
+                ],
+            };
+
+            const creditCardCsvResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_CSV"
+            );
+
+            const creditCardExcelResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_EXCEL"
+            );
+
+            expect(creditCardExcelResult[0]?.amount).toBe(750);
+            expect(creditCardExcelResult[0]?.type).toBe("income");
+            expect(creditCardExcelResult[0]?.type).toBe(
+                creditCardCsvResult[0]?.type
+            );
+        });
+
+        it("a negative explicit Amount is expense, matching CREDIT_CARD_CSV exactly - the point where it would diverge from BANK_EXCEL if it were mishandled as a bank type", () => {
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Restaurant",
+                    "-500",
+                ],
+            };
+
+            const creditCardExcelResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_EXCEL"
+            );
+
+            const bankExcelResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "BANK_EXCEL"
+            );
+
+            expect(creditCardExcelResult[0]?.amount).toBe(500);
+            expect(creditCardExcelResult[0]?.type).toBe("expense");
+            // Sign alone makes this "expense" under BANK_EXCEL too, but
+            // via the generic normalizeTypeFromAmount branch - the
+            // positive-amount case above is what proves CREDIT_CARD_EXCEL
+            // takes the credit-card branch rather than a bank one.
+            expect(bankExcelResult[0]?.type).toBe("expense");
+        });
+
+        it("Debit/Credit columns remain authoritative for CREDIT_CARD_EXCEL too, exactly like every other import type", () => {
+            const debitCreditMapping = {
+                date: "Date",
+                description: "Description",
+                debit: "Debit",
+                credit: "Credit",
+            };
+
+            const debitCreditHeaders = [
+                "Date",
+                "Description",
+                "Debit",
+                "Credit",
+            ];
+
+            const creditRow = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "Statement Credit",
+                    "",
+                    "1200",
+                ],
+            };
+
+            const result = normalizeCsvRows(
+                [creditRow],
+                debitCreditMapping,
+                debitCreditHeaders,
+                "CREDIT_CARD_EXCEL"
+            );
+
+            expect(result[0]?.amount).toBe(1200);
+            expect(result[0]?.type).toBe("income");
+        });
+
+        it("preserves the CREDIT_CARD narration channel exactly like CREDIT_CARD_CSV/PDF", () => {
+            const row = {
+                rowNumber: 2,
+                values: [
+                    "2026-08-21",
+                    "CREDIT CARD PAYMENT RECEIVED",
+                    "-500",
+                ],
+            };
+
+            const creditCardCsvResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_CSV"
+            );
+
+            const creditCardExcelResult = normalizeCsvRows(
+                [row],
+                mapping,
+                headers,
+                "CREDIT_CARD_EXCEL"
+            );
+
+            expect(creditCardExcelResult[0]?.transactionType).toBe(
+                "CREDIT_CARD"
+            );
+            expect(creditCardExcelResult[0]?.transactionType).toBe(
+                creditCardCsvResult[0]?.transactionType
+            );
+        });
+    });
+
     it("normalizes a mapped balance column", () => {
         const result = normalizeCsvRows(
             [

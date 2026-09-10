@@ -949,12 +949,15 @@ export default function ImportsPage() {
         // An Excel file's format is unambiguous from its extension, so
         // Import Type defaults to "Bank Excel" without requiring the
         // user to pick it manually - matching the same detection
-        // handlePreview already uses to route to previewExcel. Any
-        // other file (CSV/PDF) leaves Import Type exactly as it was -
+        // handlePreview already uses to route to previewExcel. An
+        // explicit "Credit Card Excel" choice is left intact (both are
+        // Excel-sourced; only the credit-card sign convention differs).
+        // Any other file (CSV/PDF) leaves Import Type exactly as it was -
         // unchanged CSV/PDF behavior.
         if (
             file &&
-            isExcelFileName(file.name)
+            isExcelFileName(file.name) &&
+            importType !== "CREDIT_CARD_EXCEL"
         ) {
             setImportType("BANK_EXCEL");
         }
@@ -1771,6 +1774,10 @@ export default function ImportsPage() {
 
                                 <option value="CREDIT_CARD_PDF">
                                     Credit Card PDF
+                                </option>
+
+                                <option value="CREDIT_CARD_EXCEL">
+                                    Credit Card Excel
                                 </option>
                             </select>
                         </div>

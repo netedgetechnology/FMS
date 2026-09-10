@@ -6,7 +6,8 @@ export type ImportType =
     | "BANK_EXCEL"
     | "BANK_PDF"
     | "CREDIT_CARD_CSV"
-    | "CREDIT_CARD_PDF";
+    | "CREDIT_CARD_PDF"
+    | "CREDIT_CARD_EXCEL";
 
 export type ImportBatchStatus =
     | "PENDING"

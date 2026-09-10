@@ -279,22 +279,24 @@ function buildRawData(
 
 // BANK_EXCEL/BANK_PDF identify an Excel- or PDF-sourced bank statement -
 // each is otherwise treated exactly like BANK_CSV by every heuristic
-// below (resolveAmountAndType only ever special-cases the two
+// below (resolveAmountAndType only ever special-cases the three
 // CREDIT_CARD_* values; a bank statement's shape doesn't depend on
 // which file format carried it), so no new branch is needed anywhere in
-// this normalizer for either. CREDIT_CARD_PDF is the PDF counterpart of
-// CREDIT_CARD_CSV for the same reason - the credit-card sign convention
-// is a property of the data, not the file format, so it takes the exact
-// same branch as CREDIT_CARD_CSV below rather than a parallel one. This
-// package has no PDF-specific (let alone bank/provider-specific) parsing
-// logic for either PDF value - both flow through the same universal,
-// bank-agnostic PDF extraction (see parser/pdfParser.ts).
+// this normalizer for either. CREDIT_CARD_PDF/CREDIT_CARD_EXCEL are the
+// PDF and Excel counterparts of CREDIT_CARD_CSV for the same reason -
+// the credit-card sign convention is a property of the data, not the
+// file format, so they take the exact same branch as CREDIT_CARD_CSV
+// below rather than a parallel one. This package has no PDF- or
+// Excel-specific (let alone bank/provider-specific) parsing logic for
+// any of these values - they all flow through the same universal,
+// bank-agnostic extraction (see parser/pdfParser.ts, parser/excelParser.ts).
 export type CsvImportType =
     | "BANK_CSV"
     | "BANK_EXCEL"
     | "BANK_PDF"
     | "CREDIT_CARD_CSV"
-    | "CREDIT_CARD_PDF";
+    | "CREDIT_CARD_PDF"
+    | "CREDIT_CARD_EXCEL";
 
 function resolveAmountAndType(
     row: CsvRow,
@@ -383,7 +385,8 @@ function resolveAmountAndType(
                 explicitType ??
                 (
                     importType === "CREDIT_CARD_CSV" ||
-                    importType === "CREDIT_CARD_PDF"
+                    importType === "CREDIT_CARD_PDF" ||
+                    importType === "CREDIT_CARD_EXCEL"
                         ? (
                             explicitAmount < 0
                                 ? "expense"
