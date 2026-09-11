@@ -1,14 +1,44 @@
-import { Eye, Pencil, Trash2 } from "lucide-react";
+import { useDateFormatter } from "@/core/formatting";
+import {
+    Archive,
+    ArchiveRestore,
+    Eye,
+    Layers,
+    Pencil,
+    ShieldAlert,
+    Trash2,
+} from "lucide-react";
 
 import type { Currency } from "@/modules/currencies/types";
 import type { FinancialPlan } from "../types";
+import type { PlanCalcResult } from "../services";
+import {
+    getFinancialPlanSubcategoryLabel,
+    getPlanPeriodTypeLabel,
+    getPlanTypeLabel,
+} from "../constants";
+import {
+    canRestorePlan,
+    getPlanHeadlineActual,
+    getPlanStatusClasses,
+} from "../services";
 
 export interface FinancialPlanTableProps {
     plans: FinancialPlan[];
     currencies: Map<string, Currency>;
+    /** Batched, list-level actuals (one getAllPlanActuals call). */
+    actualsByPlanId?: ReadonlyMap<
+        string,
+        PlanCalcResult
+    >;
+    actualsLoading?: boolean;
+    /** Plan ids that need attention (incomplete / integrity). */
+    attentionPlanIds?: ReadonlySet<string>;
     onView: (plan: FinancialPlan) => void;
     onEdit: (plan: FinancialPlan) => void;
     onDelete: (plan: FinancialPlan) => void;
+    onManageComponents: (plan: FinancialPlan) => void;
+    onArchiveToggle: (plan: FinancialPlan) => void;
 }
 
 function formatAmount(
@@ -29,10 +59,16 @@ function formatAmount(
 export function FinancialPlanTable({
     plans,
     currencies,
+    actualsByPlanId,
+    actualsLoading = false,
+    attentionPlanIds,
     onView,
     onEdit,
     onDelete,
+    onManageComponents,
+    onArchiveToggle,
 }: FinancialPlanTableProps) {
+    const formatDate = useDateFormatter();
     return (
         <div className="overflow-x-auto">
             <table className="w-full text-left">
@@ -51,6 +87,9 @@ export function FinancialPlanTable({
                             Target
                         </th>
                         <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Current
+                        </th>
+                        <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                             Status
                         </th>
                         <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -66,14 +105,41 @@ export function FinancialPlanTable({
                                 plan.currencyId
                             );
 
+                        const result =
+                            actualsByPlanId?.get(
+                                plan.id
+                            );
+                        const headline = result
+                            ? getPlanHeadlineActual(
+                                  result,
+                                  currency
+                              )
+                            : null;
+                        const needsAttention =
+                            attentionPlanIds?.has(
+                                plan.id
+                            ) ?? false;
+
                         return (
                             <tr
                                 key={plan.id}
                                 className="border-b border-slate-100 last:border-b-0"
                             >
                                 <td className="px-5 py-4">
-                                    <div className="text-sm font-medium text-slate-900">
+                                    <div className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
                                         {plan.name}
+                                        {needsAttention && (
+                                            <span
+                                                title="This plan needs attention"
+                                                className="inline-flex text-amber-600"
+                                            >
+                                                <ShieldAlert
+                                                    size={
+                                                        13
+                                                    }
+                                                />
+                                            </span>
+                                        )}
                                     </div>
 
                                     <div className="mt-1 text-xs text-slate-400">
@@ -83,14 +149,31 @@ export function FinancialPlanTable({
                                 </td>
 
                                 <td className="px-5 py-4 text-sm text-slate-600">
-                                    {plan.planType}
+                                    <div>
+                                        {getPlanTypeLabel(
+                                            plan.planType
+                                        )}
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                        {getFinancialPlanSubcategoryLabel(
+                                            plan.planCategory,
+                                            plan.planSubcategory
+                                        )}
+                                    </div>
                                 </td>
 
                                 <td className="px-5 py-4 text-sm text-slate-600">
-                                    {plan.startDate}
-                                    {plan.endDate
-                                        ? ` → ${plan.endDate}`
-                                        : ""}
+                                    <div>
+                                        {formatDate(plan.startDate)}
+                                        {plan.endDate
+                                            ? ` → ${formatDate(plan.endDate)}`
+                                            : ""}
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                        {getPlanPeriodTypeLabel(
+                                            plan.periodType
+                                        )}
+                                    </div>
                                 </td>
 
                                 <td className="px-5 py-4 text-sm font-medium text-slate-800">
@@ -100,8 +183,37 @@ export function FinancialPlanTable({
                                     )}
                                 </td>
 
+                                <td className="px-5 py-4 text-sm text-slate-800">
+                                    {headline ? (
+                                        <>
+                                            <div className="font-medium">
+                                                {
+                                                    headline.value
+                                                }
+                                            </div>
+                                            <div className="mt-1 text-xs text-slate-400">
+                                                {
+                                                    headline.label
+                                                }
+                                            </div>
+                                        </>
+                                    ) : actualsLoading ? (
+                                        <span className="text-xs text-slate-300">
+                                            …
+                                        </span>
+                                    ) : (
+                                        <span className="text-xs text-slate-400">
+                                            —
+                                        </span>
+                                    )}
+                                </td>
+
                                 <td className="px-5 py-4">
-                                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                                    <span
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getPlanStatusClasses(
+                                            plan.status
+                                        )}`}
+                                    >
                                         {plan.status}
                                     </span>
                                 </td>
@@ -123,6 +235,18 @@ export function FinancialPlanTable({
                                         <button
                                             type="button"
                                             onClick={() =>
+                                                onManageComponents(plan)
+                                            }
+                                            title="Manage plan components"
+                                            aria-label={`Manage components for ${plan.name}`}
+                                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                                        >
+                                            <Layers size={15} />
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() =>
                                                 onEdit(plan)
                                             }
                                             title="Edit financial plan"
@@ -130,6 +254,30 @@ export function FinancialPlanTable({
                                             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
                                         >
                                             <Pencil size={15} />
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                onArchiveToggle(plan)
+                                            }
+                                            title={
+                                                canRestorePlan(plan)
+                                                    ? "Restore financial plan"
+                                                    : "Archive financial plan"
+                                            }
+                                            aria-label={
+                                                canRestorePlan(plan)
+                                                    ? `Restore ${plan.name}`
+                                                    : `Archive ${plan.name}`
+                                            }
+                                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                                        >
+                                            {canRestorePlan(plan) ? (
+                                                <ArchiveRestore size={15} />
+                                            ) : (
+                                                <Archive size={15} />
+                                            )}
                                         </button>
 
                                         <button
@@ -153,4 +301,3 @@ export function FinancialPlanTable({
         </div>
     );
 }
-

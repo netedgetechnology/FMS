@@ -1,14 +1,20 @@
-import type { FinancialPlanStatus } from "./FinancialPlan";
+import type {
+    FinancialPlanStatus,
+    PlanPeriodType,
+    PlanType,
+} from "./FinancialPlan";
 
 export interface CreateFinancialPlanRequest {
     name: string;
-    planType: string;
+    planType: PlanType;
     planCategory: string;
     planSubcategory: string;
+    periodType: PlanPeriodType;
     startDate: string;
     endDate?: string | null;
     currencyId: string;
     targetAmount?: number | null;
-    notes?: string;
+    goalId?: string | null;
+    notes?: string | null;
     status: FinancialPlanStatus;
 }

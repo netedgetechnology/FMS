@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 
 import { FinancialPlanService } from "../services";
+import { usePlanComponents } from "../hooks";
 import type { FinancialPlan } from "../types";
 import type { FinancialPlanFormValues } from "../validation";
 
@@ -30,16 +31,15 @@ function getDefaultValues(
 ): Partial<FinancialPlanFormValues> {
     return {
         name: plan.name,
-        planCategory:
-            plan.planCategory ?? "CORE_PERSONAL_FINANCE",
-        planSubcategory:
-            plan.planSubcategory ?? plan.planType ?? "SAVINGS",
-        planType:
-            plan.planSubcategory ?? plan.planType ?? "SAVINGS",
+        planType: plan.planType,
+        planCategory: plan.planCategory,
+        planSubcategory: plan.planSubcategory,
+        periodType: plan.periodType,
         startDate: plan.startDate,
         endDate: plan.endDate ?? "",
         currencyId: plan.currencyId,
         targetAmount: plan.targetAmount,
+        goalId: plan.goalId ?? "",
         notes: plan.notes ?? "",
         status: plan.status,
     };
@@ -55,6 +55,11 @@ export function EditFinancialPlanDialog({
     const service = new FinancialPlanService();
 
     const [loading, setLoading] = useState(false);
+
+    const { components: existingComponents } =
+        usePlanComponents(
+            open && plan ? plan.id : null
+        );
 
     async function handleSubmit(
         values: FinancialPlanFormValues
@@ -140,6 +145,9 @@ export function EditFinancialPlanDialog({
                         defaultValues={getDefaultValues(plan)}
                         loading={loading}
                         submitLabel="Save Changes"
+                        existingComponents={
+                            existingComponents
+                        }
                         onSubmit={handleSubmit}
                         onCancel={() =>
                             onOpenChange(false)

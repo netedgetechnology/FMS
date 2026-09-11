@@ -26,6 +26,8 @@ import { CounterpartyRulesMigration } from "./026_counterparty_rules";
 import { CounterpartyRulesAccountScopeMigration } from "./027_counterparty_rules_account_scope";
 import { CounterpartyRulesTypeNotesMigration } from "./028_counterparty_rules_type_notes";
 import { BackfillImportMappingNameMigration } from "./029_backfill_import_mapping_name";
+import { FinancialPlansPhase1Migration } from "./030_financial_plans_phase1";
+import { FinancialPlanComponentsMigration } from "./031_financial_plan_components";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -56,5 +58,7 @@ export const migrations = [
     CounterpartyRulesAccountScopeMigration,
     CounterpartyRulesTypeNotesMigration,
     BackfillImportMappingNameMigration,
+    FinancialPlansPhase1Migration,
+    FinancialPlanComponentsMigration,
 ];
 

@@ -3,4 +3,7 @@ export * from "./FinancialPlanTable";
 export * from "./AddFinancialPlanDialog";
 export * from "./EditFinancialPlanDialog";
 export * from "./DeleteFinancialPlanDialog";
+export * from "./ArchiveFinancialPlanDialog";
 export * from "./ViewFinancialPlanDialog";
+export * from "./PlanComponentForm";
+export * from "./ManagePlanComponentsDialog";

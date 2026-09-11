@@ -1,11 +1,6 @@
 import { useEffect } from "react";
-import {
-    useForm,
-} from "react-hook-form";
-
-import {
-    zodResolver,
-} from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 
 import {
     financialPlanSchema,
@@ -15,8 +10,24 @@ import {
 import {
     FINANCIAL_PLAN_CATEGORIES,
     getFinancialPlanCategory,
+    PLAN_PERIOD_TYPES,
+    PLAN_PERIOD_TYPE_LABELS,
+    PLAN_TYPES,
+    PLAN_TYPE_DESCRIPTIONS,
+    PLAN_TYPE_LABELS,
+    isPerPeriodTarget,
+    planTypeRequiresTarget,
 } from "../constants";
 
+import { findComponentsIncompatibleWithPlanType } from "../services";
+import { getPlanComponentComboLabel } from "../constants";
+
+import type {
+    FinancialPlanComponent,
+    PlanType,
+} from "../types";
+
+import { useFinancialGoals } from "@/modules/financial-goals/hooks";
 import type { Currency } from "@/modules/currencies/types";
 
 export interface FinancialPlanFormProps {
@@ -24,35 +35,52 @@ export interface FinancialPlanFormProps {
     defaultValues?: Partial<FinancialPlanFormValues>;
     loading?: boolean;
     submitLabel?: string;
+    /**
+     * The editing plan's non-deleted components. Used only to warn (not
+     * block) before a plan_type change that Phase 4 would reject. Omit
+     * for the Add flow.
+     */
+    existingComponents?: readonly FinancialPlanComponent[];
     onSubmit: (
         values: FinancialPlanFormValues
     ) => Promise<void> | void;
     onCancel?: () => void;
 }
 
+const FIELD_CLASS =
+    "h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50";
+
+const LABEL_CLASS =
+    "text-sm font-medium text-slate-700";
+
+const ERROR_CLASS = "text-xs text-red-500";
+
 export function FinancialPlanForm({
     currencies,
     defaultValues,
     loading = false,
     submitLabel = "Create Plan",
+    existingComponents,
     onSubmit,
     onCancel,
 }: FinancialPlanFormProps) {
+    const { goals } = useFinancialGoals();
+
     const form = useForm<FinancialPlanFormValues>({
         resolver: zodResolver(financialPlanSchema),
         defaultValues: {
             name: "",
+            planType: "ACCUMULATION",
             planCategory: "CORE_PERSONAL_FINANCE",
             planSubcategory: "SAVINGS",
-            planType: "SAVINGS",
-            startDate:
-                new Date()
-                    .toISOString()
-                    .slice(0, 10),
+            periodType: "MONTHLY",
+            startDate: new Date()
+                .toISOString()
+                .slice(0, 10),
             endDate: "",
-            currencyId:
-                currencies[0]?.id ?? "",
+            currencyId: currencies[0]?.id ?? "",
             targetAmount: null,
+            goalId: "",
             notes: "",
             status: "ACTIVE",
             ...defaultValues,
@@ -60,108 +88,82 @@ export function FinancialPlanForm({
     });
 
     const selectedCategory = form.watch("planCategory");
+    const selectedPlanType = form.watch("planType");
+    const selectedPeriodType = form.watch("periodType");
+    const selectedCurrencyId = form.watch("currencyId");
 
-    const categoryDefinition =
-        getFinancialPlanCategory(selectedCategory);
+    // Phase 6: warn (never block) when the chosen plan type would orphan
+    // an existing component - the service still hard-blocks on submit.
+    const incompatibleComponents =
+        existingComponents && existingComponents.length > 0
+            ? findComponentsIncompatibleWithPlanType(
+                  selectedPlanType as PlanType,
+                  existingComponents
+              )
+            : [];
 
     const subcategories =
-        categoryDefinition?.subcategories ?? [];
+        getFinancialPlanCategory(selectedCategory)
+            ?.subcategories ?? [];
 
+    // Keep the focus (subcategory) valid for the selected category.
     useEffect(() => {
-        const currentSubcategory =
-            form.getValues("planSubcategory");
+        const current = form.getValues("planSubcategory");
 
-        const valid = subcategories.some(
-            subcategory =>
-                subcategory.value === currentSubcategory
-        );
-
-        if (!valid) {
-            const first =
-                subcategories[0]?.value ?? "";
-
+        if (
+            !subcategories.some(
+                sub => sub.value === current
+            )
+        ) {
             form.setValue(
                 "planSubcategory",
-                first,
-                {
-                    shouldValidate: true,
-                    shouldDirty: true,
-                }
-            );
-
-            form.setValue(
-                "planType",
-                first,
+                subcategories[0]?.value ?? "",
                 {
                     shouldValidate: true,
                     shouldDirty: true,
                 }
             );
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedCategory]);
 
-    function handleCategoryChange(
-        event: React.ChangeEvent<HTMLSelectElement>
-    ) {
-        const categoryValue = event.target.value;
+    // Only non-deleted goals in the plan's currency can be linked.
+    const linkableGoals = goals.filter(
+        goal =>
+            goal.currencyId === selectedCurrencyId
+    );
 
-        form.setValue(
-            "planCategory",
-            categoryValue,
-            {
+    // Drop a stale goal link when it no longer matches the currency.
+    useEffect(() => {
+        const current = form.getValues("goalId");
+
+        if (
+            current &&
+            !linkableGoals.some(
+                goal => goal.id === current
+            )
+        ) {
+            form.setValue("goalId", "", {
                 shouldValidate: true,
                 shouldDirty: true,
-            }
-        );
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedCurrencyId, goals]);
 
-        const category =
-            getFinancialPlanCategory(categoryValue);
+    const targetRequired = planTypeRequiresTarget(
+        selectedPlanType as PlanType
+    );
 
-        const firstSubcategory =
-            category?.subcategories[0]?.value ?? "";
-
-        form.setValue(
-            "planSubcategory",
-            firstSubcategory,
-            {
-                shouldValidate: true,
-                shouldDirty: true,
-            }
-        );
-
-        form.setValue(
-            "planType",
-            firstSubcategory,
-            {
-                shouldValidate: true,
-                shouldDirty: true,
-            }
-        );
-    }
-
-    function handleSubcategoryChange(
-        event: React.ChangeEvent<HTMLSelectElement>
-    ) {
-        const value = event.target.value;
-
-        form.setValue(
-            "planSubcategory",
-            value,
-            {
-                shouldValidate: true,
-                shouldDirty: true,
-            }
-        );
-
-        form.setValue(
-            "planType",
-            value,
-            {
-                shouldValidate: true,
-                shouldDirty: true,
-            }
-        );
-    }
+    const targetLabel = isPerPeriodTarget(
+        selectedPlanType as PlanType
+    )
+        ? `Per-Period Target${
+              targetRequired ? " *" : ""
+          }`
+        : `Target Amount${
+              targetRequired ? " *" : ""
+          }`;
 
     return (
         <form
@@ -169,9 +171,8 @@ export function FinancialPlanForm({
             className="space-y-5"
         >
             <div className="grid grid-cols-2 gap-5">
-
                 <div className="col-span-2 space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
+                    <label className={LABEL_CLASS}>
                         Plan Name
                     </label>
 
@@ -179,11 +180,11 @@ export function FinancialPlanForm({
                         {...form.register("name")}
                         placeholder="e.g. 2027 Financial Plan"
                         disabled={loading}
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none transition-colors placeholder:text-slate-400 focus:border-slate-500 disabled:opacity-50"
+                        className={FIELD_CLASS}
                     />
 
                     {form.formState.errors.name && (
-                        <p className="text-xs text-red-500">
+                        <p className={ERROR_CLASS}>
                             {
                                 form.formState.errors
                                     .name.message
@@ -193,21 +194,141 @@ export function FinancialPlanForm({
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
-                        Plan Category
+                    <label className={LABEL_CLASS}>
+                        Plan Type
                     </label>
 
                     <select
-                        value={selectedCategory}
-                        onChange={handleCategoryChange}
+                        {...form.register("planType")}
                         disabled={loading}
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
+                        className={FIELD_CLASS}
+                    >
+                        {PLAN_TYPES.map(planType => (
+                            <option
+                                key={planType}
+                                value={planType}
+                            >
+                                {
+                                    PLAN_TYPE_LABELS[
+                                        planType
+                                    ]
+                                }
+                            </option>
+                        ))}
+                    </select>
+
+                    <p className="text-xs text-slate-400">
+                        {
+                            PLAN_TYPE_DESCRIPTIONS[
+                                selectedPlanType as PlanType
+                            ]
+                        }
+                    </p>
+
+                    {incompatibleComponents.length >
+                        0 && (
+                        <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
+                            {incompatibleComponents.length}{" "}
+                            existing component
+                            {incompatibleComponents.length ===
+                            1
+                                ? " is"
+                                : "s are"}{" "}
+                            not valid for a{" "}
+                            {
+                                PLAN_TYPE_LABELS[
+                                    selectedPlanType as PlanType
+                                ]
+                            }{" "}
+                            plan:{" "}
+                            {incompatibleComponents
+                                .map(
+                                    component =>
+                                        component.label?.trim() ||
+                                        getPlanComponentComboLabel(
+                                            component.componentType,
+                                            component.role
+                                        )
+                                )
+                                .join(", ")}
+                            . Remove or delete{" "}
+                            {incompatibleComponents.length ===
+                            1
+                                ? "it"
+                                : "them"}{" "}
+                            first — saving will be
+                            blocked otherwise.
+                        </p>
+                    )}
+
+                    {form.formState.errors.planType && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .planType.message
+                            }
+                        </p>
+                    )}
+                </div>
+
+                <div className="space-y-2">
+                    <label className={LABEL_CLASS}>
+                        Review Period
+                    </label>
+
+                    <select
+                        {...form.register(
+                            "periodType"
+                        )}
+                        disabled={loading}
+                        className={FIELD_CLASS}
+                    >
+                        {PLAN_PERIOD_TYPES.map(
+                            periodType => (
+                                <option
+                                    key={periodType}
+                                    value={periodType}
+                                >
+                                    {
+                                        PLAN_PERIOD_TYPE_LABELS[
+                                            periodType
+                                        ]
+                                    }
+                                </option>
+                            )
+                        )}
+                    </select>
+
+                    {selectedPeriodType ===
+                        "ONE_TIME" && (
+                        <p className="text-xs text-slate-400">
+                            A one-time plan needs an end
+                            date.
+                        </p>
+                    )}
+                </div>
+
+                <div className="space-y-2">
+                    <label className={LABEL_CLASS}>
+                        Category
+                    </label>
+
+                    <select
+                        {...form.register(
+                            "planCategory"
+                        )}
+                        disabled={loading}
+                        className={FIELD_CLASS}
                     >
                         {FINANCIAL_PLAN_CATEGORIES.map(
                             category => (
                                 <option
-                                    key={category.value}
-                                    value={category.value}
+                                    key={
+                                        category.value
+                                    }
+                                    value={
+                                        category.value
+                                    }
                                 >
                                     {category.label}
                                 </option>
@@ -215,52 +336,46 @@ export function FinancialPlanForm({
                         )}
                     </select>
 
-                    {form.formState.errors.planCategory && (
-                        <p className="text-xs text-red-500">
+                    {form.formState.errors
+                        .planCategory && (
+                        <p className={ERROR_CLASS}>
                             {
                                 form.formState.errors
-                                    .planCategory.message
+                                    .planCategory
+                                    .message
                             }
                         </p>
                     )}
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
-                        Plan Type
+                    <label className={LABEL_CLASS}>
+                        Focus
                     </label>
 
                     <select
-                        value={
-                            form.watch(
-                                "planSubcategory"
-                            )
-                        }
-                        onChange={handleSubcategoryChange}
+                        {...form.register(
+                            "planSubcategory"
+                        )}
                         disabled={
                             loading ||
                             subcategories.length === 0
                         }
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
+                        className={FIELD_CLASS}
                     >
-                        {subcategories.map(
-                            subcategory => (
-                                <option
-                                    key={
-                                        subcategory.value
-                                    }
-                                    value={
-                                        subcategory.value
-                                    }
-                                >
-                                    {subcategory.label}
-                                </option>
-                            )
-                        )}
+                        {subcategories.map(sub => (
+                            <option
+                                key={sub.value}
+                                value={sub.value}
+                            >
+                                {sub.label}
+                            </option>
+                        ))}
                     </select>
 
-                    {form.formState.errors.planSubcategory && (
-                        <p className="text-xs text-red-500">
+                    {form.formState.errors
+                        .planSubcategory && (
+                        <p className={ERROR_CLASS}>
                             {
                                 form.formState.errors
                                     .planSubcategory
@@ -271,14 +386,14 @@ export function FinancialPlanForm({
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
+                    <label className={LABEL_CLASS}>
                         Status
                     </label>
 
                     <select
                         {...form.register("status")}
                         disabled={loading}
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
+                        className={FIELD_CLASS}
                     >
                         <option value="ACTIVE">
                             Active
@@ -293,40 +408,16 @@ export function FinancialPlanForm({
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
-                        Start Date
-                    </label>
-
-                    <input
-                        type="date"
-                        {...form.register("startDate")}
-                        disabled={loading}
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
-                    />
-                </div>
-
-                <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
-                        End Date
-                    </label>
-
-                    <input
-                        type="date"
-                        {...form.register("endDate")}
-                        disabled={loading}
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
-                    />
-                </div>
-
-                <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
+                    <label className={LABEL_CLASS}>
                         Currency
                     </label>
 
                     <select
-                        {...form.register("currencyId")}
+                        {...form.register(
+                            "currencyId"
+                        )}
                         disabled={loading}
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
+                        className={FIELD_CLASS}
                     >
                         <option value="">
                             Select currency
@@ -345,8 +436,9 @@ export function FinancialPlanForm({
                         ))}
                     </select>
 
-                    {form.formState.errors.currencyId && (
-                        <p className="text-xs text-red-500">
+                    {form.formState.errors
+                        .currencyId && (
+                        <p className={ERROR_CLASS}>
                             {
                                 form.formState.errors
                                     .currencyId.message
@@ -356,8 +448,57 @@ export function FinancialPlanForm({
                 </div>
 
                 <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
-                        Target Amount
+                    <label className={LABEL_CLASS}>
+                        Start Date
+                    </label>
+
+                    <input
+                        type="date"
+                        {...form.register("startDate")}
+                        disabled={loading}
+                        className={FIELD_CLASS}
+                    />
+
+                    {form.formState.errors
+                        .startDate && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .startDate.message
+                            }
+                        </p>
+                    )}
+                </div>
+
+                <div className="space-y-2">
+                    <label className={LABEL_CLASS}>
+                        End Date
+                        {selectedPeriodType ===
+                        "ONE_TIME"
+                            ? " *"
+                            : ""}
+                    </label>
+
+                    <input
+                        type="date"
+                        {...form.register("endDate")}
+                        disabled={loading}
+                        className={FIELD_CLASS}
+                    />
+
+                    {form.formState.errors.endDate && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .endDate.message
+                            }
+                        </p>
+                    )}
+                </div>
+
+                <div className="space-y-2">
+                    <label className={LABEL_CLASS}>
+                        {targetLabel}
                     </label>
 
                     <input
@@ -368,19 +509,75 @@ export function FinancialPlanForm({
                             "targetAmount",
                             {
                                 setValueAs: value =>
-                                    value === ""
+                                    value === "" ||
+                                    value === null
                                         ? null
                                         : Number(value),
                             }
                         )}
                         disabled={loading}
-                        placeholder="Optional"
-                        className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-500 disabled:opacity-50"
+                        placeholder={
+                            targetRequired
+                                ? "Required"
+                                : "Optional"
+                        }
+                        className={FIELD_CLASS}
                     />
+
+                    {form.formState.errors
+                        .targetAmount && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .targetAmount
+                                    .message
+                            }
+                        </p>
+                    )}
+                </div>
+
+                <div className="space-y-2">
+                    <label className={LABEL_CLASS}>
+                        Linked Goal
+                    </label>
+
+                    <select
+                        {...form.register("goalId")}
+                        disabled={loading}
+                        className={FIELD_CLASS}
+                    >
+                        <option value="">
+                            None
+                        </option>
+
+                        {linkableGoals.map(goal => (
+                            <option
+                                key={goal.id}
+                                value={goal.id}
+                            >
+                                {goal.name}
+                            </option>
+                        ))}
+                    </select>
+
+                    <p className="text-xs text-slate-400">
+                        Optional. Only goals in the
+                        plan&apos;s currency can be
+                        linked.
+                    </p>
+
+                    {form.formState.errors.goalId && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .goalId.message
+                            }
+                        </p>
+                    )}
                 </div>
 
                 <div className="col-span-2 space-y-2">
-                    <label className="text-sm font-medium text-slate-700">
+                    <label className={LABEL_CLASS}>
                         Notes
                     </label>
 

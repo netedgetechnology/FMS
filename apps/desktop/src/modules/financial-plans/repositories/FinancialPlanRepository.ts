@@ -5,24 +5,30 @@ import type {
     UpdateFinancialPlanRequest,
 } from "../types";
 
+const SELECT_COLUMNS = `
+    id,
+    name,
+    plan_type AS planType,
+    plan_category AS planCategory,
+    plan_subcategory AS planSubcategory,
+    period_type AS periodType,
+    start_date AS startDate,
+    end_date AS endDate,
+    currency_id AS currencyId,
+    target_amount AS targetAmount,
+    goal_id AS goalId,
+    notes,
+    status,
+    created_at AS createdAt,
+    updated_at AS updatedAt
+`;
+
 export class FinancialPlanRepository extends Repository {
     async getAll(): Promise<FinancialPlan[]> {
         return await this.select<FinancialPlan>(
             `
             SELECT
-                id,
-                name,
-                plan_type AS planType,
-                plan_category AS planCategory,
-                plan_subcategory AS planSubcategory,
-                start_date AS startDate,
-                end_date AS endDate,
-                currency_id AS currencyId,
-                target_amount AS targetAmount,
-                notes,
-                status,
-                created_at AS createdAt,
-                updated_at AS updatedAt
+                ${SELECT_COLUMNS}
             FROM financial_plans
             WHERE deleted_at IS NULL
             ORDER BY start_date DESC, name
@@ -36,19 +42,7 @@ export class FinancialPlanRepository extends Repository {
         const rows = await this.select<FinancialPlan>(
             `
             SELECT
-                id,
-                name,
-                plan_type AS planType,
-                plan_category AS planCategory,
-                plan_subcategory AS planSubcategory,
-                start_date AS startDate,
-                end_date AS endDate,
-                currency_id AS currencyId,
-                target_amount AS targetAmount,
-                notes,
-                status,
-                created_at AS createdAt,
-                updated_at AS updatedAt
+                ${SELECT_COLUMNS}
             FROM financial_plans
             WHERE id = ?
               AND deleted_at IS NULL
@@ -71,17 +65,19 @@ export class FinancialPlanRepository extends Repository {
                 plan_type,
                 plan_category,
                 plan_subcategory,
+                period_type,
                 start_date,
                 end_date,
                 currency_id,
                 target_amount,
+                goal_id,
                 notes,
                 status,
                 created_at,
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 plan.id,
@@ -89,10 +85,12 @@ export class FinancialPlanRepository extends Repository {
                 plan.planType,
                 plan.planCategory,
                 plan.planSubcategory,
+                plan.periodType,
                 plan.startDate,
                 plan.endDate,
                 plan.currencyId,
                 plan.targetAmount,
+                plan.goalId,
                 plan.notes ?? null,
                 plan.status,
                 plan.createdAt,
@@ -112,10 +110,12 @@ export class FinancialPlanRepository extends Repository {
                 plan_type = ?,
                 plan_category = ?,
                 plan_subcategory = ?,
+                period_type = ?,
                 start_date = ?,
                 end_date = ?,
                 currency_id = ?,
                 target_amount = ?,
+                goal_id = ?,
                 notes = ?,
                 status = ?,
                 updated_at = CURRENT_TIMESTAMP
@@ -127,10 +127,12 @@ export class FinancialPlanRepository extends Repository {
                 plan.planType,
                 plan.planCategory,
                 plan.planSubcategory,
+                plan.periodType,
                 plan.startDate,
                 plan.endDate ?? null,
                 plan.currencyId,
                 plan.targetAmount ?? null,
+                plan.goalId ?? null,
                 plan.notes ?? null,
                 plan.status,
                 plan.id,
