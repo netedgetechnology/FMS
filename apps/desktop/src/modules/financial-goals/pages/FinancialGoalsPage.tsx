@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 
 import {
@@ -6,16 +6,23 @@ import {
     DeleteFinancialGoalDialog,
     EditFinancialGoalDialog,
     FinancialGoalTable,
+    ManageGoalAccountLinksDialog,
+    ManageGoalCategoryLinksDialog,
+    ManageGoalLoanLinksDialog,
+    ManageGoalInvestmentLinksDialog,
     ViewFinancialGoalDialog,
 } from "../components";
 
 import {
     useFinancialGoals,
+    useGoalActualsBatch,
 } from "../hooks";
 
 import type {
     FinancialGoal,
 } from "../types";
+
+import { isLinkedGoalMode } from "../constants";
 
 import {
     useCurrencies,
@@ -35,6 +42,12 @@ export function FinancialGoalsPage() {
         loading: currenciesLoading,
     } = useCurrencies();
 
+    const {
+        resultsByGoalId,
+        loading: actualsLoading,
+        refresh: refreshActuals,
+    } = useGoalActualsBatch(goals.length > 0);
+
     const [addOpen, setAddOpen] =
         useState(false);
 
@@ -46,6 +59,40 @@ export function FinancialGoalsPage() {
 
     const [deleteGoalState, setDeleteGoalState] =
         useState<FinancialGoal | null>(null);
+
+    const [managingAccountsGoal, setManagingAccountsGoal] =
+        useState<FinancialGoal | null>(null);
+
+    const [managingCategoriesGoal, setManagingCategoriesGoal] =
+        useState<FinancialGoal | null>(null);
+
+    const [managingLoansGoal, setManagingLoansGoal] =
+        useState<FinancialGoal | null>(null);
+
+    const [managingInvestmentsGoal, setManagingInvestmentsGoal] =
+        useState<FinancialGoal | null>(null);
+
+    const handleManageLinks = useCallback(
+        (goal: FinancialGoal) => {
+            if (
+                goal.goalMode ===
+                "CATEGORY_CONTRIBUTION_LINKED"
+            ) {
+                setManagingCategoriesGoal(goal);
+            } else if (
+                goal.goalMode === "LOAN_PAYOFF_LINKED"
+            ) {
+                setManagingLoansGoal(goal);
+            } else if (
+                goal.goalMode === "INVESTMENT_LINKED"
+            ) {
+                setManagingInvestmentsGoal(goal);
+            } else {
+                setManagingAccountsGoal(goal);
+            }
+        },
+        []
+    );
 
     const currencySymbols = useMemo(() => {
         return currencies.reduce<Record<string, string>>(
@@ -59,6 +106,44 @@ export function FinancialGoalsPage() {
 
     const isLoading =
         loading || currenciesLoading;
+
+    // createGoal / updateGoal / deleteGoal already refresh the goal
+    // list themselves (useFinancialGoals) - also refresh actuals so a
+    // new/edited/deleted goal's computed progress is never stale.
+    const handleCreate = useCallback(
+        async (
+            request: Parameters<typeof createGoal>[0]
+        ) => {
+            await createGoal(request);
+            await refreshActuals();
+        },
+        [createGoal, refreshActuals]
+    );
+
+    const handleUpdate = useCallback(
+        async (
+            request: Parameters<typeof updateGoal>[0]
+        ) => {
+            await updateGoal(request);
+            await refreshActuals();
+        },
+        [updateGoal, refreshActuals]
+    );
+
+    const handleDelete = useCallback(
+        async (id: string) => {
+            await deleteGoal(id);
+            await refreshActuals();
+        },
+        [deleteGoal, refreshActuals]
+    );
+
+    const linkedResultForView =
+        viewGoal &&
+        isLinkedGoalMode(viewGoal.goalMode)
+            ? (resultsByGoalId.get(viewGoal.id) ??
+              null)
+            : null;
 
     return (
         <div className="space-y-6">
@@ -140,22 +225,28 @@ export function FinancialGoalsPage() {
                 <FinancialGoalTable
                     goals={goals}
                     currencySymbols={currencySymbols}
+                    actualsByGoalId={resultsByGoalId}
+                    actualsLoading={actualsLoading}
                     onView={setViewGoal}
                     onEdit={setEditGoal}
                     onDelete={setDeleteGoalState}
+                    onManageLinks={
+                        handleManageLinks
+                    }
                 />
             )}
 
             <AddFinancialGoalDialog
                 open={addOpen}
                 onClose={() => setAddOpen(false)}
-                onCreate={createGoal}
+                onCreate={handleCreate}
             />
 
             <ViewFinancialGoalDialog
                 open={viewGoal !== null}
                 goal={viewGoal}
                 currencySymbols={currencySymbols}
+                linkedResult={linkedResultForView}
                 onClose={() => setViewGoal(null)}
             />
 
@@ -163,16 +254,53 @@ export function FinancialGoalsPage() {
                 open={editGoal !== null}
                 goal={editGoal}
                 onClose={() => setEditGoal(null)}
-                onUpdate={updateGoal}
+                onUpdate={handleUpdate}
             />
 
             <DeleteFinancialGoalDialog
                 open={deleteGoalState !== null}
                 goal={deleteGoalState}
                 onClose={() => setDeleteGoalState(null)}
-                onDelete={deleteGoal}
+                onDelete={handleDelete}
+            />
+
+            <ManageGoalAccountLinksDialog
+                open={managingAccountsGoal !== null}
+                goal={managingAccountsGoal}
+                onClose={() =>
+                    setManagingAccountsGoal(null)
+                }
+                onChanged={refreshActuals}
+            />
+
+            <ManageGoalCategoryLinksDialog
+                open={managingCategoriesGoal !== null}
+                goal={managingCategoriesGoal}
+                onClose={() =>
+                    setManagingCategoriesGoal(null)
+                }
+                onChanged={refreshActuals}
+            />
+
+            <ManageGoalLoanLinksDialog
+                open={managingLoansGoal !== null}
+                goal={managingLoansGoal}
+                onClose={() =>
+                    setManagingLoansGoal(null)
+                }
+                onChanged={refreshActuals}
+            />
+
+            <ManageGoalInvestmentLinksDialog
+                open={managingInvestmentsGoal !== null}
+                goal={managingInvestmentsGoal}
+                onClose={() =>
+                    setManagingInvestmentsGoal(null)
+                }
+                onChanged={refreshActuals}
             />
 
         </div>
     );
 }
+

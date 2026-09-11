@@ -1,17 +1,34 @@
-import { Eye, Pencil, Trash2 } from "lucide-react";
+import { useDateFormatter } from "@/core/formatting";
+import {
+    Eye,
+    Link2,
+    Pencil,
+    RefreshCw,
+    Trash2,
+} from "lucide-react";
 
 import type { FinancialGoal } from "../types";
+import type { GoalCalcResult } from "../services";
 import {
     getFinancialGoalCategory,
     getFinancialGoalSubcategoryLabel,
+    isLinkedGoalMode,
 } from "../constants";
 
 interface FinancialGoalTableProps {
     goals: FinancialGoal[];
     currencySymbols: Record<string, string>;
+    /** Computed actuals for any linked goal mode (ACCOUNT_LINKED, DEBT_PAYOFF_LINKED, CATEGORY_CONTRIBUTION_LINKED, LOAN_PAYOFF_LINKED, INVESTMENT_LINKED). */
+    actualsByGoalId?: ReadonlyMap<
+        string,
+        GoalCalcResult
+    >;
+    actualsLoading?: boolean;
     onView: (goal: FinancialGoal) => void;
     onEdit: (goal: FinancialGoal) => void;
     onDelete: (goal: FinancialGoal) => void;
+    /** Dispatches to the account-, category- or loan-link dialog based on goal.goalMode. */
+    onManageLinks?: (goal: FinancialGoal) => void;
 }
 
 function formatAmount(
@@ -24,19 +41,22 @@ function formatAmount(
     })}`;
 }
 
-function formatDate(date: string | null): string {
-    if (!date) {
-        return "—";
+function manageLinksLabel(
+    goalMode: FinancialGoal["goalMode"]
+): string {
+    switch (goalMode) {
+        case "CATEGORY_CONTRIBUTION_LINKED":
+            return "Manage linked categories";
+        case "LOAN_PAYOFF_LINKED":
+            return "Manage linked loans";
+        case "INVESTMENT_LINKED":
+            return "Manage linked investments";
+        default:
+            return "Manage linked accounts";
     }
-
-    const parsed = new Date(date);
-
-    if (Number.isNaN(parsed.getTime())) {
-        return date;
-    }
-
-    return parsed.toLocaleDateString();
 }
+
+
 
 function getProgress(goal: FinancialGoal): number {
     if (goal.targetAmount <= 0) {
@@ -76,10 +96,14 @@ function getStatusClasses(
 export function FinancialGoalTable({
     goals,
     currencySymbols,
+    actualsByGoalId,
+    actualsLoading = false,
     onView,
     onEdit,
     onDelete,
+    onManageLinks,
 }: FinancialGoalTableProps) {
+    const formatDate = useDateFormatter();
     if (goals.length === 0) {
         return (
             <div className="rounded-xl border border-slate-200 bg-white p-12 text-center">
@@ -147,7 +171,37 @@ export function FinancialGoalTable({
 
                         {goals.map((goal) => {
 
-                            const progress = getProgress(goal);
+                            const isLinked =
+                                isLinkedGoalMode(
+                                    goal.goalMode
+                                );
+
+                            const linkedResult =
+                                isLinked
+                                    ? actualsByGoalId?.get(
+                                          goal.id
+                                      )
+                                    : undefined;
+
+                            const currentAmount =
+                                isLinked
+                                    ? (linkedResult
+                                          ?.totals
+                                          .currentAmount ??
+                                      0)
+                                    : goal.currentAmount;
+
+                            const progress = isLinked
+                                ? (linkedResult
+                                      ?.totals
+                                      .progressPercentage ??
+                                  0)
+                                : getProgress(goal);
+
+                            const hasWarnings =
+                                (linkedResult
+                                    ?.warnings
+                                    .length ?? 0) > 0;
 
                             const currencySymbol =
                                 currencySymbols[goal.currencyId] ?? "";
@@ -196,11 +250,45 @@ export function FinancialGoalTable({
                                     <td className="px-5 py-4">
 
                                         <span className="whitespace-nowrap text-sm text-slate-700">
-                                            {formatAmount(
-                                                goal.currentAmount,
-                                                currencySymbol
+                                            {isLinked &&
+                                            actualsLoading &&
+                                            !linkedResult ? (
+                                                <span className="text-xs text-slate-300">
+                                                    …
+                                                </span>
+                                            ) : (
+                                                formatAmount(
+                                                    currentAmount,
+                                                    currencySymbol
+                                                )
                                             )}
                                         </span>
+
+                                        {isLinked && (
+                                            <div
+                                                className={`mt-1 flex items-center gap-1 text-xs ${
+                                                    hasWarnings
+                                                        ? "text-amber-600"
+                                                        : "text-slate-400"
+                                                }`}
+                                                title={
+                                                    hasWarnings
+                                                        ? linkedResult?.warnings.join(
+                                                              " "
+                                                          )
+                                                        : "Calculated automatically from linked accounts"
+                                                }
+                                            >
+                                                <RefreshCw
+                                                    size={
+                                                        11
+                                                    }
+                                                />
+                                                {hasWarnings
+                                                    ? "Needs attention"
+                                                    : "Auto-updated"}
+                                            </div>
+                                        )}
 
                                     </td>
 
@@ -272,6 +360,31 @@ export function FinancialGoalTable({
                                                 <Pencil size={15} />
                                             </button>
 
+                                            {isLinked &&
+                                                onManageLinks && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            onManageLinks(
+                                                                goal
+                                                            )
+                                                        }
+                                                        title={manageLinksLabel(
+                                                            goal.goalMode
+                                                        )}
+                                                        aria-label={`${manageLinksLabel(
+                                                            goal.goalMode
+                                                        )} for ${goal.name}`}
+                                                        className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                                                    >
+                                                        <Link2
+                                                            size={
+                                                                15
+                                                            }
+                                                        />
+                                                    </button>
+                                                )}
+
                                             <button
                                                 type="button"
                                                 onClick={() => onDelete(goal)}
@@ -299,3 +412,4 @@ export function FinancialGoalTable({
         </div>
     );
 }
+

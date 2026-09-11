@@ -51,6 +51,7 @@ function goal(
         goalType: "SAVINGS",
         goalCategory: "CORE_PERSONAL_FINANCE",
         goalSubcategory: "HOME_PURCHASE",
+        goalMode: "MANUAL",
         targetAmount: 5000000,
         currentAmount: 100000,
         currencyId: "currency-inr",

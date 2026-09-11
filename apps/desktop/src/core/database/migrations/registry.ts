@@ -28,6 +28,10 @@ import { CounterpartyRulesTypeNotesMigration } from "./028_counterparty_rules_ty
 import { BackfillImportMappingNameMigration } from "./029_backfill_import_mapping_name";
 import { FinancialPlansPhase1Migration } from "./030_financial_plans_phase1";
 import { FinancialPlanComponentsMigration } from "./031_financial_plan_components";
+import { GoalAccountLinksMigration } from "./032_goal_account_links";
+import { GoalCategoryLinksMigration } from "./033_goal_category_links";
+import { GoalLoanLinksMigration } from "./034_goal_loan_links";
+import { GoalInvestmentLinksMigration } from "./035_goal_investment_links";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -60,5 +64,9 @@ export const migrations = [
     BackfillImportMappingNameMigration,
     FinancialPlansPhase1Migration,
     FinancialPlanComponentsMigration,
+    GoalAccountLinksMigration,
+    GoalCategoryLinksMigration,
+    GoalLoanLinksMigration,
+    GoalInvestmentLinksMigration,
 ];
 

@@ -5,9 +5,19 @@ import type {
     UpdateFinancialGoalRequest,
 } from "../types";
 
+/** goal_mode is added by migration 032; older rows default to MANUAL. */
+function coerce(
+    row: FinancialGoal
+): FinancialGoal {
+    return {
+        ...row,
+        goalMode: row.goalMode ?? "MANUAL",
+    };
+}
+
 export class FinancialGoalRepository extends Repository {
     async getAll(): Promise<FinancialGoal[]> {
-        return await this.select<FinancialGoal>(
+        const rows = await this.select<FinancialGoal>(
             `
             SELECT
                 id,
@@ -15,6 +25,7 @@ export class FinancialGoalRepository extends Repository {
                 goal_type AS goalType,
                 goal_category AS goalCategory,
                 goal_subcategory AS goalSubcategory,
+                goal_mode AS goalMode,
                 target_amount AS targetAmount,
                 current_amount AS currentAmount,
                 currency_id AS currencyId,
@@ -29,6 +40,8 @@ export class FinancialGoalRepository extends Repository {
             ORDER BY priority DESC, target_date ASC, name
             `
         );
+
+        return rows.map(coerce);
     }
 
     async getById(
@@ -42,6 +55,7 @@ export class FinancialGoalRepository extends Repository {
                 goal_type AS goalType,
                 goal_category AS goalCategory,
                 goal_subcategory AS goalSubcategory,
+                goal_mode AS goalMode,
                 target_amount AS targetAmount,
                 current_amount AS currentAmount,
                 currency_id AS currencyId,
@@ -58,7 +72,7 @@ export class FinancialGoalRepository extends Repository {
             [id]
         );
 
-        return rows[0] ?? null;
+        return rows[0] ? coerce(rows[0]) : null;
     }
 
     async create(
@@ -73,6 +87,7 @@ export class FinancialGoalRepository extends Repository {
                 goal_type,
                 goal_category,
                 goal_subcategory,
+                goal_mode,
                 target_amount,
                 current_amount,
                 currency_id,
@@ -84,7 +99,7 @@ export class FinancialGoalRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 goal.id,
@@ -92,6 +107,7 @@ export class FinancialGoalRepository extends Repository {
                 goal.goalType,
                 goal.goalCategory,
                 goal.goalSubcategory,
+                goal.goalMode,
                 goal.targetAmount,
                 goal.currentAmount,
                 goal.currencyId,
@@ -108,6 +124,9 @@ export class FinancialGoalRepository extends Repository {
     async update(
         goal: UpdateFinancialGoalRequest
     ): Promise<void> {
+        // goal_mode is immutable after creation (Phase 1 has no
+        // manual <-> linked conversion), so it is deliberately absent
+        // from this SET clause.
         await this.execute(
             `
             UPDATE goals

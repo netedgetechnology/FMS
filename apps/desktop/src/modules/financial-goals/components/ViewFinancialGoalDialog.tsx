@@ -1,9 +1,17 @@
+import { useDateFormatter } from "@/core/formatting";
+import {
+    isLinkedGoalMode,
+    roleForGoalMode,
+} from "../constants";
 import type { FinancialGoal } from "../types";
+import type { GoalCalcResult } from "../services";
 
 interface ViewFinancialGoalDialogProps {
     open: boolean;
     goal: FinancialGoal | null;
     currencySymbols: Record<string, string>;
+    /** Computed actuals, for any linked goal mode. */
+    linkedResult?: GoalCalcResult | null;
     onClose: () => void;
 }
 
@@ -17,19 +25,7 @@ function formatAmount(
     })}`;
 }
 
-function formatDate(date: string | null): string {
-    if (!date) {
-        return "No target date";
-    }
 
-    const parsed = new Date(date);
-
-    if (Number.isNaN(parsed.getTime())) {
-        return date;
-    }
-
-    return parsed.toLocaleDateString();
-}
 
 function getProgress(goal: FinancialGoal): number {
     if (goal.targetAmount <= 0) {
@@ -49,16 +45,66 @@ export function ViewFinancialGoalDialog({
     open,
     goal,
     currencySymbols,
+    linkedResult,
     onClose,
 }: ViewFinancialGoalDialogProps) {
+    const formatDate = useDateFormatter();
     if (!open || !goal) {
         return null;
     }
 
+    const role = roleForGoalMode(goal.goalMode);
+    const isLinked = isLinkedGoalMode(goal.goalMode);
+    const isDebtPayoff = role === "LIABILITY";
+    const isCategoryLinked =
+        goal.goalMode ===
+        "CATEGORY_CONTRIBUTION_LINKED";
+    const isLoanLinked =
+        goal.goalMode === "LOAN_PAYOFF_LINKED";
+    const isInvestmentLinked =
+        goal.goalMode === "INVESTMENT_LINKED";
+    // Both DEBT_PAYOFF_LINKED and LOAN_PAYOFF_LINKED are "amount paid
+    // off" goals - same label set and outstanding-debt display.
+    const isDebtStyle = isDebtPayoff || isLoanLinked;
+
     const currencySymbol =
         currencySymbols[goal.currencyId] ?? "";
 
-    const progress = getProgress(goal);
+    const currentAmount = isLinked
+        ? (linkedResult?.totals.currentAmount ?? 0)
+        : goal.currentAmount;
+
+    const progress = isLinked
+        ? (linkedResult?.totals.progressPercentage ??
+          0)
+        : getProgress(goal);
+
+    const remainingAmount = isLinked
+        ? (linkedResult?.totals.remainingAmount ??
+          Math.max(
+              0,
+              goal.targetAmount - currentAmount
+          ))
+        : Math.max(
+              0,
+              goal.targetAmount - goal.currentAmount
+          );
+
+    const outstandingDebt =
+        linkedResult?.totals.outstandingDebt ?? 0;
+
+    const targetLabel = isDebtStyle
+        ? "Original Debt Target"
+        : "Target Amount";
+    const currentLabel = isDebtStyle
+        ? "Amount Paid Off"
+        : "Current Amount";
+    const remainingLabel = isDebtStyle
+        ? "Remaining Debt"
+        : "Remaining Amount";
+    const progressLabel = isDebtStyle
+        ? "Percentage Paid Off"
+        : "Progress";
 
     return (
         <div
@@ -106,8 +152,23 @@ export function ViewFinancialGoalDialog({
                             Goal
                         </p>
 
-                        <h3 className="mt-1 text-2xl font-bold text-slate-900">
+                        <h3 className="mt-1 flex items-center gap-2 text-2xl font-bold text-slate-900">
                             {goal.name}
+
+                            {isLinked && (
+                                <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600">
+                                    {isDebtPayoff
+                                        ? "Debt-payoff goal"
+                                        : isLoanLinked
+                                          ? "Loan payoff goal"
+                                          : isCategoryLinked
+                                            ? "Category-linked goal"
+                                            : isInvestmentLinked
+                                              ? "Investment-linked goal"
+                                              : "Savings goal"}{" "}
+                                    · Auto-calculated
+                                </span>
+                            )}
                         </h3>
                     </div>
 
@@ -135,7 +196,7 @@ export function ViewFinancialGoalDialog({
 
                         <div className="rounded-xl bg-slate-50 p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Target Amount
+                                {targetLabel}
                             </p>
 
                             <p className="mt-1 font-semibold text-slate-900">
@@ -146,14 +207,50 @@ export function ViewFinancialGoalDialog({
                             </p>
                         </div>
 
+                        {isDebtStyle && (
+                            <div className="rounded-xl bg-slate-50 p-4">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Outstanding Debt
+                                    <span className="ml-1.5 normal-case text-blue-600">
+                                        (auto-updated)
+                                    </span>
+                                </p>
+
+                                <p className="mt-1 font-semibold text-slate-900">
+                                    {formatAmount(
+                                        outstandingDebt,
+                                        currencySymbol
+                                    )}
+                                </p>
+                            </div>
+                        )}
+
                         <div className="rounded-xl bg-slate-50 p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Current Amount
+                                {currentLabel}
+                                {isLinked && (
+                                    <span className="ml-1.5 normal-case text-blue-600">
+                                        (auto-updated)
+                                    </span>
+                                )}
                             </p>
 
                             <p className="mt-1 font-semibold text-slate-900">
                                 {formatAmount(
-                                    goal.currentAmount,
+                                    currentAmount,
+                                    currencySymbol
+                                )}
+                            </p>
+                        </div>
+
+                        <div className="rounded-xl bg-slate-50 p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                {remainingLabel}
+                            </p>
+
+                            <p className="mt-1 font-semibold text-slate-900">
+                                {formatAmount(
+                                    remainingAmount,
                                     currencySymbol
                                 )}
                             </p>
@@ -186,7 +283,7 @@ export function ViewFinancialGoalDialog({
                         <div className="mb-2 flex items-center justify-between">
 
                             <span className="text-sm font-semibold text-slate-700">
-                                Progress
+                                {progressLabel}
                             </span>
 
                             <span className="text-sm font-bold text-slate-900">
@@ -205,6 +302,40 @@ export function ViewFinancialGoalDialog({
                             />
 
                         </div>
+
+                        {isLinked &&
+                            (linkedResult?.warnings
+                                .length ?? 0) > 0 && (
+                                <div className="mt-3 rounded-xl bg-amber-50 p-3">
+                                    <p className="text-xs font-semibold text-amber-700">
+                                        {isCategoryLinked
+                                            ? "Some contributions are excluded from this total:"
+                                            : isLoanLinked
+                                              ? "Some linked loans are excluded from this total:"
+                                              : isInvestmentLinked
+                                                ? "Some linked investments are excluded from this total:"
+                                                : "Some linked accounts are excluded from this total:"}
+                                    </p>
+                                    <ul className="mt-1 space-y-0.5 text-xs text-amber-700">
+                                        {linkedResult?.warnings.map(
+                                            (
+                                                warning,
+                                                index
+                                            ) => (
+                                                <li
+                                                    key={
+                                                        index
+                                                    }
+                                                >
+                                                    {
+                                                        warning
+                                                    }
+                                                </li>
+                                            )
+                                        )}
+                                    </ul>
+                                </div>
+                            )}
 
                     </div>
 
@@ -268,3 +399,4 @@ export function ViewFinancialGoalDialog({
         </div>
     );
 }
+

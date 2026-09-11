@@ -4,3 +4,7 @@ export * from "./EditFinancialGoalDialog";
 export * from "./ViewFinancialGoalDialog";
 export * from "./DeleteFinancialGoalDialog";
 export * from "./FinancialGoalTable";
+export * from "./ManageGoalAccountLinksDialog";
+export * from "./ManageGoalCategoryLinksDialog";
+export * from "./ManageGoalLoanLinksDialog";
+export * from "./ManageGoalInvestmentLinksDialog";
