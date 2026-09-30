@@ -1,3 +1,5 @@
+import { isTransferClassified } from "@/core/accounting/transferClassification";
+
 import type { BudgetLedgerEntry } from "./budgetSpending";
 
 // ---------------------------------------------------------------------
@@ -99,11 +101,19 @@ export interface BudgetSpendingContext {
      * spending - the purchases on the card are already counted.
      */
     creditCardAccountIds?: ReadonlySet<string>;
+    /**
+     * Ids of every TRANSFER-type category. An expense in one of these is
+     * a transfer between the user's own accounts (e.g. an imported bank
+     * debit categorised as a transfer), never spending - see
+     * core/accounting/transferClassification.ts.
+     */
+    transferCategoryIds?: ReadonlySet<string>;
 }
 
 export type BudgetTransactionReason =
     | "soft-deleted"
     | "not-an-expense"
+    | "transfer"
     | "credit-card-payment"
     | "loan-emi-interest"
     | "loan-emi-principal-only"
@@ -149,6 +159,13 @@ export function classifyBudgetTransaction(
     // happens to carry a category / amount out of the totals.
     if (entry.type !== "expense") {
         return EXCLUDED("not-an-expense");
+    }
+
+    // An expense-direction row classified as a transfer by its category
+    // (e.g. "Self Transfer") moves money between the user's own
+    // accounts - never spending, so it can't consume any budget.
+    if (isTransferClassified(entry, context.transferCategoryIds)) {
+        return EXCLUDED("transfer");
     }
 
     // Credit-card bill payment: money moved to settle a card, not a new

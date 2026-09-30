@@ -1,0 +1,39 @@
+{
+  "source": "Synthetic: Debit/Credit columns with '-' in the unused cell and no balance column.",
+  "importType": "BANK_PDF",
+  "features": [
+    "debit-credit",
+    "dash-placeholder",
+    "no-balance"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 0,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-06-01",
+        "type": "expense",
+        "amount": 1450,
+        "balance": null,
+        "description": "Electricity Bill"
+      },
+      {
+        "date": "2026-06-02",
+        "type": "income",
+        "amount": 7500,
+        "balance": null,
+        "description": "Client Payment"
+      },
+      {
+        "date": "2026-06-03",
+        "type": "expense",
+        "amount": 2000,
+        "balance": null,
+        "description": "ATM Withdrawal"
+      }
+    ]
+  }
+}

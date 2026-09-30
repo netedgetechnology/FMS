@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
@@ -16,7 +17,14 @@ import { FormField } from "@/components/forms";
 
 import { useAccounts } from "@/modules/accounts/hooks";
 import { AccountType, type Account } from "@/modules/accounts/types";
-import { useCategories } from "@/modules/categories";
+
+import {
+    isLockedResolution,
+    resolveCategoryTransactionType,
+    useCategories,
+    useCategoryContextMappings,
+} from "@/modules/categories";
+import { transferDirectionForType } from "@/core/accounting/transferClassification";
 
 import {
     TransactionFormInput,
@@ -39,6 +47,19 @@ function maskedCardTail(account: Account): string {
         .slice(-4);
 
     return tail ? `••${tail}` : "";
+}
+
+// `new Date().toISOString().slice(0, 10)` reads the UTC calendar date,
+// which is a day behind local midnight for any positive UTC offset
+// (e.g. IST) - this reads the actual local Y/M/D fields instead, the
+// same technique DashboardService's toLocalISODate uses.
+export function todayLocalDate(): string {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
 }
 
 function creditCardOptionLabel(account: Account): string {
@@ -82,12 +103,15 @@ export function TransactionForm({
 }: TransactionFormProps) {
     const { accounts } = useAccounts();
     const { categories } = useCategories();
+    const { mappings } = useCategoryContextMappings();
 
     const {
         register,
         control,
         handleSubmit,
         watch,
+        setValue,
+        getValues,
         formState: { errors },
     } = useForm<TransactionFormInput, unknown, TransactionFormValues>({
         resolver: zodResolver(transactionSchema),
@@ -98,10 +122,9 @@ export function TransactionForm({
             payee: "",
             description: "",
             type: "expense",
+            transferDirection: null,
             amount: 0,
-            transactionDate: new Date()
-                .toISOString()
-                .slice(0, 10),
+            transactionDate: todayLocalDate(),
             referenceNumber: "",
             notes: "",
             tags: "",
@@ -127,6 +150,111 @@ export function TransactionForm({
     );
 
     const paymentMethod = watch("paymentMethod");
+    const accountId = watch("accountId");
+    const categoryId = watch("categoryId");
+    const transactionType = watch("type");
+
+    const selectedAccountForType = activeAccounts.find(
+        account => account.id === accountId
+    );
+
+    const typeResolution = resolveCategoryTransactionType({
+        categoryId: categoryId || null,
+        accountId: accountId || null,
+        businessEntityId: selectedAccountForType?.businessEntityId ?? null,
+        mappings,
+        categories: activeCategories,
+    });
+
+    // Only an account- or business-entity-specific mapping locks the
+    // Type field - the category's own default type (source "default")
+    // stays an editable suggestion, see resolveCategoryTransactionType.
+    const isTypeLocked = isLockedResolution(typeResolution);
+
+    // Tracks the account/category pair from the previous render so the
+    // auto-set effect below only reacts to the user actually changing
+    // one of them - never to the initial mount, which would otherwise
+    // overwrite an edited transaction's existing type as soon as the
+    // dialog opens.
+    const previousContextRef = useRef<{
+        accountId: string;
+        categoryId: string;
+    } | null>(null);
+
+    // A transfer's direction is never entered: it is the Debit/Credit this
+    // transaction had - Expense (Debit) -> OUT, Income (Credit) -> IN -
+    // tracked from the last Income/Expense Type and applied the moment the
+    // Type becomes Transfer (by a Transfer category or by hand). An
+    // Income/Expense transaction never carries a transfer direction, so
+    // there is always exactly one source of direction. An edited
+    // transfer keeps the direction it was saved with.
+    const lastDebitCreditRef = useRef<"income" | "expense" | null>(
+        defaultValues?.type === "income" || defaultValues?.type === "expense"
+            ? defaultValues.type
+            : defaultValues?.type === "transfer"
+                ? null
+                : "expense"
+    );
+
+    useEffect(() => {
+        if (transactionType === "income" || transactionType === "expense") {
+            lastDebitCreditRef.current = transactionType;
+
+            if (getValues("transferDirection") != null) {
+                setValue("transferDirection", null);
+            }
+            return;
+        }
+
+        if (
+            transactionType === "transfer" &&
+            !getValues("transferDirection") &&
+            lastDebitCreditRef.current
+        ) {
+            setValue(
+                "transferDirection",
+                transferDirectionForType(lastDebitCreditRef.current)
+            );
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [transactionType]);
+
+    useEffect(() => {
+        const previous = previousContextRef.current;
+        previousContextRef.current = {
+            accountId: accountId ?? "",
+            categoryId: categoryId ?? "",
+        };
+
+        if (
+            previous &&
+            (previous.accountId !== accountId ||
+                previous.categoryId !== categoryId) &&
+            typeResolution.categoryType
+        ) {
+            const currentType = getValues("type");
+            const suggestedType =
+                typeResolution.categoryType.toLowerCase() as TransactionFormValues["type"];
+
+            // A Transfer stays a Transfer when a normal category is
+            // chosen - only an explicit account / business-entity
+            // mapping (a locked type) may change it.
+            if (
+                currentType === "transfer" &&
+                suggestedType !== "transfer" &&
+                !isLockedResolution(typeResolution)
+            ) {
+                return;
+            }
+
+            setValue(
+                "type",
+                suggestedType,
+                { shouldValidate: true, shouldDirty: true }
+            );
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [accountId, categoryId, typeResolution.categoryType]);
 
     return (
         <form
@@ -191,26 +319,45 @@ export function TransactionForm({
                             control={control}
                             name="type"
                             render={({ field }) => (
-                                <Select
-                                    value={field.value}
-                                    onValueChange={field.onChange}
-                                >
-                                    <SelectTrigger id="type">
-                                        <SelectValue placeholder="Select Type" />
-                                    </SelectTrigger>
+                                <>
+                                    <Select
+                                        value={field.value}
+                                        onValueChange={
+                                            isTypeLocked
+                                                ? undefined
+                                                : field.onChange
+                                        }
+                                        disabled={isTypeLocked}
+                                    >
+                                        <SelectTrigger id="type">
+                                            <SelectValue placeholder="Select Type" />
+                                        </SelectTrigger>
 
-                                    <SelectContent>
-                                        <SelectItem value="income">
-                                            Income
-                                        </SelectItem>
-                                        <SelectItem value="expense">
-                                            Expense
-                                        </SelectItem>
-                                        <SelectItem value="transfer">
-                                            Transfer
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
+                                        <SelectContent>
+                                            <SelectItem value="income">
+                                                Income
+                                            </SelectItem>
+                                            <SelectItem value="expense">
+                                                Expense
+                                            </SelectItem>
+                                            <SelectItem value="transfer">
+                                                Transfer
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+
+                                    {isTypeLocked && (
+                                        <p className="text-xs leading-4 text-slate-500">
+                                            Set automatically by a category
+                                            mapping for this{" "}
+                                            {typeResolution.source ===
+                                            "account"
+                                                ? "account"
+                                                : "business entity"}
+                                            .
+                                        </p>
+                                    )}
+                                </>
                             )}
                         />
                     </FormField>
@@ -248,7 +395,7 @@ export function TransactionForm({
                                         </SelectTrigger>
 
                                         <SelectContent>
-                                            <SelectItem value="__none">
+                                            <SelectItem value="__none" label="None">
                                                 None
                                             </SelectItem>
 

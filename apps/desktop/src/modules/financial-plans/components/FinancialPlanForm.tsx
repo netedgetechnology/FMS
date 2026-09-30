@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
@@ -29,6 +29,8 @@ import type {
 
 import { useFinancialGoals } from "@/modules/financial-goals/hooks";
 import type { Currency } from "@/modules/currencies/types";
+import { toISODateString } from "@/core/formatting";
+import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
 
 export interface FinancialPlanFormProps {
     currencies: Currency[];
@@ -55,6 +57,41 @@ const LABEL_CLASS =
 
 const ERROR_CLASS = "text-xs text-red-500";
 
+// Resolves the application's configured default currency (Settings >
+// General -> `defaultCurrency`, a currency code) to this currency list's
+// matching id - the same convention already used by
+// AccountForm/BusinessEntityForm/LoanForm/InvestmentForm. `currencies[0]`
+// is arbitrary list order (alphabetical/insertion), not a default, and
+// must never be used for this; that was the root cause of the reported
+// "defaults to USD" bug even though the app's Settings default is INR.
+export function resolveDefaultCurrencyId(
+    currencies: readonly Pick<Currency, "id" | "code">[],
+    defaultCurrency: string
+): string {
+    return (
+        currencies.find(
+            currency => currency.code === defaultCurrency
+        )?.id ?? ""
+    );
+}
+
+// Decides whether the post-mount currency-fallback effect should fire.
+// It must not: override an explicit edit-mode currency, override a
+// currency the user has already picked (manually or via the initial
+// resolved default), or fire before the currency list / default
+// currency has resolved to something real.
+export function shouldApplyFallbackCurrency(
+    editingCurrencyId: string | undefined,
+    currentCurrencyId: string,
+    fallbackCurrencyId: string
+): boolean {
+    return (
+        !editingCurrencyId &&
+        !currentCurrencyId &&
+        fallbackCurrencyId !== ""
+    );
+}
+
 export function FinancialPlanForm({
     currencies,
     defaultValues,
@@ -65,6 +102,21 @@ export function FinancialPlanForm({
     onCancel,
 }: FinancialPlanFormProps) {
     const { goals } = useFinancialGoals();
+    const { defaultCurrency } = useDisplaySettings();
+
+    // The application's configured default currency (Settings > General),
+    // resolved to this currency list's matching id - the same
+    // AccountForm/BusinessEntityForm/LoanForm/InvestmentForm convention.
+    // `currencies[0]` is arbitrary list order, not a default; never used
+    // for this.
+    const fallbackCurrencyId = useMemo(
+        () =>
+            resolveDefaultCurrencyId(
+                currencies,
+                defaultCurrency
+            ),
+        [currencies, defaultCurrency]
+    );
 
     const form = useForm<FinancialPlanFormValues>({
         resolver: zodResolver(financialPlanSchema),
@@ -74,11 +126,13 @@ export function FinancialPlanForm({
             planCategory: "CORE_PERSONAL_FINANCE",
             planSubcategory: "SAVINGS",
             periodType: "MONTHLY",
-            startDate: new Date()
-                .toISOString()
-                .slice(0, 10),
+            // Local calendar date, not UTC - `new Date().toISOString()`
+            // reads UTC and lands on the previous day for any positive
+            // UTC offset (e.g. IST) once local time is past midnight but
+            // UTC hasn't rolled over yet.
+            startDate: toISODateString(new Date()),
             endDate: "",
-            currencyId: currencies[0]?.id ?? "",
+            currencyId: fallbackCurrencyId,
             targetAmount: null,
             goalId: "",
             notes: "",
@@ -91,6 +145,29 @@ export function FinancialPlanForm({
     const selectedPlanType = form.watch("planType");
     const selectedPeriodType = form.watch("periodType");
     const selectedCurrencyId = form.watch("currencyId");
+
+    // Preselect the Settings default currency for a new plan, even if
+    // `currencies` resolves after this form has already mounted (the
+    // `defaultValues` above only run once, at mount). Never touches an
+    // explicit edit-mode value or a currency the user has already picked.
+    useEffect(() => {
+        if (
+            !shouldApplyFallbackCurrency(
+                defaultValues?.currencyId,
+                selectedCurrencyId,
+                fallbackCurrencyId
+            )
+        ) {
+            return;
+        }
+
+        form.setValue("currencyId", fallbackCurrencyId);
+    }, [
+        defaultValues?.currencyId,
+        selectedCurrencyId,
+        fallbackCurrencyId,
+        form,
+    ]);
 
     // Phase 6: warn (never block) when the chosen plan type would orphan
     // an existing component - the service still hard-blocks on submit.
@@ -306,6 +383,16 @@ export function FinancialPlanForm({
                             date.
                         </p>
                     )}
+
+                    {form.formState.errors
+                        .periodType && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .periodType.message
+                            }
+                        </p>
+                    )}
                 </div>
 
                 <div className="space-y-2">
@@ -405,6 +492,15 @@ export function FinancialPlanForm({
                             Archived
                         </option>
                     </select>
+
+                    {form.formState.errors.status && (
+                        <p className={ERROR_CLASS}>
+                            {
+                                form.formState.errors
+                                    .status.message
+                            }
+                        </p>
+                    )}
                 </div>
 
                 <div className="space-y-2">

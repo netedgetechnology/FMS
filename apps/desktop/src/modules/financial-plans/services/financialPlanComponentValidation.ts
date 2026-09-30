@@ -184,10 +184,21 @@ export function validateAccountSource(
     return OK;
 }
 
-/** CATEGORY source: role is fixed by category_type; TRANSFER is never allowed. */
+/**
+ * CATEGORY source: TRANSFER is never allowed. A category's own
+ * categoryType is a suggestion, not authoritative - categories are used
+ * across both income and expense transactions today (see
+ * resolveCategoryTransactionType in the categories module). A category
+ * whose categoryType does not match the requested role is still eligible
+ * when it already has a real transaction in that direction, in the
+ * plan's currency - `hasMatchingTransaction` is computed by the caller
+ * (see FinancialPlanComponentService.categoryHasMatchingTransaction and
+ * usePlanComponentSources.sourceOptionsFor, which apply the same rule).
+ */
 export function validateCategorySource(
     role: PlanComponentRole,
-    category: { categoryType: string } | null | undefined
+    category: { categoryType: string } | null | undefined,
+    hasMatchingTransaction: boolean
 ): ComponentReferenceCheck {
     if (!category) {
         return {
@@ -209,18 +220,18 @@ export function validateCategorySource(
         };
     }
 
-    if (expectedRole !== role) {
-        return {
-            ok: false,
-            reason:
-                expectedRole === "CONTRIBUTION"
-                    ? "This is an income category - use it as a contribution component."
-                    : "This is an expense category - use it as a spending component.",
-            unavailableReason: "INVALID_CATEGORY_TYPE",
-        };
+    if (expectedRole === role || hasMatchingTransaction) {
+        return OK;
     }
 
-    return OK;
+    return {
+        ok: false,
+        reason:
+            role === "CONTRIBUTION"
+                ? "This category has no income transactions in the plan's currency."
+                : "This category has no expense transactions in the plan's currency.",
+        unavailableReason: "INVALID_CATEGORY_TYPE",
+    };
 }
 
 export function validateInvestmentSource(

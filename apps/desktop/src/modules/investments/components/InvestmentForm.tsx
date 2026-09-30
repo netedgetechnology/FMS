@@ -17,6 +17,7 @@ import { FormField } from "@/components/forms";
 import { useCurrencies } from "@/modules/currencies";
 import { useBusinessEntities } from "@/modules/business-entities";
 import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
+import { useDateFormatter } from "@/core/formatting";
 
 import {
     investmentSchema,
@@ -25,6 +26,7 @@ import {
 } from "../validation";
 
 import { InvestmentStatus } from "../types";
+import { getInvestmentPriceFreshness } from "../services";
 
 const INVESTMENT_TYPES = [
     "Stocks",
@@ -54,6 +56,18 @@ export interface InvestmentFormProps {
     defaultValues?: Partial<InvestmentFormValues>;
     loading?: boolean;
     submitLabel?: string;
+    /** True when editing an existing investment (vs. creating a new one). */
+    isEdit?: boolean;
+    /**
+     * True when the investment being edited already has at least one
+     * recorded transaction. Once true, quantity/averageCost/currency
+     * are locked - they are owned by the transaction ledger from that
+     * point on (InvestmentService mirrors this server-side too, so
+     * this is a UX affordance, not the only guard).
+     */
+    hasTransactions?: boolean;
+    /** Display only, not a form field - when currentPrice was last changed. */
+    priceUpdatedAt?: string | null;
     onCancel?(): void;
     onSubmit(values: InvestmentFormValues): void | Promise<void>;
 }
@@ -84,12 +98,22 @@ export function InvestmentForm({
     defaultValues,
     loading = false,
     submitLabel = "Save",
+    isEdit = false,
+    hasTransactions = false,
+    priceUpdatedAt = null,
     onCancel,
     onSubmit,
 }: InvestmentFormProps) {
     const { currencies } = useCurrencies();
     const { businessEntities } = useBusinessEntities();
     const { defaultCurrency } = useDisplaySettings();
+    const formatDate = useDateFormatter();
+
+    const ledgerLocked = isEdit && hasTransactions;
+
+    const priceFreshness = getInvestmentPriceFreshness(
+        priceUpdatedAt
+    );
 
     const fallbackCurrencyId = useMemo(
         () =>
@@ -155,6 +179,29 @@ export function InvestmentForm({
         fallbackCurrencyId,
         setValue,
     ]);
+
+    const quantity = watch("quantity");
+    const currentPrice = watch("currentPrice");
+
+    // currentValue is always quantity x currentPrice - never freely
+    // typed - so the form can never submit a value inconsistent with
+    // the two figures it represents. InvestmentService recomputes this
+    // itself too, so this is a UX affordance, not the only guard.
+    useEffect(() => {
+        const numericQuantity = Number(quantity ?? 0);
+        const numericPrice = Number(currentPrice ?? 0);
+
+        const calculatedValue =
+            Number.isFinite(numericQuantity) &&
+            Number.isFinite(numericPrice)
+                ? numericQuantity * numericPrice
+                : 0;
+
+        setValue("currentValue", calculatedValue, {
+            shouldValidate: true,
+            shouldDirty: true,
+        });
+    }, [quantity, currentPrice, setValue]);
 
     return (
         <form
@@ -343,6 +390,7 @@ export function InvestmentForm({
                                 <Select
                                     value={field.value}
                                     onValueChange={field.onChange}
+                                    disabled={ledgerLocked}
                                 >
                                     <SelectTrigger id="currencyId">
                                         <SelectValue placeholder="Select currency" />
@@ -361,6 +409,14 @@ export function InvestmentForm({
                                 </Select>
                             )}
                         />
+
+                        {ledgerLocked && (
+                            <p className="text-xs text-slate-400">
+                                Can&apos;t be changed once this
+                                investment has recorded
+                                transactions.
+                            </p>
+                        )}
                     </FormField>
                 </div>
             </Section>
@@ -377,8 +433,23 @@ export function InvestmentForm({
                             type="number"
                             min="0"
                             step="any"
+                            readOnly={ledgerLocked}
+                            className={
+                                ledgerLocked
+                                    ? "bg-slate-50 text-slate-700"
+                                    : undefined
+                            }
                             {...register("quantity")}
                         />
+
+                        {ledgerLocked && (
+                            <p className="text-xs text-slate-400">
+                                Managed automatically from
+                                this investment&apos;s
+                                transaction history. Add a
+                                transaction to change it.
+                            </p>
+                        )}
                     </FormField>
 
                     <FormField
@@ -391,8 +462,22 @@ export function InvestmentForm({
                             type="number"
                             min="0"
                             step="any"
+                            readOnly={ledgerLocked}
+                            className={
+                                ledgerLocked
+                                    ? "bg-slate-50 text-slate-700"
+                                    : undefined
+                            }
                             {...register("averageCost")}
                         />
+
+                        {ledgerLocked && (
+                            <p className="text-xs text-slate-400">
+                                Managed automatically from
+                                this investment&apos;s
+                                transaction history.
+                            </p>
+                        )}
                     </FormField>
 
                     <FormField
@@ -407,10 +492,31 @@ export function InvestmentForm({
                             step="any"
                             {...register("currentPrice")}
                         />
+
+                        <p
+                            className={
+                                isEdit &&
+                                priceFreshness ===
+                                    "stale"
+                                    ? "text-xs font-medium text-amber-600"
+                                    : "text-xs text-slate-400"
+                            }
+                        >
+                            Entered manually - not fetched
+                            automatically.
+                            {isEdit &&
+                                (priceUpdatedAt &&
+                                formatDate(priceUpdatedAt)
+                                    ? priceFreshness ===
+                                      "stale"
+                                        ? ` Stale since ${formatDate(priceUpdatedAt)} - this doesn't mean the price is wrong, just unconfirmed for a while. Update it above if it's changed.`
+                                        : ` Updated ${formatDate(priceUpdatedAt)}.`
+                                    : " Update date unknown.")}
+                        </p>
                     </FormField>
 
                     <FormField
-                        label="Current Value"
+                        label="Current Value (Quantity × Current Price)"
                         htmlFor="currentValue"
                         error={errors.currentValue?.message}
                     >
@@ -419,6 +525,8 @@ export function InvestmentForm({
                             type="number"
                             min="0"
                             step="any"
+                            readOnly
+                            className="bg-slate-50 text-slate-700"
                             {...register("currentValue")}
                         />
                     </FormField>

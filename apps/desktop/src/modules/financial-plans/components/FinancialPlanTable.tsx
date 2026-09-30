@@ -202,9 +202,17 @@ export function FinancialPlanTable({
                                             …
                                         </span>
                                     ) : (
-                                        <span className="text-xs text-slate-400">
-                                            —
-                                        </span>
+                                        <>
+                                            <div className="font-medium">
+                                                {formatAmount(
+                                                    0,
+                                                    currency
+                                                )}
+                                            </div>
+                                            <div className="mt-1 text-xs text-slate-400">
+                                                Current position
+                                            </div>
+                                        </>
                                     )}
                                 </td>
 

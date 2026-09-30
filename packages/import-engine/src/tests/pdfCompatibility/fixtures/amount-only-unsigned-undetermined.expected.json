@@ -1,0 +1,31 @@
+{
+  "source": "Synthetic: a bare positive Amount with no sign, marker, Debit/Credit column or balance. Nothing in the document states a direction, so it must be left undetermined (validation error) rather than guessed.",
+  "importType": "BANK_PDF",
+  "features": [
+    "amount-only",
+    "no-direction-evidence"
+  ],
+  "expect": {
+    "validationErrors": 2,
+    "balanceReconciliation": {
+      "checkedRows": 0,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-05-01",
+        "type": null,
+        "amount": 1234.56,
+        "balance": null,
+        "description": "Grocery Store"
+      },
+      {
+        "date": "2026-05-02",
+        "type": null,
+        "amount": 50000,
+        "balance": null,
+        "description": "Salary Credit"
+      }
+    ]
+  }
+}

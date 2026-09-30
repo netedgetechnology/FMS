@@ -21,11 +21,8 @@ export const categorySchema = z.object({
             "TRANSFER",
         ]),
 
-    financeScope:
-        z.enum([
-            "PERSONAL",
-            "BUSINESS",
-        ]),
+    // No financeScope: a category's scope is managed only from the
+    // Scopes screen (CategoryScopesDialog), never from Create/Edit.
 
     businessEntityId:
         z.string()

@@ -1,0 +1,55 @@
+{
+  "source": "Structure of a real Indian savings/current statement (anonymised): single Amount column followed by a DR/CR column, running balance, trailing branch-name column, dates on their own line for some rows, OPENING/CLOSING BALANCE lines.",
+  "importType": "BANK_PDF",
+  "features": [
+    "amount-with-drcr-column",
+    "balance",
+    "extra-trailing-column",
+    "date-on-own-line",
+    "multi-line-narration",
+    "opening-balance-line"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 4,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2025-10-01",
+        "type": "expense",
+        "amount": 2166,
+        "balance": 7834,
+        "description": "ECS/CS000000000001/TEST FINANCE LTD"
+      },
+      {
+        "date": "2025-10-03",
+        "type": "income",
+        "amount": 24000,
+        "balance": 31834,
+        "description": "INB/IFT/TEST CLIENT PRIVATE LIMITED/TPARTY T"
+      },
+      {
+        "date": "2025-10-05",
+        "type": "income",
+        "amount": 10800,
+        "balance": 42634
+      },
+      {
+        "date": "2025-10-28",
+        "type": "expense",
+        "amount": 18,
+        "balance": 42616,
+        "description": "GST @18% on Monthly Service Chrgs"
+      },
+      {
+        "date": "2025-10-28",
+        "type": "expense",
+        "amount": 100,
+        "balance": 42516,
+        "description": "Monthly Service Chrgs"
+      }
+    ]
+  }
+}

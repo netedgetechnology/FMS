@@ -1,3 +1,4 @@
+import { transferDirectionForType } from "@/core/accounting/transferClassification";
 import { Repository } from "@/core/database/engine/Repository";
 
 import {
@@ -45,6 +46,7 @@ export class TransactionRepository extends Repository {
         counterparty,
         branch,
         type,
+        transfer_direction AS transferDirection,
         amount,
         transaction_date AS transactionDate,
         reference_number AS referenceNumber,
@@ -79,6 +81,30 @@ export class TransactionRepository extends Repository {
         );
     }
 
+    /**
+     * Whether any live (non-soft-deleted) transaction is booked on
+     * this account - used to decide whether a loan's linked liability
+     * account is safe to remove alongside the loan itself
+     * (LoanService.delete(), Loans - Delete Loan). An account with any
+     * real transaction on it is never deleted automatically.
+     */
+    async existsForAccount(
+        accountId: string
+    ): Promise<boolean> {
+        const rows = await this.select<{ id: string }>(
+            `
+            SELECT id
+            FROM transactions
+            WHERE account_id = ?
+              AND deleted_at IS NULL
+            LIMIT 1
+            `,
+            [accountId]
+        );
+
+        return rows.length > 0;
+    }
+
     async getById(id: string): Promise<Transaction | null> {
         const rows = await this.select<Transaction>(
             `
@@ -107,6 +133,7 @@ export class TransactionRepository extends Repository {
                 counterparty,
                 branch,
                 type,
+                transfer_direction,
                 amount,
                 transaction_date,
                 reference_number,
@@ -128,7 +155,7 @@ export class TransactionRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 transaction.id,
@@ -139,6 +166,11 @@ export class TransactionRepository extends Repository {
                 transaction.counterparty,
                 transaction.branch,
                 transaction.type,
+                // One source of direction: only a transfer stores one -
+                // an income/expense row's direction IS its type.
+                transaction.type === "transfer"
+                    ? transaction.transferDirection ?? null
+                    : null,
                 transaction.amount,
                 transaction.transactionDate,
                 transaction.referenceNumber,
@@ -176,6 +208,7 @@ export class TransactionRepository extends Repository {
                 counterparty = ?,
                 branch = ?,
                 type = ?,
+                transfer_direction = ?,
                 amount = ?,
                 transaction_date = ?,
                 reference_number = ?,
@@ -204,6 +237,10 @@ export class TransactionRepository extends Repository {
                 transaction.counterparty ?? null,
                 transaction.branch ?? null,
                 transaction.type,
+                // One source of direction - see create().
+                transaction.type === "transfer"
+                    ? transaction.transferDirection ?? null
+                    : null,
                 transaction.amount,
                 transaction.transactionDate,
                 transaction.referenceNumber ?? null,
@@ -228,6 +265,9 @@ export class TransactionRepository extends Repository {
 
     // A transaction is a duplicate only when it's for the same account,
     // same date, same type, and same amount (never touched or relaxed -
+    // a stored transfer counts as the Debit/Credit side its
+    // transfer_direction represents, so a row later re-classified as a
+    // Transfer is still recognised on re-import -
     // this is what actually distinguishes one transaction from
     // another), AND its identity is then confirmed by a priority/
     // fallback chain - never by treating Payee, narration, and
@@ -254,6 +294,15 @@ export class TransactionRepository extends Repository {
     // happen to share a bank's "no reference" placeholder can never
     // collapse into duplicates of each other. Soft-deleted transactions
     // (deleted_at IS NOT NULL) never participate at all.
+    //
+    // `excludeTransactionIds` never changes the matching rules above -
+    // it only removes specific transactions from the pool being matched
+    // against. Statement import (ImportService.executeCandidates) passes
+    // the transactions its own batch has created so far, so a row is
+    // only ever compared with transactions that existed BEFORE that
+    // import started - two legitimately identical rows on one statement
+    // (same date/amount/narration/reference) must both import, while a
+    // re-import of an already-imported statement is still caught.
     async findDuplicate(
         accountId: string,
         transactionDate: string,
@@ -261,8 +310,13 @@ export class TransactionRepository extends Repository {
         amount: number,
         referenceNumber: string | null,
         payee: string,
-        description: string
+        description: string,
+        excludeTransactionIds?: ReadonlySet<string>
     ): Promise<Transaction | null> {
+        const hasExclusions =
+            excludeTransactionIds !== undefined &&
+            excludeTransactionIds.size > 0;
+
         const hasReference =
             !isPlaceholderReference(referenceNumber);
 
@@ -277,7 +331,10 @@ export class TransactionRepository extends Repository {
                 FROM transactions
                 WHERE account_id = ?
                   AND transaction_date = ?
-                  AND type = ?
+                  AND (
+                      type = ?
+                      OR (type = 'transfer' AND transfer_direction = ?)
+                  )
                   AND amount = ?
                   AND deleted_at IS NULL
                   AND (
@@ -305,12 +362,13 @@ export class TransactionRepository extends Repository {
                               LOWER(TRIM(?))
                       )
                   )
-                LIMIT 1
+                ${hasExclusions ? "" : "LIMIT 1"}
                 `,
                 [
                     accountId,
                     transactionDate,
                     type,
+                    transferDirectionForType(type),
                     amount,
                     hasReference ? 1 : 0,
                     referenceNumber,
@@ -318,6 +376,88 @@ export class TransactionRepository extends Repository {
                     description,
                     hasNarration ? 1 : 0,
                     payee,
+                    payee,
+                ]
+            );
+
+        // Filtered here rather than via a bound `id NOT IN (...)` list,
+        // which a large statement (1000+ rows) would push past SQLite's
+        // bound-parameter limit. The candidate set is already narrowed to
+        // one account/date/amount/direction, so it is always tiny.
+        if (hasExclusions) {
+            return (
+                matches.find(
+                    match => !excludeTransactionIds!.has(match.id)
+                ) ?? null
+            );
+        }
+
+        return matches[0] ?? null;
+    }
+
+    /**
+     * A lighter-weight duplicate check for the manual Add Transaction
+     * flow (AddTransactionDialog) - separate from findDuplicate() above,
+     * which statement import de-duplication (ImportService) relies on
+     * and which this must never affect.
+     *
+     * findDuplicate()'s narration/reference-first priority cascade is
+     * correct for imports, where bank narration is the strongest
+     * identity signal available - but it produces false negatives for
+     * manual entry. A non-empty incoming Description forces a
+     * narration-only comparison against the existing row's narration
+     * and ignores an otherwise-matching payee entirely; two manually
+     * entered transactions that are identical in every way a user would
+     * call "the same transaction" (account, category, type, amount,
+     * date, payee) can differ only in whether/what Description text was
+     * typed and findDuplicate() would then never flag them.
+     *
+     * This instead matches on the fields that actually define "the same
+     * transaction" for manual entry: account, category (including both
+     * being uncategorized), type, amount, date and payee. Notes,
+     * Description and Reference Number never gate the match - a
+     * legitimate second transaction with a different note is still a
+     * different transaction, but this check exists to catch the
+     * accidental double-click/double-submit case, not to distinguish
+     * genuinely different entries by their free-text fields.
+     */
+    async findManualDuplicate(
+        accountId: string,
+        categoryId: string | null,
+        transactionDate: string,
+        type: string,
+        amount: number,
+        payee: string
+    ): Promise<Transaction | null> {
+        const matches =
+            await this.select<Transaction>(
+                `
+                SELECT
+                    ${this.selectFields}
+                FROM transactions
+                WHERE account_id = ?
+                  AND transaction_date = ?
+                  AND (
+                      type = ?
+                      OR (type = 'transfer' AND transfer_direction = ?)
+                  )
+                  AND amount = ?
+                  AND deleted_at IS NULL
+                  AND (
+                      (category_id IS NULL AND ? IS NULL)
+                      OR category_id = ?
+                  )
+                  AND LOWER(TRIM(payee)) = LOWER(TRIM(?))
+                LIMIT 1
+                `,
+                [
+                    accountId,
+                    transactionDate,
+                    type,
+                    transferDirectionForType(type),
+                    amount,
+                    categoryId,
+                    categoryId,
                     payee,
                 ]
             );
@@ -333,6 +473,92 @@ export class TransactionRepository extends Repository {
             WHERE id = ?
             `,
             [id]
+        );
+    }
+
+    // The live (non-deleted) transactions among `ids`, in one query. The
+    // ids travel as a single JSON array bind (json_each), so there's no
+    // bound-parameter limit however many are selected.
+    async getByIds(
+        ids: readonly string[]
+    ): Promise<Transaction[]> {
+        return await this.select<Transaction>(
+            `
+            SELECT
+                ${this.selectFields}
+            FROM transactions
+            WHERE id IN (SELECT value FROM json_each(?))
+              AND deleted_at IS NULL
+            `,
+            [JSON.stringify(ids)]
+        );
+    }
+
+    // Bulk "Change Category": sets category_id (and updated_at) on every
+    // given live transaction in ONE statement - SQLite applies a single
+    // UPDATE atomically, so either every row changes or none does.
+    // `makeTransfer` (a TRANSFER category): the same statement also sets
+    // type = 'transfer' and keeps each row's money direction in
+    // transfer_direction (expense -> OUT, income -> IN; an existing
+    // transfer keeps its own) - so category and type can never be left
+    // half-updated. Nothing else is touched: amount, account, dates,
+    // payee, sub-category, reconciliation state stay exactly as they are.
+    // Deleted transactions are never updated.
+    async updateCategoryForIds(
+        ids: readonly string[],
+        categoryId: string,
+        makeTransfer = false
+    ): Promise<void> {
+        await this.execute(
+            makeTransfer
+                ? `
+            UPDATE transactions
+            SET
+                category_id = ?,
+                transfer_direction = CASE type
+                    WHEN 'expense' THEN 'OUT'
+                    WHEN 'income' THEN 'IN'
+                    ELSE transfer_direction
+                END,
+                type = 'transfer',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (SELECT value FROM json_each(?))
+              AND deleted_at IS NULL
+            `
+                : `
+            UPDATE transactions
+            SET
+                category_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (SELECT value FROM json_each(?))
+              AND deleted_at IS NULL
+            `,
+            [categoryId, JSON.stringify(ids)]
+        );
+    }
+
+    // Bulk "Move to Account": reassigns every given live transaction to
+    // `accountId` in ONE statement - SQLite applies a single UPDATE
+    // atomically, so either every row moves or none does. Only account_id
+    // (and updated_at) change: id, type/direction, amount, dates, payee,
+    // category, notes, references, reconciliation state and import
+    // linkage stay exactly as they are. Rows already in `accountId` and
+    // deleted transactions are left alone.
+    async moveToAccountForIds(
+        ids: readonly string[],
+        accountId: string
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE transactions
+            SET
+                account_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (SELECT value FROM json_each(?))
+              AND deleted_at IS NULL
+              AND account_id <> ?
+            `,
+            [accountId, JSON.stringify(ids), accountId]
         );
     }
 

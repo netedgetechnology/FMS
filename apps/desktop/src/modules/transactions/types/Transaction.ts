@@ -3,6 +3,10 @@ export type TransactionType =
     | "expense"
     | "transfer";
 
+export type TransferDirection =
+    | "OUT"
+    | "IN";
+
 export type TransactionStatus =
     | "PENDING"
     | "CLEARED";
@@ -57,6 +61,12 @@ export interface Transaction {
     branch: string | null;
 
     type: TransactionType;
+
+    // Only for type "transfer": which way it moves money on this account
+    // ("OUT" = leaves, "IN" = arrives). null otherwise, or for a legacy
+    // transfer whose direction was never recorded. Always present on rows
+    // read from the database; optional for hand-built objects.
+    transferDirection?: TransferDirection | null;
 
     amount: number;
 
@@ -113,6 +123,8 @@ export interface CreateTransactionRequest {
     branch?: string | null;
 
     type: TransactionType;
+
+    transferDirection?: TransferDirection | null;
 
     amount: number;
 

@@ -5,9 +5,26 @@ import { Account } from "../types";
 
 interface AccountTableProps {
     accounts: Account[];
+    /**
+     * Each account's current balance (opening balance + every
+     * income/expense transaction posted against it since - see
+     * modules/accounts/utils/accountBalance.ts), keyed by account id.
+     * Optional and falls back to the account's raw, un-recalculated
+     * openingBalance so this table still renders something sensible
+     * before the caller's transactions have finished loading.
+     */
+    balances?: ReadonlyMap<string, number>;
     onView: (account: Account) => void;
     onEdit: (account: Account) => void;
     onDelete: (account: Account) => void;
+    /**
+     * True for a LOAN-type account Delete Loan preserved because it
+     * still had a live transaction on it - see
+     * services/unlinkedLoanAccount.ts. Optional so callers that never
+     * pass it (none exist today besides AccountsPage) keep every
+     * account showing its ordinary Active/Inactive status.
+     */
+    isUnlinkedLoanAccount?: (account: Account) => boolean;
 }
 
 function formatType(type: string): string {
@@ -21,9 +38,11 @@ function formatType(type: string): string {
 
 export function AccountTable({
     accounts,
+    balances,
     onView,
     onEdit,
     onDelete,
+    isUnlinkedLoanAccount,
 }: AccountTableProps) {
     const formatMoney = useMoneyFormatter();
     return (
@@ -48,7 +67,7 @@ export function AccountTable({
                         </th>
 
                         <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
-                            Balance
+                            Current Balance
                         </th>
 
                         <th className="px-4 py-2.5 text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
@@ -100,19 +119,34 @@ export function AccountTable({
                             <td className="px-4 py-3 text-right text-sm font-medium text-slate-800">
                                 {account.type === "INVESTMENT"
                                     ? "—"
-                                    : formatMoney(Number(account.openingBalance ?? 0), account.currencyId)}
+                                    : formatMoney(
+                                          balances?.get(account.id) ??
+                                              Number(account.openingBalance ?? 0),
+                                          account.currencyId
+                                      )}
                             </td>
 
                             <td className="px-4 py-3 text-center">
-                                <span
-                                    className={
-                                        account.isActive
-                                            ? "inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700"
-                                            : "inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500"
-                                    }
-                                >
-                                    {account.isActive ? "Active" : "Inactive"}
-                                </span>
+                                {isUnlinkedLoanAccount?.(
+                                    account
+                                ) ? (
+                                    <span
+                                        title="The loan this account belonged to was deleted. This account was kept because it still has transactions on it - manage or delete it here directly."
+                                        className="inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700"
+                                    >
+                                        Unlinked Loan Account
+                                    </span>
+                                ) : (
+                                    <span
+                                        className={
+                                            account.isActive
+                                                ? "inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700"
+                                                : "inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500"
+                                        }
+                                    >
+                                        {account.isActive ? "Active" : "Inactive"}
+                                    </span>
+                                )}
                             </td>
 
                             <td className="px-4 py-3">

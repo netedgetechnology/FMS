@@ -926,6 +926,12 @@ describe("D5 - warning-code coverage", () => {
                 ""
         );
 
+        // A categoryType/role mismatch alone (e.g. SPENDING on an INCOME
+        // category) is no longer INVALID_CATEGORY_TYPE - categoryType is
+        // a soft suggestion (see resolveCategoryTransactionType) and the
+        // per-transaction type filter is what actually gates CONTRIBUTION
+        // vs SPENDING flow. Only a TRANSFER category is structurally
+        // rejected.
         const badCat = run(
             plan({
                 planType: "CASHFLOW_TARGET",
@@ -937,7 +943,7 @@ describe("D5 - warning-code coverage", () => {
                 categories: {
                     C1: {
                         name: "x",
-                        categoryType: "INCOME",
+                        categoryType: "TRANSFER",
                     },
                 },
             })
@@ -2000,6 +2006,190 @@ describe("D10 - behavioral invariants", () => {
                 ledger
             )
         ).not.toThrow();
+    });
+});
+
+// =====================================================
+// D13 - a category's categoryType is a soft suggestion, not
+// authoritative (see resolveCategoryTransactionType in the categories
+// module) - only a TRANSFER category is structurally rejected. The
+// per-transaction `type` filter is what actually gates CONTRIBUTION
+// (income) vs SPENDING (expense) flow.
+// =====================================================
+
+describe("D13 - category categoryType/role mismatch is not INVALID_CATEGORY_TYPE", () => {
+    it("a CONTRIBUTION component on an EXPENSE-typed category still sums its real income transactions", () => {
+        const r = run(
+            plan(),
+            [
+                comp(
+                    "CATEGORY",
+                    "CONTRIBUTION",
+                    "SALARY"
+                ),
+            ],
+            makeLedger({
+                accounts: { S1: {} },
+                categories: {
+                    SALARY: {
+                        name: "Salary",
+                        categoryType: "EXPENSE",
+                    },
+                },
+                transactions: [
+                    tx({
+                        accountId: "S1",
+                        type: "income",
+                        amount: 1250,
+                        transactionDate:
+                            "2026-09-05",
+                        categoryId: "SALARY",
+                    }),
+                ],
+            })
+        );
+
+        expect(r.components[0]).toMatchObject({
+            available: true,
+            unavailableReason: null,
+            periodFlow: 1250,
+            lifetimeFlow: 1250,
+        });
+    });
+
+    it("a TRANSFER category is still rejected (INVALID_CATEGORY_TYPE), regardless of role", () => {
+        const r = run(
+            plan(),
+            [
+                comp(
+                    "CATEGORY",
+                    "CONTRIBUTION",
+                    "T1"
+                ),
+            ],
+            makeLedger({
+                categories: {
+                    T1: {
+                        name: "Internal Transfer",
+                        categoryType: "TRANSFER",
+                    },
+                },
+            })
+        );
+
+        expect(r.components[0]).toMatchObject({
+            available: false,
+            unavailableReason:
+                "INVALID_CATEGORY_TYPE",
+        });
+    });
+});
+
+// =====================================================
+// D14 - regression: an ACCUMULATION plan's "Current position"
+// (positionValue) must never absorb a CATEGORY·CONTRIBUTION component's
+// flow, even when that category's transactions post into an account that
+// is ALSO tracked as an ACCOUNT·ASSET component on the same plan.
+//
+// Reported as a bug ("Goal Link Test Plan Current should be -44,600, not
+// -46,850") after the category source-eligibility fix let a Salary
+// category component be added. Investigated and confirmed NOT a
+// calculation bug: Salary's income transactions post to the very same
+// account already counted by an ASSET component ("Family Member Account
+// Updated"), so that account's balance already includes them - adding
+// the CONTRIBUTION flow into positionValue on top would double-count the
+// same money. positionValue (STOCK) and currentPeriodInflow/lifetimeInflow
+// (FLOW) are deliberately separate totals for exactly this reason; the
+// contribution is real and computed (see the non-zero inflow assertions
+// below), it is just never merged into "Current".
+// =====================================================
+
+describe("D14 - CONTRIBUTION on the same account as an ASSET component never inflates positionValue", () => {
+    it("reproduces the reported figures: two ASSET accounts + a Salary CONTRIBUTION on one of them", () => {
+        const r = run(
+            plan(),
+            [
+                comp(
+                    "ACCOUNT",
+                    "ASSET",
+                    "FAMILY",
+                    { id: "c-family" }
+                ),
+                comp(
+                    "ACCOUNT",
+                    "ASSET",
+                    "NETEDGE",
+                    { id: "c-netedge" }
+                ),
+                comp(
+                    "CATEGORY",
+                    "CONTRIBUTION",
+                    "SALARY",
+                    { id: "c-salary" }
+                ),
+            ],
+            makeLedger({
+                accounts: {
+                    FAMILY: { openingBalance: 0 },
+                    NETEDGE: {
+                        openingBalance: -49_100,
+                    },
+                },
+                categories: {
+                    SALARY: {
+                        name: "Salary",
+                        categoryType: "EXPENSE", // soft-typed, as in the reported bug
+                    },
+                },
+                transactions: [
+                    tx({
+                        accountId: "FAMILY",
+                        type: "income",
+                        amount: 1250,
+                        transactionDate:
+                            "2026-09-03",
+                        categoryId: "SALARY",
+                    }),
+                    tx({
+                        accountId: "FAMILY",
+                        type: "income",
+                        amount: 1000,
+                        transactionDate:
+                            "2026-09-05",
+                        categoryId: "SALARY",
+                    }),
+                ],
+            })
+        );
+
+        const salary = r.components.find(
+            c => c.componentId === "c-salary"
+        )!;
+
+        // The contribution itself is real and computed...
+        expect(salary.available).toBe(true);
+        expect(salary.periodFlow).toBe(2250);
+        expect(salary.lifetimeFlow).toBe(2250);
+
+        // ...FAMILY's balance already reflects those same two
+        // transactions (0 opening + 1250 + 1000 = 2250)...
+        const family = r.components.find(
+            c => c.componentId === "c-family"
+        )!;
+        expect(family.positionValue).toBe(2250);
+
+        // ...so "Current" is the two ASSET balances only - NOT
+        // 2250 + (-49100) + 2250. Merging would double-count the
+        // 2250 that is already inside FAMILY's balance.
+        expect(r.totals.positionValue).toBe(-46_850);
+
+        // The contribution is not lost - it is a separate FLOW total.
+        expect(r.totals.currentPeriodInflow).toBe(
+            2250
+        );
+        expect(r.totals.lifetimeInflow).toBe(2250);
+
+        expect(r.status).toBe("COMPLETE");
     });
 });
 

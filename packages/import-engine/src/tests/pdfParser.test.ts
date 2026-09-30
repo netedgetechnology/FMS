@@ -38,6 +38,7 @@ vi.mock("pdf-parse", () => {
 });
 
 import { parsePdf } from "../parser/pdfParser";
+import { processPdf } from "../pipeline";
 
 // configurePdfWorker() (internal to parsePdf) reads window.location.origin -
 // a real WebView/browser global this package's production code is always
@@ -512,5 +513,112 @@ describe("PDF parser - universal structural extraction (amount+balance, amount-o
         expect(
             result.document.rows[1].values[1],
         ).not.toMatch(/Customer Id|Transaction details|Nominee Details|of 5/);
+    });
+});
+
+// Regression for a real failing import (an overdraft-account statement
+// whose tab-separated table prints the unused Debit/Credit cell as 0.00):
+//
+//   02-APR-2025 <tab> 02-APR-2025 <tab> NET TXN: BILLPAY TESTREF0001
+//   CARDPAY
+//   111600000001 <tab> 1,000.00 <tab> 0.00 <tab> -56,500.00
+//
+// The old tail parser only modelled "amount [DR/CR] balance", so it took
+// the LAST two numbers - the 0.00 filler became the amount and the row
+// failed validation ("A valid positive amount is required") - and the
+// "B/F" carry-forward row became a fake 50,000.00 debit. Traced through
+// the whole import path here: PDF bytes -> pdf-parse text -> structural
+// parse -> column mapping -> canonical normalization -> validation.
+describe("PDF import - zero-filled Debit/Credit cells (traced regression)", () => {
+    const T = " 	";
+
+    const statement = [
+        "TXN DATE" + T + "VALUE DATE" + T + "DESCRIPTION" + T + "REFERENCE" + T + "DEBITS" + T + "CREDITS" + T + "BALANCE",
+        "01-APR-2025" + T + "01-APR-2025" + T + "B/F ..." + T + "50,000.00" + T + "0.00" + T + "-50,000.00",
+        "02-APR-2025" + T + "02-APR-2025" + T + "NET TXN: BILLPAY TESTREF0001",
+        "CARDPAY",
+        "111600000001" + T + "1,000.00" + T + "0.00" + T + "-51,000.00",
+        "05-APR-2025" + T + "05-APR-2025" + T + "LAP DOD INT MAR25" + T + "000000000000" + T + "0.00" + T + "20,000.00" + T + "-31,000.00",
+    ];
+
+    it("parses the debit from its own column, not the 0.00 filler, and drops the B/F row", async () => {
+        setPdfText(statement);
+
+        const result = await parsePdf(
+            new ArrayBuffer(0),
+        );
+
+        expect(
+            result.document.rows.map(
+                (row) => row.values,
+            ),
+        ).toEqual([
+            [
+                "02-APR-2025",
+                "NET TXN: BILLPAY TESTREF0001 CARDPAY",
+                "1000.00",
+                "DR",
+                "111600000001",
+                "1000.00",
+                "",
+                "-51000.00",
+            ],
+            [
+                "05-APR-2025",
+                "LAP DOD INT MAR25",
+                "20000.00",
+                "CR",
+                "000000000000",
+                "",
+                "20000.00",
+                "-31000.00",
+            ],
+        ]);
+    });
+
+    it("imports as valid canonical transactions end to end", async () => {
+        setPdfText(statement);
+
+        const result = await processPdf(
+            new ArrayBuffer(0),
+            "BANK_PDF",
+        );
+
+        expect(result.validation.errors).toEqual([]);
+
+        expect(
+            result.candidates.map((candidate) => ({
+                date: candidate.transactionDate,
+                type: candidate.type,
+                amount: candidate.amount,
+                balance: candidate.balance,
+                reference:
+                    candidate.referenceNumber,
+            })),
+        ).toEqual([
+            {
+                date: "2025-04-02",
+                type: "expense",
+                amount: 1000,
+                balance: -51000,
+                reference: "111600000001",
+            },
+            {
+                date: "2025-04-05",
+                type: "income",
+                amount: 20000,
+                balance: -31000,
+                reference: "000000000000",
+            },
+        ]);
+
+        expect(
+            result.balanceReconciliation,
+        ).toEqual({
+            checkedRows: 1,
+            mismatchedRowNumbers: [],
+            mismatches: [],
+            order: "ascending",
+        });
     });
 });

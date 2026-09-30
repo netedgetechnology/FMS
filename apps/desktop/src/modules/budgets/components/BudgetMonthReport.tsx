@@ -11,6 +11,7 @@ import {
     formatPercentUsed,
     type BudgetReportRow,
     type BudgetStatusKey,
+    type BudgetViewMode,
 } from "../services";
 
 export interface BudgetMonthReportProps {
@@ -20,6 +21,14 @@ export interface BudgetMonthReportProps {
     /** Show the currency heading (only needed when >1 currency scope). */
     showCurrencyHeading: boolean;
     monthLabel: string;
+    /**
+     * Which Budgets page view this summary is for (defaults to month).
+     * "all" spans every budget's own period (calculateAllBudgetsSpending)
+     * and "year" / "range" a span of months
+     * (calculateMonthRangeBudgetSpending), so the month-specific copy is
+     * swapped.
+     */
+    viewMode?: BudgetViewMode;
     categoryNameById: Map<string, string>;
     budgetsById: Map<string, Budget>;
     search: string;
@@ -28,6 +37,13 @@ export interface BudgetMonthReportProps {
     onDelete: (budget: Budget) => void;
     onAddBudget: () => void;
 }
+
+const TOTAL_SPENDING_LABEL: Record<BudgetViewMode, string> = {
+    all: "Total spending in budget periods",
+    year: "Total spending this year",
+    month: "Total spending this month",
+    range: "Total spending in this range",
+};
 
 const STATUS_CLASSES: Record<BudgetStatusKey, string> = {
     over: "bg-red-50 text-red-700",
@@ -41,6 +57,7 @@ export function BudgetMonthReport({
     currencyCode,
     showCurrencyHeading,
     monthLabel,
+    viewMode = "month",
     categoryNameById,
     budgetsById,
     search,
@@ -101,9 +118,9 @@ export function BudgetMonthReport({
                         value={money(
                             summary.budgetedActual
                         )}
-                        hint={`Total spending this month: ${money(
-                            summary.totalExpense
-                        )}`}
+                        hint={`${
+                            TOTAL_SPENDING_LABEL[viewMode]
+                        }: ${money(summary.totalExpense)}`}
                     />
 
                     <SummaryTile
@@ -163,7 +180,9 @@ export function BudgetMonthReport({
             {!hasBudgets && (
                 <div className="flex flex-col items-center gap-3 px-5 py-12 text-center">
                     <p className="text-sm text-slate-500">
-                        No budgets for {monthLabel}
+                        {viewMode === "all"
+                            ? "No active budgets"
+                            : `No budgets in ${monthLabel}`}
                         {showCurrencyHeading &&
                         currencyCode
                             ? ` in ${currencyCode}`
@@ -176,8 +195,13 @@ export function BudgetMonthReport({
                             {money(
                                 summary.totalExpense
                             )}{" "}
-                            of spending this month is
-                            shown as unbudgeted above.
+                            of spending{" "}
+                            {viewMode === "year"
+                                ? "this year"
+                                : viewMode === "range"
+                                  ? "in this range"
+                                  : "this month"}{" "}
+                            is shown as unbudgeted above.
                         </p>
                     )}
 

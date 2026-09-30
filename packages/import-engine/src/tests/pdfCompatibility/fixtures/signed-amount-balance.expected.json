@@ -1,0 +1,49 @@
+{
+  "source": "Synthetic: one signed Amount column (leading minus, explicit plus, accounting parentheses, unsigned) plus running balance.",
+  "importType": "BANK_PDF",
+  "features": [
+    "signed-amount",
+    "negative-amount",
+    "parenthesised-negative",
+    "explicit-plus",
+    "balance",
+    "opening-balance-line"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 3,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-02-01",
+        "type": "expense",
+        "amount": 4.5,
+        "balance": 495.5,
+        "description": "Coffee Shop"
+      },
+      {
+        "date": "2026-02-02",
+        "type": "income",
+        "amount": 2500,
+        "balance": 2995.5,
+        "description": "Payroll Deposit"
+      },
+      {
+        "date": "2026-02-03",
+        "type": "expense",
+        "amount": 120,
+        "balance": 2875.5,
+        "description": "Utility Bill"
+      },
+      {
+        "date": "2026-02-04",
+        "type": "income",
+        "amount": 1000,
+        "balance": 3875.5,
+        "description": "Transfer from Savings"
+      }
+    ]
+  }
+}

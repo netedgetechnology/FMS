@@ -1,0 +1,44 @@
+{
+  "source": "Synthetic: Deposits column printed BEFORE Withdrawals, unused cell 0.00, ISO dates, no opening balance - the first row's direction can only come from the header's column order.",
+  "importType": "BANK_PDF",
+  "features": [
+    "credit-before-debit-column-order",
+    "zero-filled-unused-cell",
+    "iso-date",
+    "no-opening-balance"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 3,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-01-05",
+        "type": "income",
+        "amount": 50000,
+        "balance": 50500,
+        "description": "Salary ACME CORP"
+      },
+      {
+        "date": "2026-01-06",
+        "type": "expense",
+        "amount": 15000,
+        "balance": 35500
+      },
+      {
+        "date": "2026-01-09",
+        "type": "income",
+        "amount": 1200.5,
+        "balance": 36700.5
+      },
+      {
+        "date": "2026-01-10",
+        "type": "expense",
+        "amount": 9999.99,
+        "balance": 26700.51
+      }
+    ]
+  }
+}

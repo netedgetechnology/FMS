@@ -22,6 +22,7 @@ const TRANSACTIONS_TABLE_SQL = `
 CREATE TABLE transactions (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
+    category_id TEXT,
     payee TEXT NOT NULL,
     type TEXT NOT NULL,
     amount REAL NOT NULL,
@@ -75,6 +76,27 @@ const FIND_DUPLICATE_SQL = `
     LIMIT 1
 `;
 
+// Mirrors TransactionRepository.findManualDuplicate exactly - unlike
+// FIND_DUPLICATE_SQL above, every field here is an equal-weight
+// requirement (no priority/fallback chain): account, category
+// (including both being uncategorized), type, amount, date and payee
+// must ALL match. Update both together.
+const FIND_MANUAL_DUPLICATE_SQL = `
+    SELECT id
+    FROM transactions
+    WHERE account_id = ?
+      AND transaction_date = ?
+      AND type = ?
+      AND amount = ?
+      AND deleted_at IS NULL
+      AND (
+          (category_id IS NULL AND ? IS NULL)
+          OR category_id = ?
+      )
+      AND LOWER(TRIM(payee)) = LOWER(TRIM(?))
+    LIMIT 1
+`;
+
 // Mirrors TransactionRepository.delete exactly.
 const DELETE_SQL = `
     UPDATE transactions
@@ -85,6 +107,7 @@ const DELETE_SQL = `
 interface TransactionRow {
     id: string;
     accountId: string;
+    categoryId?: string | null;
     payee: string;
     type: string;
     amount: number;
@@ -107,12 +130,13 @@ function insertTransaction(
     db.prepare(
         `
         INSERT INTO transactions
-        (id, account_id, payee, type, amount, transaction_date, reference_number, original_narration, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, account_id, category_id, payee, type, amount, transaction_date, reference_number, original_narration, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
     ).run(
         row.id,
         row.accountId,
+        row.categoryId ?? null,
         row.payee,
         row.type,
         row.amount,
@@ -121,6 +145,30 @@ function insertTransaction(
         row.originalNarration,
         row.notes ?? null
     );
+}
+
+function findManualDuplicate(
+    db: DatabaseSync,
+    accountId: string,
+    categoryId: string | null,
+    transactionDate: string,
+    type: string,
+    amount: number,
+    payee: string
+): { id: string } | null {
+    const row = db
+        .prepare(FIND_MANUAL_DUPLICATE_SQL)
+        .get(
+            accountId,
+            transactionDate,
+            type,
+            amount,
+            categoryId,
+            categoryId,
+            payee
+        ) as { id: string } | undefined;
+
+    return row ?? null;
 }
 
 function findDuplicate(
@@ -535,6 +583,390 @@ describe("TransactionRepository.findDuplicate", () => {
             "UTR12345",
             "Merchant A (renamed)",
             "Merchant A (renamed) purchase"
+        );
+
+        expect(duplicate?.id).toBe("txn-1");
+    });
+});
+
+// Regression: a manual re-entry of "Family Member Account -> Salary ->
+// Income -> 1000" was saved without any duplicate warning, because
+// AddTransactionDialog called findDuplicate() (above), whose
+// narration-priority cascade requires an exact original_narration match
+// whenever the incoming Description is non-empty - and ignores Payee
+// entirely in that case. The existing row had no narration; the new
+// one had Description text ("15 September 2026"), so the narration
+// branch failed to match and the payee-fallback branch (which WOULD
+// have matched) never ran. findManualDuplicate is the fix: a single,
+// non-cascading check for exactly the fields that define "the same
+// transaction" for manual entry - Description/narration and Reference
+// Number are never part of it.
+describe("TransactionRepository.findManualDuplicate", () => {
+    it("1. exact duplicate (same account/category/type/amount/date/payee) is detected", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate?.id).toBe("txn-1");
+    });
+
+    it("2. regression - differing Description/narration never prevents detection (the reported bug)", () => {
+        const db = createDb();
+
+        // The existing row has no narration at all.
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        // The new submission has Description text the existing row
+        // doesn't share - findDuplicate() would miss this; this must not.
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate?.id).toBe("txn-1");
+    });
+
+    it("3. same amount but a different date is NOT a duplicate", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-14",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("4. same transaction with different Notes is still a duplicate - Notes never gates the match", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+            notes: "Original note",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate?.id).toBe("txn-1");
+    });
+
+    it("5. a different account is NOT a duplicate", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "netedge-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("6. a different category is NOT a duplicate", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-gift",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("7. both uncategorized (null category on both sides) still matches", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: null,
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            null,
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate?.id).toBe("txn-1");
+    });
+
+    it("8. a categorized existing row vs. an uncategorized new submission is NOT a duplicate", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            null,
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("9. a different transaction type is NOT a duplicate", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "expense",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("10. a different amount is NOT a duplicate", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1500,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("11. a soft-deleted transaction never blocks re-saving the same values", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        softDelete(db, "txn-1");
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
+        );
+
+        expect(duplicate).toBeNull();
+    });
+
+    it("12. payee matching is case-insensitive and trims whitespace, like findDuplicate's", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "  Family Member Account  ",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: null,
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "family member account"
+        );
+
+        expect(duplicate?.id).toBe("txn-1");
+    });
+
+    it("13. a different Reference Number never prevents detection - Reference Number is not part of this check", () => {
+        const db = createDb();
+
+        insertTransaction(db, {
+            id: "txn-1",
+            accountId: "family-account",
+            categoryId: "cat-salary",
+            payee: "Family Member Account",
+            type: "income",
+            amount: 1000,
+            transactionDate: "2026-09-15",
+            referenceNumber: "UTR-OLD",
+            originalNarration: "",
+        });
+
+        const duplicate = findManualDuplicate(
+            db,
+            "family-account",
+            "cat-salary",
+            "2026-09-15",
+            "income",
+            1000,
+            "Family Member Account"
         );
 
         expect(duplicate?.id).toBe("txn-1");

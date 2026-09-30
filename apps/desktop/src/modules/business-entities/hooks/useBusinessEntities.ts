@@ -1,8 +1,11 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react";
+
+import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 
 import {
     BusinessEntityService,
@@ -28,8 +31,14 @@ export function useBusinessEntities() {
     const [error, setError] =
         useState<string | null>(null);
 
+    // Guards against a slower, still in-flight refresh overwriting state
+    // with stale data after a newer refresh has already resolved - see
+    // LatestRequestGuard.
+    const requestGuard = useRef(new LatestRequestGuard());
+
     const loadBusinessEntities =
         useCallback(async () => {
+            const requestId = requestGuard.current.start();
 
             try {
                 setLoading(true);
@@ -38,9 +47,17 @@ export function useBusinessEntities() {
                 const data =
                     await service.getAll();
 
+                if (requestGuard.current.isStale(requestId)) {
+                    return;
+                }
+
                 setBusinessEntities(data);
 
             } catch (err) {
+
+                if (requestGuard.current.isStale(requestId)) {
+                    return;
+                }
 
                 console.error(
                     "BUSINESS ENTITIES LOAD ERROR:",
@@ -55,7 +72,9 @@ export function useBusinessEntities() {
                 setError(message);
 
             } finally {
-                setLoading(false);
+                if (!requestGuard.current.isStale(requestId)) {
+                    setLoading(false);
+                }
             }
 
         }, []);

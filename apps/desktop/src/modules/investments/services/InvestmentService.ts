@@ -3,6 +3,8 @@ import { AccountRepository } from "@/modules/accounts/repositories/AccountReposi
 import { Account, AccountType } from "@/modules/accounts/types";
 
 import { InvestmentRepository } from "../repositories/InvestmentRepository";
+import { InvestmentTransactionRepository } from "../repositories/InvestmentTransactionRepository";
+import { InvestmentHoldingRepository } from "../repositories/InvestmentHoldingRepository";
 
 import {
     Investment,
@@ -14,6 +16,28 @@ import {
 import {
     InvestmentTransactionService,
 } from "./InvestmentTransactionService";
+
+// ---------------------------------------------------------------------
+// Data-integrity rules enforced here (Investments Safety & Data
+// Integrity phase):
+//
+// Calculated fields - once an investment has at least one
+// investment_transactions row, quantity/averageCost are owned by the
+// ledger (InvestmentTransactionService.recalculateInvestment). update()
+// below ignores any caller-supplied quantity/averageCost in that case
+// and keeps the stored, ledger-derived values instead of trusting the
+// request - so a stray or UI-bypassing caller can never desync them.
+// Before any transaction exists, both remain freely settable (that's
+// how an investment is seeded).
+//
+// Current-value consistency - currentValue is always computed here as
+// quantity x currentPrice, in both create() and update(), never taken
+// from the request. It can never legitimately be anything else.
+//
+// Currency changes - update() refuses to change currencyId once any
+// transaction exists, since every past transaction amount would be
+// silently reinterpreted as the new currency with no conversion.
+// ---------------------------------------------------------------------
 
 export class InvestmentService {
     private readonly repository =
@@ -27,6 +51,17 @@ export class InvestmentService {
 
     private readonly transactionService =
         new InvestmentTransactionService();
+
+    // Used by delete() to clean up the ledger/snapshot instead of
+    // leaving orphaned rows behind, and by update() to guard against an
+    // unsafe currency change once the ledger is non-empty. Distinct
+    // from transactionService (InvestmentTransactionService), which
+    // owns individual transaction create/edit/recalculate flows.
+    private readonly transactionRepository =
+        new InvestmentTransactionRepository();
+
+    private readonly holdingRepository =
+        new InvestmentHoldingRepository();
 
     /**
      * Every investment is backed 1:1 by a real account record
@@ -171,8 +206,15 @@ export class InvestmentService {
             currentPrice:
                 request.currentPrice,
 
+            // Always quantity x currentPrice, never taken from the
+            // request - see the "Current-value consistency" note above.
             currentValue:
-                request.currentValue,
+                request.quantity *
+                request.currentPrice,
+
+            // currentPrice is being set for the first time here, so it
+            // is "current as of now" by definition.
+            priceUpdatedAt: now,
 
             purchaseDate:
                 request.purchaseDate ?? null,
@@ -257,6 +299,58 @@ export class InvestmentService {
             throw new Error("Investment not found.");
         }
 
+        // Once the transaction ledger is non-empty it is the sole
+        // source of truth for quantity/averageCost (recalculated by
+        // InvestmentTransactionService on every ledger change) - see
+        // the "Calculated fields" note at the top of this file. Any
+        // caller-supplied quantity/averageCost is ignored in that case
+        // rather than trusted, so a stray or bypassed-UI request can
+        // never desync the stored figures from the ledger.
+        const transactions =
+            await this.transactionRepository.getAllByInvestmentId(
+                request.id
+            );
+        const hasTransactions =
+            transactions.length > 0;
+
+        // Changing currency after the transaction ledger is non-empty
+        // would silently reinterpret every past BUY/SELL/DIVIDEND/etc.
+        // amount as if it had always been in the new currency, with no
+        // conversion - fail fast, before any write, rather than let
+        // that happen.
+        if (
+            hasTransactions &&
+            existing.currencyId !== request.currencyId
+        ) {
+            throw new Error(
+                "This investment's currency can't be changed because it already has recorded transactions. Create a new investment in the new currency instead."
+            );
+        }
+
+        const quantity = hasTransactions
+            ? existing.quantity
+            : request.quantity;
+
+        const averageCost = hasTransactions
+            ? existing.averageCost
+            : request.averageCost;
+
+        // currentValue is always quantity x currentPrice - never taken
+        // from the request - so it can never drift from the two
+        // figures it is supposed to represent (see the "Current-value
+        // consistency" note at the top of this file).
+        const currentValue =
+            quantity * request.currentPrice;
+
+        // Only bump priceUpdatedAt when currentPrice itself actually
+        // changed - editing unrelated fields (name, notes, status, ...)
+        // must not make a stale price look freshly confirmed.
+        const priceUpdatedAt =
+            existing.currentPrice !==
+            request.currentPrice
+                ? now
+                : existing.priceUpdatedAt;
+
         const linkedAccountId =
             existing.accountId?.trim() || null;
 
@@ -289,6 +383,10 @@ export class InvestmentService {
         await this.repository.update({
             ...request,
             brokerInstitutionId,
+            quantity,
+            averageCost,
+            currentValue,
+            priceUpdatedAt,
         });
 
         await this.accountRepository.syncLinkedAccount({
@@ -310,10 +408,43 @@ export class InvestmentService {
         const accountId =
             await this.repository.getLinkedAccountId(id);
 
-        await this.repository.delete(id);
+        // investment_transactions and investment_holdings have no
+        // deleted_at of their own and are never soft-deleted alongside
+        // their parent investment, so without this cleanup they are
+        // left behind permanently once the investment disappears from
+        // every list/report (all of which filter deleted_at IS NULL on
+        // investments first). Hard-deleted here, in one transaction
+        // with the investment and its mirror account, so a failure
+        // partway through leaves nothing orphaned either way.
+        await this.repository.beginTransaction();
 
-        if (accountId) {
-            await this.accountRepository.delete(accountId);
+        try {
+            await this.transactionRepository.deleteByInvestmentId(
+                id
+            );
+            await this.holdingRepository.deleteByInvestmentId(
+                id
+            );
+            await this.repository.delete(id);
+
+            if (accountId) {
+                await this.accountRepository.delete(
+                    accountId
+                );
+            }
+
+            await this.repository.commit();
+        } catch (error) {
+            try {
+                await this.repository.rollback();
+            } catch (rollbackError) {
+                console.error(
+                    "Failed to rollback investment delete transaction:",
+                    rollbackError
+                );
+            }
+
+            throw error;
         }
     }
 }

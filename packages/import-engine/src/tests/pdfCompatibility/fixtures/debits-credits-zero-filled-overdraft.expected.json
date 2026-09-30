@@ -1,0 +1,67 @@
+{
+  "source": "Structure of a real Indian overdraft-account statement (anonymised): tab-separated cells, unused Debits/Credits cell printed as 0.00, negative running balances, an in-table B/F carry-forward row, reference column after description, a reversal printed as a negative value in the Debits column, repeated per-page header.",
+  "importType": "BANK_PDF",
+  "features": [
+    "debit-credit",
+    "zero-filled-unused-cell",
+    "tab-separated",
+    "negative-balance",
+    "brought-forward-row",
+    "negative-amount-in-debit-column",
+    "reference-column-after-description",
+    "multi-page-repeated-header",
+    "multi-line-narration"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 5,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2025-04-01",
+        "type": "expense",
+        "amount": 5500,
+        "balance": -55500
+      },
+      {
+        "date": "2025-04-02",
+        "type": "expense",
+        "amount": 1000,
+        "balance": -56500,
+        "reference": "111600000001",
+        "description": "NET TXN: BILLPAY TESTREF0001 CARDPAY"
+      },
+      {
+        "date": "2025-04-05",
+        "type": "income",
+        "amount": 20000,
+        "balance": -36500,
+        "reference": "000000000000",
+        "description": "LAP DOD INT MAR25"
+      },
+      {
+        "date": "2025-04-07",
+        "type": "income",
+        "amount": 1190,
+        "balance": -35310
+      },
+      {
+        "date": "2025-04-10",
+        "type": "income",
+        "amount": 35310,
+        "balance": 0,
+        "reference": "000000400001",
+        "description": "CHQ DEP TEST 10-APR-25 CITY"
+      },
+      {
+        "date": "2025-04-12",
+        "type": "expense",
+        "amount": 19.85,
+        "balance": -19.85,
+        "description": "DEBIT INTEREST CAPITALIZED"
+      }
+    ]
+  }
+}

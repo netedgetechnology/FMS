@@ -2,11 +2,14 @@ import {
     parseCsv,
     parseExcel,
     parsePdf,
+    parsePdfText,
     getExcelSheetNames,
+    type PdfParseResult,
 } from "./parser";
 
 import {
     extractPdfTransactions,
+    rowText,
 } from "./parser/pdfTransactionExtractor";
 
 import {
@@ -31,8 +34,10 @@ import {
 } from "./normalizer/loanScheduleNormalizer";
 
 import {
+    reconcileBalanceChain,
     validateCandidates,
     validateLoanScheduleCandidates,
+    type BalanceReconciliationResult,
 } from "./validation";
 
 import type {
@@ -81,6 +86,10 @@ export interface PdfProcessingResult
     transactionLines: ReturnType<
         typeof extractPdfTransactions
     >["transactionLines"];
+    // The statement's own running-balance arithmetic checked against
+    // every candidate's amount + direction (see reconcileBalanceChain).
+    // Diagnostic only - it never changes a candidate.
+    balanceReconciliation: BalanceReconciliationResult;
 }
 
 export function processCsv(
@@ -136,15 +145,17 @@ export function processExcel(
     content: ArrayBuffer,
     sheetName?: string,
     importType: CsvImportType = "BANK_CSV",
+    password?: string,
 ): ExcelProcessingResult {
     const selectedSheet =
         sheetName ??
-        getFirstExcelSheetName(content);
+        getFirstExcelSheetName(content, password);
 
     const document = parseExcel(
         content,
         {
             sheetName: selectedSheet,
+            password,
         },
     );
 
@@ -164,11 +175,57 @@ export async function processPdf(
     content: ArrayBuffer,
     importType: CsvImportType = "BANK_CSV",
 ): Promise<PdfProcessingResult> {
-    const parsed =
-        await parsePdf(content);
+    return processParsedPdf(
+        await parsePdf(content),
+        importType,
+    );
+}
 
-    const extracted =
-        extractPdfTransactions(parsed);
+// processPdf for text pdf-parse already extracted - the same pipeline
+// from extraction onward, with no PDF binary involved. Used by the PDF
+// compatibility fixtures (tests/pdfCompatibility).
+export function processPdfText(
+    text: string,
+    importType: CsvImportType = "BANK_CSV",
+): PdfProcessingResult {
+    return processParsedPdf(
+        parsePdfText(text),
+        importType,
+    );
+}
+
+function processParsedPdf(
+    parsed: PdfParseResult,
+    importType: CsvImportType,
+): PdfProcessingResult {
+
+    // pdfParser.ts's own structural extraction already fully parsed
+    // this document into the canonical bank-transaction shape when
+    // parsed.structured is true - the generic second pass
+    // (extractPdfTransactions, meant for header-row detection and
+    // continuation-line reconstruction on arbitrary tabular PDF text)
+    // is unnecessary there, and its own weaker heuristics have been
+    // shown to silently corrupt already-correct data when they
+    // disagree with pdfParser.ts's (e.g. a 2-digit-year date it
+    // doesn't recognise, treated as non-dated continuation text - see
+    // the SBI Credit Card PDF investigation). It is still needed, and
+    // still runs, for a document pdfParser.ts could not structure
+    // itself (parsed.structured === false).
+    const extracted = parsed.structured
+        ? {
+              document: parsed.document,
+              transactionLines:
+                  parsed.document.rows.map(
+                      (row) => ({
+                          rowNumber:
+                              row.rowNumber,
+                          text: rowText(row),
+                      }),
+                  ),
+          }
+        : extractPdfTransactions(
+              parsed.document,
+          );
 
     const result =
         processDocument(
@@ -180,14 +237,19 @@ export async function processPdf(
         ...result,
         transactionLines:
             extracted.transactionLines,
+        balanceReconciliation:
+            reconcileBalanceChain(
+                result.candidates,
+            ),
     };
 }
 
 function getFirstExcelSheetName(
     content: ArrayBuffer,
+    password?: string,
 ): string {
     const sheetNames =
-        getExcelSheetNames(content);
+        getExcelSheetNames(content, password);
 
     if (sheetNames.length === 0) {
         throw new Error(

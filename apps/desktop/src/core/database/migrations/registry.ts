@@ -32,6 +32,13 @@ import { GoalAccountLinksMigration } from "./032_goal_account_links";
 import { GoalCategoryLinksMigration } from "./033_goal_category_links";
 import { GoalLoanLinksMigration } from "./034_goal_loan_links";
 import { GoalInvestmentLinksMigration } from "./035_goal_investment_links";
+import { InvestmentPriceUpdatedAtMigration } from "./036_investment_price_updated_at";
+import { LoanSchedulePaymentsMigration } from "./037_loan_schedule_payments";
+import { CategoryContextMappingsMigration } from "./038_category_context_mappings";
+import { CounterpartyRulesCategoryMigration } from "./039_counterparty_rules_category";
+import { TransactionTransferDirectionMigration } from "./040_transaction_transfer_direction";
+import { ImportCustomRulesMigration } from "./041_import_custom_rules";
+import { ImportDraftsMigration } from "./042_import_drafts";
 
 export const migrations = [
     InitialSchemaMigration,
@@ -68,5 +75,12 @@ export const migrations = [
     GoalCategoryLinksMigration,
     GoalLoanLinksMigration,
     GoalInvestmentLinksMigration,
+    InvestmentPriceUpdatedAtMigration,
+    LoanSchedulePaymentsMigration,
+    CategoryContextMappingsMigration,
+    CounterpartyRulesCategoryMigration,
+    TransactionTransferDirectionMigration,
+    ImportCustomRulesMigration,
+    ImportDraftsMigration,
 ];
 

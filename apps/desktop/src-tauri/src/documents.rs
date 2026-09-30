@@ -1,5 +1,5 @@
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 #[derive(serde::Serialize)]
@@ -60,21 +60,26 @@ pub async fn store_document_file(
     })
 }
 
-#[tauri::command]
-pub async fn delete_document_file(
-    app: tauri::AppHandle,
-    document_id: String,
+/// Removes the stored file for `document_id` from `root`, if any. A
+/// missing `root` (nothing has ever been stored) or a missing matching
+/// file are both treated as a no-op, not a failure.
+fn delete_document_file_in(
+    root: &Path,
+    document_id: &str,
 ) -> Result<(), String> {
-    let root = storage_root(&app)?;
-
-    let mut entries = std::fs::read_dir(&root)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                String::new()
-            } else {
-                error.to_string()
-            }
-        })?;
+    // No file has ever been stored, so there is nothing to remove - this
+    // is a no-op, not a failure. `.map_err()` only replaces the error
+    // value; it does not turn the Result into `Ok`, so returning early
+    // here (rather than falling through to `?`) is required to avoid
+    // still propagating an `Err` for a directory that simply doesn't
+    // exist yet.
+    let mut entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
 
     loop {
         let entry = match entries.next() {
@@ -104,6 +109,16 @@ pub async fn delete_document_file(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_document_file(
+    app: tauri::AppHandle,
+    document_id: String,
+) -> Result<(), String> {
+    let root = storage_root(&app)?;
+
+    delete_document_file_in(&root, &document_id)
 }
 
 #[tauri::command]
@@ -150,6 +165,67 @@ pub async fn open_document_file(
     Err("Opening documents is not supported on this platform.".to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn scratch_root(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
 
+        std::env::temp_dir()
+            .join(format!("finwea_documents_test_{tag}_{nanos}"))
+    }
+
+    #[test]
+    fn is_a_no_op_when_the_storage_directory_has_never_been_created() {
+        // Regression test: a directory-not-found error used to still
+        // propagate as `Err("")` here (`.map_err()` only replaces the
+        // error value, it never turns the Result into `Ok`), which
+        // permanently blocked every document delete on a fresh install
+        // or after the storage folder was cleared, until the very
+        // first file was ever stored.
+        let root = scratch_root("missing_dir");
+        assert!(!root.exists());
+
+        let result = delete_document_file_in(&root, "doc-1");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn is_a_no_op_when_the_directory_exists_but_has_no_matching_file() {
+        let root = scratch_root("no_match");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let result = delete_document_file_in(&root, "doc-1");
+
+        assert!(result.is_ok());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn removes_the_file_matching_the_document_id_by_stem() {
+        let root = scratch_root("match");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let target = root.join("doc-1.pdf");
+        std::fs::write(&target, b"pdf bytes").unwrap();
+
+        let unrelated = root.join("doc-2.pdf");
+        std::fs::write(&unrelated, b"other bytes").unwrap();
+
+        let result = delete_document_file_in(&root, "doc-1");
+
+        assert!(result.is_ok());
+        assert!(!target.exists());
+        assert!(unrelated.exists());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
 

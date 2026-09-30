@@ -22,3 +22,18 @@ sha2 = "0.10"
 chrono = "0.4"
 tauri-plugin-dialog = "2.7.2"
 
+# Only used by import_reconciliation_reset.rs, to borrow tauri-plugin-sql's
+# own connection pool (via tauri_plugin_sql::DbInstances) and run a real,
+# single-connection sqlx transaction for the dev-only Import/Reconciliation
+# cleanup - tauri-plugin-sql's own execute()/select() commands each check
+# out a pooled connection independently per call, which cannot guarantee
+# every statement of a multi-statement transaction lands on the same
+# connection. Version left unpinned to a minor so Cargo unifies it with
+# whatever 0.8.x tauri-plugin-sql itself resolves to (required for the
+# `tauri_plugin_sql::DbPool::Sqlite(Pool<Sqlite>)` match below to type-check
+# against the very same Pool/Sqlite types).
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+

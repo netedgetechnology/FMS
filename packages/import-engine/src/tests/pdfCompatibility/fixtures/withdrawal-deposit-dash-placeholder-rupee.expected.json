@@ -1,0 +1,52 @@
+{
+  "source": "Synthetic: Withdrawal/Deposit columns with '-' in the unused cell, rupee symbol attached to every amount, reference column after narration, dd/mm/yy dates, opening balance line with a currency symbol.",
+  "importType": "BANK_PDF",
+  "features": [
+    "withdrawal-deposit",
+    "dash-placeholder",
+    "currency-symbol",
+    "reference-column-after-description",
+    "two-digit-year",
+    "opening-balance-line"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 3,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-03-01",
+        "type": "expense",
+        "amount": 450,
+        "balance": 1550,
+        "reference": "0000600000000001",
+        "description": "UPI-TEST GROCERY-grocer@bank-PAYMENT"
+      },
+      {
+        "date": "2026-03-02",
+        "type": "income",
+        "amount": 10000,
+        "balance": 11550,
+        "reference": "0000600000000002",
+        "description": "NEFT CR-TEST0000001-ACME CLIENT LTD"
+      },
+      {
+        "date": "2026-03-03",
+        "type": "expense",
+        "amount": 2000,
+        "balance": 9550,
+        "reference": "0000600000000003"
+      },
+      {
+        "date": "2026-03-04",
+        "type": "income",
+        "amount": 12.34,
+        "balance": 9562.34,
+        "reference": "0000600000000004",
+        "description": "INTEREST PAID TILL 03-MAR-2026"
+      }
+    ]
+  }
+}

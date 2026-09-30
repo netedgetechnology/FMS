@@ -1,0 +1,6 @@
+TEST COOPERATIVE BANK
+Date Particulars Amount Balance
+01 Mar 2026 Balance Brought Forward 1,000.00Cr
+02 Mar 2026 ATM Cash Withdrawal 1,500.00Dr 500.00Dr
+05 Mar 2026 Cheque Deposit 2,000.00Cr 1,500.00Cr
+06 Mar 2026 Bank Charges 25.00 Dr 1,475.00 Cr

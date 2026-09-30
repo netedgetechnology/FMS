@@ -7,6 +7,18 @@ export interface InvestmentPortfolioCalculation {
     quantity: number;
     averageCost: number;
     totalCost: number;
+    /**
+     * Cumulative cost of every OPENING_BALANCE/BUY ever recorded -
+     * unlike totalCost (the residual cost basis of only the
+     * currently-held quantity, which SELL reduces), this never goes
+     * down. It is the safe, unambiguous denominator for a lifetime
+     * return percentage: total return (realized + unrealized + income)
+     * is meaningful relative to "everything ever put in," but not
+     * relative to totalCost, which drops to 0 the moment a position is
+     * fully sold and would make return% blow up or floor at 0 for any
+     * investment with a partial or full sell in its history (Phase 6).
+     */
+    totalInvested: number;
     realizedGainLoss: number;
     income: number;
 }
@@ -35,18 +47,21 @@ export class InvestmentPortfolioCalculator {
 
         let quantity = 0;
         let totalCost = 0;
+        let totalInvested = 0;
         let realizedGainLoss = 0;
         let income = 0;
 
         for (const transaction of orderedTransactions) {
             switch (transaction.transactionType) {
                 case InvestmentTransactionType.OPENING_BALANCE: {
-                    quantity += transaction.quantity;
-
-                    totalCost +=
+                    const cost =
                         transaction.amount +
                         transaction.fees +
                         transaction.taxes;
+
+                    quantity += transaction.quantity;
+                    totalCost += cost;
+                    totalInvested += cost;
 
                     break;
                 }
@@ -59,6 +74,7 @@ export class InvestmentPortfolioCalculator {
 
                     quantity += transaction.quantity;
                     totalCost += purchaseCost;
+                    totalInvested += purchaseCost;
 
                     break;
                 }
@@ -149,6 +165,7 @@ export class InvestmentPortfolioCalculator {
             quantity,
             averageCost,
             totalCost,
+            totalInvested,
             realizedGainLoss,
             income,
         };

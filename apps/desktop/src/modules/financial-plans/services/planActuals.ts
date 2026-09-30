@@ -1,3 +1,4 @@
+import { balanceSide } from "@/core/accounting/transferClassification";
 import {
     endOfMonth,
     endOfQuarter,
@@ -597,11 +598,12 @@ function collectAccountRows(
         if (t.deletedAt) {
             continue;
         }
-        if (
-            t.type !== "income" &&
-            t.type !== "expense"
-        ) {
-            continue; // 'transfer' rows never touch the balance
+        // Income / expense, or a transfer by its direction (OUT counts
+        // as money out, IN as money in) - see balanceSide. A legacy
+        // transfer with no direction never touches the balance.
+        const side = balanceSide(t);
+        if (!side) {
+            continue;
         }
         if (!isValidDate(t.transactionDate)) {
             skipped += 1;
@@ -614,7 +616,7 @@ function collectAccountRows(
         }
         rows.push({
             date: t.transactionDate,
-            type: t.type,
+            type: side,
             m,
         });
     }
@@ -863,18 +865,21 @@ function evalCategory(
 
     base.sourceName = cat.name;
 
-    const expectedRole = deriveCategoryRole(
-        cat.categoryType
-    );
-
+    // TRANSFER categories are never linkable. Beyond that, a category's
+    // own categoryType is a suggestion, not authoritative for which
+    // transactions can be recorded against it (see
+    // resolveCategoryTransactionType in the categories module) - the
+    // per-transaction `type` filter below is what actually determines
+    // CONTRIBUTION (income) vs SPENDING (expense) flow, so a categoryType/
+    // role mismatch does not make the component unavailable; it just
+    // means only the matching-direction transactions are counted.
     if (
-        expectedRole === null ||
-        expectedRole !== component.role
+        deriveCategoryRole(cat.categoryType) === null
     ) {
         return unavailable(
             base,
             "INVALID_CATEGORY_TYPE",
-            "The category's type no longer matches this component's role."
+            "Transfer categories cannot be used as plan components."
         );
     }
 

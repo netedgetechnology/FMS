@@ -1,5 +1,8 @@
 import { useDateFormatter } from "@/core/formatting";
 import {
+    getFinancialGoalCategory,
+    getFinancialGoalStatusLabel,
+    getFinancialGoalSubcategoryLabel,
     isLinkedGoalMode,
     roleForGoalMode,
 } from "../constants";
@@ -113,9 +116,9 @@ export function ViewFinancialGoalDialog({
             aria-modal="true"
             aria-labelledby="view-financial-goal-title"
         >
-            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
 
-                <div className="border-b border-slate-100 px-6 py-5">
+                <div className="shrink-0 border-b border-slate-100 px-6 py-5">
 
                     <div className="flex items-center justify-between">
 
@@ -145,7 +148,7 @@ export function ViewFinancialGoalDialog({
 
                 </div>
 
-                <div className="space-y-6 p-6">
+                <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
 
                     <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -180,7 +183,10 @@ export function ViewFinancialGoalDialog({
                             </p>
 
                             <p className="mt-1 font-semibold text-slate-900">
-                                {goal.goalCategory}
+                                {getFinancialGoalCategory(
+                                    goal.goalCategory
+                                )?.label ??
+                                    goal.goalCategory}
                             </p>
                         </div>
 
@@ -190,7 +196,10 @@ export function ViewFinancialGoalDialog({
                             </p>
 
                             <p className="mt-1 font-semibold text-slate-900">
-                                {goal.goalSubcategory}
+                                {getFinancialGoalSubcategoryLabel(
+                                    goal.goalCategory,
+                                    goal.goalSubcategory
+                                )}
                             </p>
                         </div>
 
@@ -272,7 +281,9 @@ export function ViewFinancialGoalDialog({
                             </p>
 
                             <p className="mt-1 font-semibold text-slate-900">
-                                {goal.status}
+                                {getFinancialGoalStatusLabel(
+                                    goal.status
+                                )}
                             </p>
                         </div>
 
@@ -360,7 +371,10 @@ export function ViewFinancialGoalDialog({
                             </p>
 
                             <p className="mt-1 font-semibold text-slate-900">
-                                {goal.goalType}
+                                {getFinancialGoalSubcategoryLabel(
+                                    goal.goalCategory,
+                                    goal.goalType
+                                )}
                             </p>
 
                         </div>

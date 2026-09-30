@@ -9,10 +9,11 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 
-import { CategoryForm } from "./CategoryForm";
-import { CategoryService } from "../services";
+import { CategoryForm, CategoryMappingRowInput } from "./CategoryForm";
+import { CategoryContextMappingService, CategoryService } from "../services";
 import { CategoryFormValues } from "../validation";
 import { Category } from "../types";
+import { planMappingWrites, validateMappingRowsForSave } from "../utils";
 
 interface AddCategoryDialogProps {
     categories: Category[];
@@ -29,21 +30,36 @@ export function AddCategoryDialog({
 }: AddCategoryDialogProps) {
     const [loading, setLoading] = useState(false);
 
-    async function handleSubmit(values: CategoryFormValues) {
+    async function handleSubmit(
+        values: CategoryFormValues,
+        mappings: CategoryMappingRowInput[]
+    ) {
         try {
             setLoading(true);
 
+            validateMappingRowsForSave(mappings);
+
             const service = new CategoryService();
 
-            await service.create({
+            const categoryId = await service.create({
                 parentId: values.parentId || null,
                 name: values.name,
                 categoryType: values.categoryType,
-                financeScope: values.financeScope,
+                // New categories start Personal (the previous default);
+                // scopes are changed from the Scopes screen.
+                financeScope: "PERSONAL",
                 businessEntityId: values.businessEntityId || null,
                 description: values.description || null,
                 isActive: values.isActive,
             });
+
+            const mappingService = new CategoryContextMappingService();
+
+            const plan = planMappingWrites(categoryId, [], mappings);
+
+            for (const request of plan.toCreate) {
+                await mappingService.create(request);
+            }
 
             await onSuccess?.();
 

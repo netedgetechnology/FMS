@@ -27,6 +27,25 @@ import { useAccounts } from "@/modules/accounts/hooks";
 import { useCategories } from "@/modules/categories/hooks";
 import { useLoans } from "@/modules/loans/hooks";
 import { useInvestments } from "@/modules/investments/hooks";
+import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
+import type { Currency } from "@/modules/currencies/types";
+
+// Resolves the application's configured default currency (Settings >
+// General -> `defaultCurrency`, a currency code) to this currency list's
+// matching id - the same convention already used by
+// FinancialPlanForm/AccountForm/BusinessEntityForm/LoanForm/InvestmentForm.
+// `currencies[0]` is arbitrary list order (alphabetical/insertion), not a
+// default, and must never be used for this.
+export function resolveDefaultCurrencyId(
+    currencies: readonly Pick<Currency, "id" | "code">[],
+    defaultCurrency: string
+): string {
+    return (
+        currencies.find(
+            (currency) => currency.code === defaultCurrency
+        )?.id ?? ""
+    );
+}
 
 interface FinancialGoalFormProps {
     initialGoal?: FinancialGoal | null;
@@ -51,6 +70,17 @@ export function FinancialGoalForm({
         currencies,
         loading: currenciesLoading,
     } = useCurrencies();
+
+    const { defaultCurrency } = useDisplaySettings();
+
+    const fallbackCurrencyId = useMemo(
+        () =>
+            resolveDefaultCurrencyId(
+                currencies,
+                defaultCurrency
+            ),
+        [currencies, defaultCurrency]
+    );
 
     const { accounts, loading: accountsLoading } =
         useAccounts();
@@ -85,9 +115,7 @@ export function FinancialGoalForm({
             currentAmount: initialGoal?.currentAmount ?? 0,
             currencyId:
                 initialGoal?.currencyId ??
-                currencies.find((currency) => currency.isDefault)?.id ??
-                currencies[0]?.id ??
-                "",
+                fallbackCurrencyId,
             targetDate: initialGoal?.targetDate ?? "",
             priority: initialGoal?.priority ?? 0,
             status: initialGoal?.status ?? "ACTIVE",
@@ -97,7 +125,7 @@ export function FinancialGoalForm({
             loanIds: [],
             investmentIds: [],
         }),
-        [initialGoal, currencies]
+        [initialGoal, fallbackCurrencyId]
     );
 
     const {

@@ -28,6 +28,8 @@ export interface DashboardStatCardProps {
   title: string;
   value: string;
   change?: string | null;
+  /** Shown instead of "Current period" when set (e.g. "As of 31 Aug 2026"). */
+  caption?: string | null;
   positive?: boolean;
   icon: LucideIcon;
   iconBackground: string;
@@ -38,6 +40,7 @@ export function DashboardStatCard({
   title,
   value,
   change,
+  caption,
   positive = true,
   icon: Icon,
   iconBackground,
@@ -110,7 +113,7 @@ export function DashboardStatCard({
             </>
           ) : (
             <div className="text-small text-slate-400">
-              Current period
+              {caption ?? "Current period"}
             </div>
           )}
 

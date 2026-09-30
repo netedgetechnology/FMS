@@ -10,6 +10,8 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 
+import { getErrorMessage } from "@/core/errors";
+
 import {
     BusinessEntityService,
 } from "../services";
@@ -43,7 +45,7 @@ export function DeleteBusinessEntityDialog({
         useState(false);
 
     async function handleDelete() {
-        if (!entity) {
+        if (!entity || loading) {
             return;
         }
 
@@ -68,9 +70,10 @@ export function DeleteBusinessEntityDialog({
             );
 
             toast.error(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to delete business entity. Please try again."
+                getErrorMessage(
+                    error,
+                    "Failed to delete business entity. Please try again."
+                )
             );
         } finally {
             setLoading(false);

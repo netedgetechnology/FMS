@@ -1,10 +1,22 @@
 import { currentMonth, formatDateValue } from "@/core/formatting";
 import { DEFAULT_SETTINGS, SETTING_KEYS } from "@/modules/settings/constants";
 import { AccountService } from "@/modules/accounts/services";
-import { AccountType } from "@/modules/accounts/types";
+import { AccountType, type Account } from "@/modules/accounts/types";
+import { BANK_ACCOUNT_TYPE_OPTIONS } from "@/modules/accounts/constants/accountTypes";
+import {
+    computeAccountCurrentBalance,
+    computeAccountTransactionDeltas,
+    type AccountBalanceTransaction,
+} from "@/modules/accounts/utils";
 import { TransactionService } from "@/modules/transactions/services";
-import { LoanService } from "@/modules/loans/services";
+import {
+    LoanService,
+    isScheduleOverdue,
+    scheduleDaysOverdue,
+} from "@/modules/loans/services";
 import { LoanPaymentScheduleRepository } from "@/modules/loans/repositories/LoanPaymentScheduleRepository";
+import { LoanSchedulePaymentRepository } from "@/modules/loans/repositories/LoanSchedulePaymentRepository";
+import type { Loan, LoanSchedulePayment } from "@/modules/loans/types";
 import { EMIScheduleService } from "@/modules/loans/services/EMIScheduleService";
 import { InstitutionService } from "@/modules/institutions/services/InstitutionService";
 import {
@@ -21,8 +33,21 @@ import type {
 import type { Budget } from "@/modules/budgets/types";
 import { CurrencyService } from "@/modules/currencies/services/CurrencyService";
 import { FinancialGoalService } from "@/modules/financial-goals/services";
-import { InvestmentService } from "@/modules/investments/services";
+import {
+    InvestmentPortfolioCalculator,
+    InvestmentService,
+    resolvePrimaryInvestmentCurrencyId,
+} from "@/modules/investments/services";
+import { InvestmentTransactionRepository } from "@/modules/investments/repositories";
+import type {
+    Investment,
+    InvestmentTransaction,
+} from "@/modules/investments/types";
 import { CategoryService } from "@/modules/categories/services";
+import {
+    isTransferClassified,
+    transferCategoryIdSet,
+} from "@/core/accounting/transferClassification";
 
 import type {
     DashboardBudgetOverview,
@@ -35,6 +60,26 @@ export interface DashboardDateRange {
     /** Inclusive end date, formatted as YYYY-MM-DD. */
     end: string;
 }
+
+/**
+ * Bank account types, reused from the same source of truth Accounts uses
+ * for its own "Add Bank Accounts" flow (AccountsPage) - never
+ * redefined/guessed here.
+ */
+const BANK_ACCOUNT_TYPES: ReadonlySet<AccountType> = new Set(
+    BANK_ACCOUNT_TYPE_OPTIONS.map(option => option.value)
+);
+
+/**
+ * Physical "Cash on Hand" account types. Mirrors AccountsPage's own
+ * existing "Cash & Wallets" grouping (its Cash & Wallets summary tile and
+ * Add Cash & Wallets flow both treat CASH and WALLET as one bucket,
+ * separate from bank accounts) - not a new classification invented here.
+ */
+const CASH_ON_HAND_ACCOUNT_TYPES: ReadonlySet<AccountType> = new Set([
+    AccountType.CASH,
+    AccountType.WALLET,
+]);
 
 export const DEFAULT_DASHBOARD_RANGE_DAYS = 30;
 
@@ -78,6 +123,115 @@ export function rangeFromDays(
         start: toLocalISODate(start),
         end: toLocalISODate(end),
     };
+}
+
+/**
+ * The main Dashboard range selector's current mode - either a rolling
+ * "last N days" window (a preset button, or the "Custom (previous days)"
+ * input - both existing, unchanged behaviors) or an explicit Custom Date
+ * Range with its own start/end date. Kept separate from
+ * {@link DashboardPeriod} below, which is an independent, per-card
+ * period filter unrelated to this main selector.
+ */
+export type DashboardRangeSelection =
+    | { mode: "days"; days: number }
+    | { mode: "customRange"; start: string; end: string };
+
+export const DEFAULT_DASHBOARD_RANGE_SELECTION: DashboardRangeSelection = {
+    mode: "days",
+    days: DEFAULT_DASHBOARD_RANGE_DAYS,
+};
+
+/**
+ * Resolves a {@link DashboardRangeSelection} into the concrete inclusive
+ * {@link DashboardDateRange} that `getSummary` (and every period-based
+ * total/chart it feeds) actually filters by.
+ *
+ * A Custom Date Range's start/end are passed through completely
+ * unchanged - they already are plain `YYYY-MM-DD` calendar dates from a
+ * native `<input type="date">`, exactly like every other date already
+ * stored and compared in this app (see `toLocalISODate` below). No `Date`
+ * object is constructed here, so there is no timezone-driven off-by-one
+ * day risk.
+ */
+export function resolveDashboardRangeSelection(
+    selection: DashboardRangeSelection
+): DashboardDateRange {
+    if (selection.mode === "customRange") {
+        return {
+            start: selection.start,
+            end: selection.end,
+        };
+    }
+
+    return rangeFromDays(selection.days);
+}
+
+const ISO_CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * True only for a real calendar date in strict `YYYY-MM-DD` form -
+ * rejects malformed input and anything that isn't a real day (e.g.
+ * `2026-02-30`), by round-tripping through `Date`'s own field
+ * normalization rather than trusting the string alone.
+ */
+function isValidIsoCalendarDate(value: string): boolean {
+    if (!ISO_CALENDAR_DATE_PATTERN.test(value)) {
+        return false;
+    }
+
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(year, month - 1, day);
+
+    return (
+        date.getFullYear() === year &&
+        date.getMonth() === month - 1 &&
+        date.getDate() === day
+    );
+}
+
+export interface CustomDateRangeValidation {
+    valid: boolean;
+    /** `null` when `valid` is `true`. */
+    error: string | null;
+}
+
+/**
+ * Validates a Custom Date Range before it is applied to the dashboard.
+ * Both dates are required, must each be a real calendar date, and start
+ * must not be later than end - a single day (start === end) is valid.
+ * Plain string comparison is correct and timezone-safe here: `YYYY-MM-DD`
+ * strings sort lexicographically in exactly calendar order.
+ */
+export function validateCustomDateRange(
+    start: string,
+    end: string
+): CustomDateRangeValidation {
+    if (!start || !end) {
+        return {
+            valid: false,
+            error: "Start date and end date are both required.",
+        };
+    }
+
+    if (
+        !isValidIsoCalendarDate(start) ||
+        !isValidIsoCalendarDate(end)
+    ) {
+        return {
+            valid: false,
+            error: "Enter valid dates.",
+        };
+    }
+
+    if (start > end) {
+        return {
+            valid: false,
+            error: "Start date cannot be later than end date.",
+        };
+    }
+
+    return { valid: true, error: null };
 }
 
 function toNumber(value: unknown): number {
@@ -199,14 +353,54 @@ export interface ExpenseBreakdownItem {
 }
 
 type CashFlowTransaction = {
+    id: string;
     transactionDate: string;
     type: string;
     amount: number;
+    // Used only to recognise a transfer by its TRANSFER-type category
+    // (see isTransferClassified).
+    categoryId?: string | null;
+    subcategoryId?: string | null;
 };
+
+/**
+ * The amount a transaction contributes to expense totals/charts. A loan
+ * EMI payment (LoanPaymentService.processPayment) is a single `expense`
+ * transaction for the full instalment; `emiInterestByTransactionId`
+ * (EMIScheduleService.getInterestByTransactionId) maps it to its
+ * interest portion only - the principal repayment reduces the loan
+ * liability (see the loanLiability comment in getSummary) but is never
+ * counted as spending here. Mirrors
+ * modules/budgets/services/budgetTransaction.ts's classifyBudgetTransaction
+ * exactly, so Dashboard and Budgets agree on every EMI transaction
+ * instead of one counting the full amount and the other only the
+ * interest (Loans Phase 2). Every other transaction counts at its full
+ * absolute amount, unchanged.
+ */
+function resolveExpenseAmount(
+    transaction: { id: string; amount: number },
+    emiInterestByTransactionId?: ReadonlyMap<string, number>
+): number {
+    const emiInterest =
+        emiInterestByTransactionId?.get(transaction.id);
+
+    if (emiInterest !== undefined) {
+        return Math.max(0, toNumber(emiInterest));
+    }
+
+    return Math.abs(toNumber(transaction.amount));
+}
 
 type CategoryExpenseTransaction = CashFlowTransaction & {
     categoryId: string | null;
 };
+
+type PayeeExpenseTransaction = CashFlowTransaction & {
+    payee: string;
+};
+
+/** Top individual expense transactions shown, not top categories. */
+export const MAX_EXPENSE_TRANSACTIONS = 10;
 
 function rangeSpanDays(range: DashboardDateRange): number {
     const start = new Date(`${range.start}T00:00:00`).getTime();
@@ -223,7 +417,9 @@ function rangeSpanDays(range: DashboardDateRange): number {
  */
 export function computeCashFlowSeries(
     transactions: readonly CashFlowTransaction[],
-    range: DashboardDateRange
+    range: DashboardDateRange,
+    emiInterestByTransactionId?: ReadonlyMap<string, number>,
+    transferCategoryIds?: ReadonlySet<string>
 ): CashFlowPoint[] {
     const byMonth = rangeSpanDays(range) > 92;
 
@@ -283,14 +479,22 @@ export function computeCashFlowSeries(
             continue;
         }
 
-        const amount = Math.abs(toNumber(transaction.amount));
+        // Transfers are neither income nor expense.
+        if (isTransferClassified(transaction, transferCategoryIds)) {
+            continue;
+        }
 
         if (transaction.type === "income") {
-            entry.income += amount;
+            entry.income += Math.abs(
+                toNumber(transaction.amount)
+            );
         }
 
         if (transaction.type === "expense") {
-            entry.expense += amount;
+            entry.expense += resolveExpenseAmount(
+                transaction,
+                emiInterestByTransactionId
+            );
         }
     }
 
@@ -322,12 +526,18 @@ export function computeCashFlowSeries(
 export function computeExpensesByCategory(
     transactions: readonly CategoryExpenseTransaction[],
     categoryNames: Map<string, string>,
-    range: DashboardDateRange
+    range: DashboardDateRange,
+    emiInterestByTransactionId?: ReadonlyMap<string, number>,
+    transferCategoryIds?: ReadonlySet<string>
 ): ExpenseBreakdownItem[] {
     const totals = new Map<string, number>();
 
     for (const transaction of transactions) {
         if (transaction.type !== "expense") {
+            continue;
+        }
+
+        if (isTransferClassified(transaction, transferCategoryIds)) {
             continue;
         }
 
@@ -345,7 +555,10 @@ export function computeExpensesByCategory(
         totals.set(
             categoryName,
             (totals.get(categoryName) ?? 0) +
-                Math.abs(toNumber(transaction.amount))
+                resolveExpenseAmount(
+                    transaction,
+                    emiInterestByTransactionId
+                )
         );
     }
 
@@ -354,6 +567,42 @@ export function computeExpensesByCategory(
         .map(([name, value]) => ({ name, value }));
 }
 
+/**
+ * The top individual expense transactions (not categories) within a
+ * date range, by absolute amount descending. Each transaction is its
+ * own entry - nothing is aggregated or collapsed into an "Others"
+ * bucket, so fewer than MAX_EXPENSE_TRANSACTIONS are returned when
+ * fewer exist. Used by the Expense Breakdown card; unrelated to
+ * computeExpensesByCategory, which still powers Top Spending
+ * Categories.
+ */
+export function computeTopExpenseTransactions(
+    transactions: readonly PayeeExpenseTransaction[],
+    range: DashboardDateRange,
+    emiInterestByTransactionId?: ReadonlyMap<string, number>,
+    transferCategoryIds?: ReadonlySet<string>
+): ExpenseBreakdownItem[] {
+    return transactions
+        .filter((transaction) => transaction.type === "expense")
+        .filter(
+            (transaction) =>
+                !isTransferClassified(transaction, transferCategoryIds)
+        )
+        .filter(
+            (transaction) =>
+                transaction.transactionDate >= range.start &&
+                transaction.transactionDate <= range.end
+        )
+        .map((transaction) => ({
+            name: transaction.payee || "Transaction",
+            value: resolveExpenseAmount(
+                transaction,
+                emiInterestByTransactionId
+            ),
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, MAX_EXPENSE_TRANSACTIONS);
+}
 
 /*
  * ---------------------------------------------------------------------
@@ -398,6 +647,7 @@ export function computeDashboardBudgetOverview(input: {
     month: Date;
     emiInterestByTransactionId?: ReadonlyMap<string, number>;
     creditCardAccountIds?: ReadonlySet<string>;
+    transferCategoryIds?: ReadonlySet<string>;
 }): DashboardBudgetOverview {
     const applicableBudgets = selectBudgetsForMonth(
         input.budgets,
@@ -424,6 +674,8 @@ export function computeDashboardBudgetOverview(input: {
             input.emiInterestByTransactionId,
         creditCardAccountIds:
             input.creditCardAccountIds,
+        transferCategoryIds:
+            input.transferCategoryIds,
     });
 
     const rows = buildBudgetReportRows(
@@ -466,8 +718,112 @@ export function computeDashboardBudgetOverview(input: {
     };
 }
 
-function getDaysUntil(date: string): number {
-    const today = new Date();
+/*
+ * ---------------------------------------------------------------------
+ * INVESTMENT SUMMARY (Dashboard widget) - Phase 6
+ *
+ * The Investment Summary card's own totalValue/allocation, computed
+ * over ONE resolved primary currency (default currency first, else
+ * the alphabetically-first currency actually in use among the given
+ * investments) - mirrors computeDashboardBudgetOverview's currency
+ * handling above. Never sums currentValue across investments in
+ * different currencies; when every investment shares one currency
+ * (the common case) this includes all of them, unchanged from before.
+ *
+ * monthlyChangePercentage is always null: no price/value history is
+ * stored anywhere in the investments domain (Investments Phase 5
+ * review), so there is no accurate prior-period value to diff against
+ * - a fabricated 0% would look like a real, calculated "no change"
+ * rather than "not available."
+ *
+ * Deliberately excludes net worth's own investment total (still every
+ * active investment, unscoped) - see the "Net worth keeps summing..."
+ * comment at this function's call site in getSummary().
+ * ---------------------------------------------------------------------
+ */
+export function computeDashboardInvestmentSummary(
+    investments: readonly Pick<
+        Investment,
+        "currencyId" | "currentValue" | "investmentType"
+    >[],
+    currencies: readonly CurrencyScopeOption[]
+): {
+    totalValue: number;
+    monthlyChangePercentage: number | null;
+    allocation: {
+        name: string;
+        value: number;
+        amount: number;
+    }[];
+    currencyCode: string | null;
+    hasOtherCurrencies: boolean;
+} {
+    const primaryCurrencyId =
+        resolvePrimaryInvestmentCurrencyId(
+            investments,
+            currencies
+        );
+
+    const scopedInvestments = investments.filter(
+        investment =>
+            investment.currencyId === primaryCurrencyId
+    );
+
+    const totalValue = scopedInvestments.reduce(
+        (sum, investment) =>
+            sum + toNumber(investment.currentValue),
+        0
+    );
+
+    const byType = new Map<string, number>();
+
+    for (const investment of scopedInvestments) {
+        byType.set(
+            investment.investmentType,
+            (byType.get(investment.investmentType) ?? 0) +
+                toNumber(investment.currentValue)
+        );
+    }
+
+    const allocation = Array.from(byType.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, amount]) => ({
+            name,
+            value:
+                totalValue > 0
+                    ? Math.round(
+                          (amount / totalValue) * 10000
+                      ) / 100
+                    : 0,
+            amount,
+        }));
+
+    const currencyCode =
+        currencies.find(
+            currency => currency.id === primaryCurrencyId
+        )?.code ?? null;
+
+    const hasOtherCurrencies =
+        new Set(
+            investments.map(
+                investment => investment.currencyId
+            )
+        ).size > 1;
+
+    return {
+        totalValue,
+        monthlyChangePercentage: null,
+        allocation,
+        currencyCode,
+        hasOtherCurrencies,
+    };
+}
+
+function getDaysUntil(
+    date: string,
+    asOf: Date = new Date()
+): number {
+    const today = new Date(asOf);
     const target = new Date(`${date}T00:00:00`);
 
     today.setHours(0, 0, 0, 0);
@@ -476,6 +832,39 @@ function getDaysUntil(date: string): number {
         (target.getTime() - today.getTime()) /
             (1000 * 60 * 60 * 24)
     );
+}
+
+/**
+ * A schedule row's due-date presentation for the Upcoming EMIs widget -
+ * Loans Phase 5. Overdue is derived here, never persisted: dueIn keeps
+ * its original "days until due" meaning for a row that isn't yet due
+ * (never negative); for an overdue row, how late it is now lives in
+ * daysOverdue instead of being silently clamped to 0 and read as "due
+ * today". A PAID row is never overdue (isScheduleOverdue excludes it
+ * unconditionally), regardless of dueDate.
+ */
+export function computeEmiDueInfo(
+    schedule: { dueDate: string; status: string },
+    asOf: Date = new Date()
+): {
+    dueIn: number;
+    isOverdue: boolean;
+    daysOverdue: number;
+} {
+    const overdue = isScheduleOverdue(schedule, asOf);
+
+    return {
+        dueIn: overdue
+            ? 0
+            : Math.max(
+                  0,
+                  getDaysUntil(schedule.dueDate, asOf)
+              ),
+        isOverdue: overdue,
+        daysOverdue: overdue
+            ? scheduleDaysOverdue(schedule, asOf)
+            : 0,
+    };
 }
 
 function getEMIType(
@@ -496,6 +885,359 @@ function getEMIType(
     }
 
     return "other";
+}
+
+/*
+ * ---------------------------------------------------------------------
+ * BANK BALANCE / CASH ON HAND - Dashboard balance tile
+ *
+ * Replaces the old single "Cash Balance" figure with a split, purely
+ * presentational breakdown of the same account types that used to feed
+ * it - net worth's own total is unaffected (see `accountsNetWorth`
+ * below): every account that used to add to net worth here still adds
+ * the exact same amount to it, now via whichever of the two accumulators
+ * it belongs to instead of one shared one.
+ * ---------------------------------------------------------------------
+ */
+
+export interface AccountBalanceSummary {
+    /** Sum of CURRENT + SAVINGS account balances - see BANK_ACCOUNT_TYPES. */
+    bankBalance: number;
+    /** Sum of CASH + WALLET account balances - see CASH_ON_HAND_ACCOUNT_TYPES. */
+    cashOnHand: number;
+    /**
+     * Net worth's contribution from accounts alone (bank + cash balances
+     * added, credit card debt subtracted; investment/loan accounts
+     * contribute nothing here - see the comments below). `getSummary()`
+     * adds loan liability and investment value on top of this
+     * afterward, exactly as it always has.
+     */
+    accountsNetWorth: number;
+    accounts: {
+        id: string;
+        name: string;
+        type: string;
+        amount: number;
+        isCreditCard: boolean;
+    }[];
+}
+
+type BalanceAccount = Pick<
+    Account,
+    "id" | "name" | "type" | "openingBalance"
+>;
+
+/**
+ * Classifies each account's current balance (opening balance + its net
+ * transaction activity) into Bank Balance, Cash on Hand, or neither,
+ * and derives the accounts-only portion of net worth alongside it - the
+ * single source of truth for both the Dashboard's Bank Balance / Cash On
+ * Hand tile and (combined with loan liability and investment value) its
+ * Net Worth figure.
+ */
+export function computeAccountBalances(
+    accounts: readonly BalanceAccount[],
+    transactionsByAccount: ReadonlyMap<string, number>
+): AccountBalanceSummary {
+    let bankBalance = 0;
+    let cashOnHand = 0;
+    let accountsNetWorth = 0;
+
+    const accountSummary = accounts.map(account => {
+        const balance = computeAccountCurrentBalance(
+            account,
+            transactionsByAccount
+        );
+
+        const isCreditCard =
+            account.type === AccountType.CREDIT_CARD;
+
+        if (BANK_ACCOUNT_TYPES.has(account.type)) {
+            bankBalance += balance;
+            accountsNetWorth += balance;
+        } else if (CASH_ON_HAND_ACCOUNT_TYPES.has(account.type)) {
+            cashOnHand += balance;
+            accountsNetWorth += balance;
+        } else if (isCreditCard) {
+            accountsNetWorth -= Math.abs(balance);
+        }
+        // AccountType.INVESTMENT: investment worth is added once from the
+        // investments domain (getSummary's totalInvestmentValue) - the
+        // linked account carries no balance, so it must not be counted
+        // here or the value would be double-counted.
+        //
+        // AccountType.LOAN: loan liability is subtracted once from the
+        // loans domain (getSummary's loanLiability) - the linked
+        // account's balance is a read-time projection of that same
+        // liability, so it must not be counted here too.
+
+        return {
+            id: account.id,
+            name: account.name,
+            type: String(account.type),
+            amount: balance,
+            isCreditCard,
+        };
+    });
+
+    return {
+        bankBalance,
+        cashOnHand,
+        accountsNetWorth,
+        accounts: accountSummary,
+    };
+}
+
+/*
+ * ---------------------------------------------------------------------
+ * BALANCE / NET WORTH SNAPSHOT - current, or AS OF a past date
+ *
+ * The Dashboard's Bank Balance, Cash On Hand and Net Worth for a
+ * selected period ending D. A period ending today (or later) keeps the
+ * existing current figures exactly (asOf = null). A period ending in the
+ * past is rebuilt from the existing models - no stored snapshots, no new
+ * valuation rules:
+ *
+ * - Accounts: opening balance + every balance-moving transaction dated
+ *   <= D (computeAccountTransactionDeltas / balanceSide - a transfer
+ *   moves its account by its direction, and stays out of
+ *   Income/Expense elsewhere).
+ * - Loans: today's outstanding principal + interest, plus every recorded
+ *   payment dated after D added back by its own stored allocation -
+ *   exactly how LoanPaymentService.reversePayment restores a payment. A
+ *   loan starting after D owes nothing yet.
+ * - Investments: each holding's quantity replayed from its ledger up to
+ *   D (InvestmentPortfolioCalculator), valued like currentValue
+ *   (quantity x currentPrice). No price history is stored, so the
+ *   current price is the only price the model has. A holding with no
+ *   ledger counts its currentValue from its purchase (or creation)
+ *   date.
+ * ---------------------------------------------------------------------
+ */
+
+export type SnapshotTransaction = AccountBalanceTransaction & {
+    transactionDate: string;
+};
+
+export type SnapshotLoan = Pick<
+    Loan,
+    | "id"
+    | "status"
+    | "startDate"
+    | "outstandingPrincipal"
+    | "outstandingInterest"
+>;
+
+export type SnapshotLoanPayment = Pick<
+    LoanSchedulePayment,
+    "loanId" | "paymentDate" | "principalAmount" | "interestAmount"
+>;
+
+export type SnapshotInvestment = Pick<
+    Investment,
+    | "id"
+    | "status"
+    | "currentValue"
+    | "currentPrice"
+    | "purchaseDate"
+    | "createdAt"
+>;
+
+export interface BalanceSnapshot extends AccountBalanceSummary {
+    loanLiability: number;
+    investmentValue: number;
+    netWorth: number;
+}
+
+/** Today's local calendar date, `YYYY-MM-DD`. */
+export function todayIsoDate(now: Date = new Date()): string {
+    return toLocalISODate(now);
+}
+
+/**
+ * The as-of date for a Dashboard range's balance figures: its end date
+ * when that is in the past, else null (= the current figures, unchanged).
+ */
+export function resolveBalanceAsOf(
+    range: DashboardDateRange,
+    today: string = todayIsoDate()
+): string | null {
+    return range.end < today ? range.end : null;
+}
+
+const SHORT_MONTH_NAMES = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * "As of DD Mon YYYY" for a historical balance snapshot (e.g.
+ * "As of 31 Aug 2026"); null for the current figures. Built from the
+ * `YYYY-MM-DD` parts directly - no Date/timezone conversion.
+ */
+export function formatBalanceAsOfLabel(
+    asOf: string | null
+): string | null {
+    if (!asOf) {
+        return null;
+    }
+
+    const [year, month, day] = asOf.split("-");
+
+    return `As of ${day} ${SHORT_MONTH_NAMES[Number(month) - 1]} ${year}`;
+}
+
+/** Loan liability now (asOf null - unchanged formula) or as of a date. */
+export function computeLoanLiability(
+    loans: readonly SnapshotLoan[],
+    payments: readonly SnapshotLoanPayment[],
+    asOf: string | null
+): number {
+    if (asOf === null) {
+        return loans.reduce(
+            (total, loan) =>
+                loan.status === "CLOSED"
+                    ? total
+                    : total +
+                      Math.abs(toNumber(loan.outstandingPrincipal)) +
+                      Math.abs(toNumber(loan.outstandingInterest)),
+            0
+        );
+    }
+
+    const paidAfter = new Map<string, number>();
+
+    for (const payment of payments) {
+        if (payment.paymentDate > asOf) {
+            paidAfter.set(
+                payment.loanId,
+                (paidAfter.get(payment.loanId) ?? 0) +
+                    toNumber(payment.principalAmount) +
+                    toNumber(payment.interestAmount)
+            );
+        }
+    }
+
+    return loans.reduce((total, loan) => {
+        if (loan.startDate > asOf) {
+            return total;
+        }
+
+        // A CLOSED loan owes nothing today (it can only be closed once
+        // fully paid - see LoanService); what it owed at D is exactly
+        // the payments made after D.
+        const outstandingNow =
+            loan.status === "CLOSED"
+                ? 0
+                : Math.abs(toNumber(loan.outstandingPrincipal)) +
+                  Math.abs(toNumber(loan.outstandingInterest));
+
+        return total + outstandingNow + (paidAfter.get(loan.id) ?? 0);
+    }, 0);
+}
+
+/**
+ * Investment value for net worth now (asOf null - unchanged: every
+ * non-CLOSED investment's currentValue) or as of a date.
+ */
+export function computeInvestmentValue(
+    investments: readonly SnapshotInvestment[],
+    investmentTransactions: readonly InvestmentTransaction[],
+    asOf: string | null
+): number {
+    const active = investments.filter(
+        investment => investment.status !== "CLOSED"
+    );
+
+    if (asOf === null) {
+        return active.reduce(
+            (sum, investment) => sum + toNumber(investment.currentValue),
+            0
+        );
+    }
+
+    const ledgerByInvestment = new Map<string, InvestmentTransaction[]>();
+
+    for (const transaction of investmentTransactions) {
+        const ledger = ledgerByInvestment.get(transaction.investmentId);
+
+        if (ledger) {
+            ledger.push(transaction);
+        } else {
+            ledgerByInvestment.set(transaction.investmentId, [transaction]);
+        }
+    }
+
+    const calculator = new InvestmentPortfolioCalculator();
+
+    return active.reduce((sum, investment) => {
+        const ledger = ledgerByInvestment.get(investment.id);
+
+        if (!ledger || ledger.length === 0) {
+            const heldFrom =
+                investment.purchaseDate ?? investment.createdAt.slice(0, 10);
+
+            return heldFrom <= asOf
+                ? sum + toNumber(investment.currentValue)
+                : sum;
+        }
+
+        const { quantity } = calculator.calculate(
+            ledger.filter(transaction => transaction.transactionDate <= asOf)
+        );
+
+        return sum + quantity * toNumber(investment.currentPrice);
+    }, 0);
+}
+
+/**
+ * Bank Balance, Cash On Hand and Net Worth - current (asOf null, exactly
+ * the existing figures) or as of a past date. `accounts` are the active
+ * accounts, as before.
+ */
+export function computeBalanceSnapshot(input: {
+    accounts: readonly BalanceAccount[];
+    transactions: readonly SnapshotTransaction[];
+    loans: readonly SnapshotLoan[];
+    loanPayments: readonly SnapshotLoanPayment[];
+    investments: readonly SnapshotInvestment[];
+    investmentTransactions: readonly InvestmentTransaction[];
+    asOf: string | null;
+}): BalanceSnapshot {
+    const { asOf } = input;
+
+    const transactionsByAccount = computeAccountTransactionDeltas(
+        asOf === null
+            ? input.transactions
+            : input.transactions.filter(
+                  transaction => transaction.transactionDate <= asOf
+              )
+    );
+
+    const balances = computeAccountBalances(
+        input.accounts,
+        transactionsByAccount
+    );
+
+    const loanLiability = computeLoanLiability(
+        input.loans,
+        input.loanPayments,
+        asOf
+    );
+
+    const investmentValue = computeInvestmentValue(
+        input.investments,
+        input.investmentTransactions,
+        asOf
+    );
+
+    return {
+        ...balances,
+        loanLiability,
+        investmentValue,
+        // Same order of operations as before: accounts - loans + investments.
+        netWorth: balances.accountsNetWorth - loanLiability + investmentValue,
+    };
 }
 
 export class DashboardService {
@@ -532,9 +1274,20 @@ export class DashboardService {
     private readonly categoryService =
         new CategoryService();
 
+    private readonly loanSchedulePaymentRepository =
+        new LoanSchedulePaymentRepository();
+
+    private readonly investmentTransactionRepository =
+        new InvestmentTransactionRepository();
+
     async getSummary(
         range: DashboardDateRange = rangeFromDays()
     ): Promise<DashboardSummary> {
+        // A period ending in the past shows Bank Balance / Cash On Hand /
+        // Net Worth AS OF its end date; otherwise the current figures,
+        // unchanged (see computeBalanceSnapshot).
+        const balanceAsOf = resolveBalanceAsOf(range);
+
         const [
             accounts,
             transactions,
@@ -546,6 +1299,8 @@ export class DashboardService {
             institutions,
             currencies,
             emiInterestByTransactionId,
+            loanPayments,
+            investmentTransactions,
         ] = await Promise.all([
             this.accountService.getAll(),
             this.transactionService.getAll(),
@@ -557,6 +1312,14 @@ export class DashboardService {
             this.institutionService.getAll(),
             this.currencyService.getAll(),
             this.emiScheduleService.getInterestByTransactionId(),
+            // Only a historical snapshot needs these - one query each,
+            // never one per loan / investment.
+            balanceAsOf
+                ? this.loanSchedulePaymentRepository.getAll()
+                : Promise.resolve([]),
+            balanceAsOf
+                ? this.investmentTransactionRepository.getAll()
+                : Promise.resolve([]),
         ]);
 
         const rangeStart = range.start;
@@ -571,6 +1334,12 @@ export class DashboardService {
             categories.filter(
                 category => category.isActive
             );
+
+        // TRANSFER-type categories (active or not): a transaction in one
+        // is a transfer - excluded from every income/expense total below,
+        // never from account balances.
+        const transferCategoryIds =
+            transferCategoryIdSet(categories);
 
         const categoryMap =
             new Map(
@@ -608,138 +1377,60 @@ export class DashboardService {
                 continue;
             }
 
-            const amount =
-                Math.abs(
-                    toNumber(transaction.amount)
-                );
+            // Transfers are neither income nor expense.
+            if (
+                isTransferClassified(
+                    transaction,
+                    transferCategoryIds
+                )
+            ) {
+                continue;
+            }
 
             if (transaction.type === "income") {
-                income += amount;
-            }
-
-            if (transaction.type === "expense") {
-                expenses += amount;
-            }
-        }
-
-        const transactionsByAccount =
-            new Map<string, number>();
-
-        for (const transaction of transactions) {
-            const amount =
-                Math.abs(
+                income += Math.abs(
                     toNumber(transaction.amount)
                 );
-
-            if (transaction.type === "income") {
-                transactionsByAccount.set(
-                    transaction.accountId,
-                    (
-                        transactionsByAccount.get(
-                            transaction.accountId
-                        ) ?? 0
-                    ) + amount
-                );
             }
 
+            // A loan EMI payment's principal portion reduces the loan
+            // liability (see loanLiability below), not spending - only
+            // the interest portion counts here, matching Budgets'
+            // classifyBudgetTransaction exactly (Loans Phase 2).
             if (transaction.type === "expense") {
-                transactionsByAccount.set(
-                    transaction.accountId,
-                    (
-                        transactionsByAccount.get(
-                            transaction.accountId
-                        ) ?? 0
-                    ) - amount
+                expenses += resolveExpenseAmount(
+                    transaction,
+                    emiInterestByTransactionId
                 );
             }
         }
 
-        let cashBalance = 0;
-        let netWorth = 0;
+        // Accounts - loans + investments (see computeBalanceSnapshot). The
+        // current snapshot also feeds the Accounts Summary card, which
+        // always shows today's balances.
+        const snapshotInput = {
+            accounts: activeAccounts,
+            transactions,
+            loans,
+            loanPayments,
+            investments,
+            investmentTransactions,
+        };
 
-        const accountSummary =
-            activeAccounts.map(account => {
-                const balance =
-                    toNumber(
-                        account.openingBalance
-                    ) +
-                    (
-                        transactionsByAccount.get(
-                            account.id
-                        ) ?? 0
-                    );
+        const currentSnapshot = computeBalanceSnapshot({
+            ...snapshotInput,
+            asOf: null,
+        });
 
-                const isCreditCard =
-                    account.type ===
-                    AccountType.CREDIT_CARD;
+        const { bankBalance, cashOnHand, netWorth } =
+            balanceAsOf === null
+                ? currentSnapshot
+                : computeBalanceSnapshot({
+                      ...snapshotInput,
+                      asOf: balanceAsOf,
+                  });
 
-                switch (account.type) {
-                    case AccountType.CASH:
-                    case AccountType.SAVINGS:
-                    case AccountType.CURRENT:
-                    case AccountType.WALLET:
-                        cashBalance += balance;
-                        netWorth += balance;
-                        break;
-
-                    case AccountType.CREDIT_CARD:
-                        netWorth -= Math.abs(balance);
-                        break;
-
-                    case AccountType.INVESTMENT:
-                        // Investment worth is added once from the investments
-                        // domain below (totalInvestmentValue). The linked
-                        // account carries no balance, so it must not be
-                        // counted here or the value is double-counted.
-                        break;
-
-                    case AccountType.LOAN:
-                        // Loan liability is subtracted once from the loans
-                        // domain below (loanLiability). The linked account's
-                        // balance is a read-time projection of that same
-                        // liability, so it must not be counted here too.
-                        break;
-
-                    default:
-                        break;
-                }
-
-                return {
-                    id: account.id,
-                    name: account.name,
-                    type: String(account.type),
-                    amount: balance,
-                    isCreditCard,
-                };
-            });
-
-        const loanLiability =
-            loans.reduce(
-                (total, loan) => {
-                    if (
-                        loan.status === "CLOSED"
-                    ) {
-                        return total;
-                    }
-
-                    return (
-                        total +
-                        Math.abs(
-                            toNumber(
-                                loan.outstandingPrincipal
-                            )
-                        ) +
-                        Math.abs(
-                            toNumber(
-                                loan.outstandingInterest
-                            )
-                        )
-                    );
-                },
-                0
-            );
-
-        netWorth -= loanLiability;
+        const accountSummary = currentSnapshot.accounts;
 
         const savingsRate =
             income > 0
@@ -760,7 +1451,9 @@ export class DashboardService {
             {
                 start: rangeStart,
                 end: rangeEnd,
-            }
+            },
+            emiInterestByTransactionId,
+            transferCategoryIds
         );
 
         /*
@@ -775,14 +1468,19 @@ export class DashboardService {
             {
                 start: rangeStart,
                 end: rangeEnd,
-            }
+            },
+            emiInterestByTransactionId,
+            transferCategoryIds
         );
 
-        const expenseBreakdown = sortedCategories.map(
-            (item) => ({
-                name: item.name,
-                value: item.value,
-            })
+        const expenseBreakdown = computeTopExpenseTransactions(
+            transactions,
+            {
+                start: rangeStart,
+                end: rangeEnd,
+            },
+            emiInterestByTransactionId,
+            transferCategoryIds
         );
 
         const topSpendingCategories = sortedCategories
@@ -851,10 +1549,9 @@ export class DashboardService {
          * UPCOMING EMIs
          * ---------------------------------------------------------
          *
-         * Loan model does not currently contain an individual
-         * repayment schedule, so use the loan maturity/start
-         * information available to us. We do not invent EMI
-         * records that do not exist in the database.
+         * Read directly from each active loan's real
+         * loan_payment_schedule rows (UPCOMING/PARTIAL) - never
+         * derived from maturity/start dates and never invented.
          */
 
         const institutionNames = new Map(
@@ -893,10 +1590,11 @@ export class DashboardService {
                     return null;
                 }
 
-                const dueIn = Math.max(
-                    0,
-                    getDaysUntil(schedule.dueDate)
-                );
+                const {
+                    dueIn,
+                    isOverdue,
+                    daysOverdue,
+                } = computeEmiDueInfo(schedule);
 
                 const progress =
                     loan.principalAmount > 0
@@ -930,6 +1628,8 @@ export class DashboardService {
                         String(DEFAULT_SETTINGS[SETTING_KEYS.DATE_FORMAT])
                     ),
                     dueIn,
+                    isOverdue,
+                    daysOverdue,
                     progress,
                     type: getEMIType(
                         loan.loanType
@@ -983,6 +1683,7 @@ export class DashboardService {
                 month: currentMonth(),
                 emiInterestByTransactionId,
                 creditCardAccountIds,
+                transferCategoryIds,
             });
         /*
          * ---------------------------------------------------------
@@ -1055,65 +1756,33 @@ export class DashboardService {
                     "CLOSED"
             );
 
-        const totalInvestmentValue =
-            activeInvestments.reduce(
-                (sum, investment) =>
-                    sum +
-                    toNumber(
-                        investment.currentValue
-                    ),
-                0
+        // Net worth (computeBalanceSnapshot above) keeps summing every
+        // active investment's value regardless of currency, unchanged -
+        // net worth already mixes currencies across every account type
+        // app-wide (Investments Phase 5 review), and scoping only the
+        // investments slice of it would just make it inconsistently
+        // under-count rather than actually fix that broader,
+        // pre-existing behavior.
+        //
+        // The Investment Summary widget's own totalValue/allocation
+        // are a different story: summing currentValue across
+        // investments in different currencies there would produce a
+        // number with no real meaning (e.g. INR + USD) - scoped to a
+        // single primary currency below, mirroring the Budgets
+        // module's resolveBudgetCurrencyScopes pattern.
+        const investmentSummary =
+            computeDashboardInvestmentSummary(
+                activeInvestments,
+                currencies
             );
-
-        netWorth += totalInvestmentValue;
-
-        const investmentByType =
-            new Map<string, number>();
-
-        for (const investment of activeInvestments) {
-            investmentByType.set(
-                investment.investmentType,
-                (
-                    investmentByType.get(
-                        investment.investmentType
-                    ) ?? 0
-                ) +
-                    toNumber(
-                        investment.currentValue
-                    )
-            );
-        }
-
-        const investmentAllocation =
-            Array.from(
-                investmentByType.entries()
-            )
-                .sort(
-                    (a, b) => b[1] - a[1]
-                )
-                .map(
-                    ([name, amount]) => ({
-                        name,
-                        value:
-                            totalInvestmentValue >
-                            0
-                                ? Math.round(
-                                      (
-                                          amount /
-                                          totalInvestmentValue
-                                      ) *
-                                          10000
-                                  ) / 100
-                                : 0,
-                        amount,
-                    })
-                );
 
         return {
-            cashBalance,
+            bankBalance,
+            cashOnHand,
             income,
             expenses,
             netWorth,
+            balanceAsOf,
             savingsRate,
 
             cashFlow,
@@ -1133,53 +1802,53 @@ export class DashboardService {
 
             goalsProgress,
 
-            investmentSummary: {
-                totalValue:
-                    totalInvestmentValue,
-                monthlyChangePercentage: 0,
-                allocation:
-                    investmentAllocation,
-            },
+            investmentSummary,
         };
     }
 
     /**
      * Cash Flow Overview series for its own period filter. Independent
      * of the main dashboard range; uses the same aggregation as
-     * `getSummary`.
+     * `getSummary` - including the same loan-EMI interest-only
+     * treatment (Loans Phase 2), so this view never disagrees with the
+     * main dashboard range's cash flow for the same underlying data.
      */
     async getCashFlow(
         range: DashboardDateRange = rangeFromDays()
     ): Promise<CashFlowPoint[]> {
-        const transactions =
-            await this.transactionService.getAll();
+        const [transactions, emiInterestByTransactionId] =
+            await Promise.all([
+                this.transactionService.getAll(),
+                this.emiScheduleService.getInterestByTransactionId(),
+            ]);
 
-        return computeCashFlowSeries(transactions, range);
+        return computeCashFlowSeries(
+            transactions,
+            range,
+            emiInterestByTransactionId
+        );
     }
 
     /**
-     * Expense Breakdown category totals for its own period filter.
-     * Independent of the main dashboard range; uses the same
-     * aggregation as `getSummary`.
+     * Expense Breakdown for its own period filter: the top individual
+     * expense transactions (not categories), by absolute amount
+     * descending. Independent of the main dashboard range; uses the
+     * same aggregation - including the same loan-EMI interest-only
+     * treatment (Loans Phase 2) - as `getSummary`.
      */
     async getExpenseBreakdown(
         range: DashboardDateRange = rangeFromDays()
     ): Promise<ExpenseBreakdownItem[]> {
-        const [transactions, categories] = await Promise.all([
-            this.transactionService.getAll(),
-            this.categoryService.getAll(),
-        ]);
+        const [transactions, emiInterestByTransactionId] =
+            await Promise.all([
+                this.transactionService.getAll(),
+                this.emiScheduleService.getInterestByTransactionId(),
+            ]);
 
-        const categoryNames = new Map(
-            categories
-                .filter((category) => category.isActive)
-                .map((category) => [category.id, category.name])
-        );
-
-        return computeExpensesByCategory(
+        return computeTopExpenseTransactions(
             transactions,
-            categoryNames,
-            range
+            range,
+            emiInterestByTransactionId
         );
     }
 }

@@ -16,6 +16,7 @@ import {
     AddInvestmentTransactionDialog,
     EditInvestmentDialog,
     DeleteInvestmentDialog,
+    UpdateInvestmentPriceDialog,
     EditInvestmentTransactionDialog,
     DeleteInvestmentTransactionDialog,
 } from "../components";
@@ -23,6 +24,8 @@ import {
 import {
     InvestmentService,
     InvestmentTransactionService,
+    getInvestmentPriceFreshness,
+    resolvePrimaryInvestmentCurrencyId,
 } from "../services";
 
 import {
@@ -31,6 +34,8 @@ import {
     InvestmentTransaction,
 } from "../types";
 
+import { useCurrencies } from "@/modules/currencies";
+
 import {
     List,
     Pencil,
@@ -38,7 +43,23 @@ import {
     Trash2,
 } from "lucide-react";
 
+/**
+ * The investment table's Symbol column display value. A missing/empty
+ * symbol falls back to a plain em dash - never persisted, display only.
+ * Exported so this is unit testable without a jsdom / component-render
+ * setup (this repo has none - see DeletePlanComponentDialog.test.ts for
+ * the same convention).
+ */
+export function getInvestmentSymbolDisplay(
+    symbol: string | null | undefined
+): string {
+    return symbol || "—";
+}
+
 export default function InvestmentsPage() {
+    const formatPriceDate = useDateFormatter();
+    const { currencies } = useCurrencies();
+
     const [investments, setInvestments] =
         useState<Investment[]>([]);
 
@@ -217,12 +238,46 @@ export default function InvestmentsPage() {
                     InvestmentStatus.ACTIVE
             );
 
+        // Counts are fine across currencies ("5 investments" doesn't
+        // mix units), but the money figures below are not - summing
+        // INR and USD currentValue together would be meaningless.
+        // Aggregate only the investments in one resolved primary
+        // currency, mirroring the Budgets module's
+        // resolveBudgetCurrencyScopes pattern. When every investment
+        // shares one currency (the common case) this includes all of
+        // them and behaves exactly as before.
+        const primaryCurrencyId =
+            resolvePrimaryInvestmentCurrencyId(
+                investments,
+                currencies
+            );
+
+        const hasOtherCurrencies =
+            new Set(
+                investments.map(
+                    (investment) => investment.currencyId
+                )
+            ).size > 1;
+
+        const currencyCode =
+            currencies.find(
+                (currency) =>
+                    currency.id === primaryCurrencyId
+            )?.code ?? null;
+
         let investedCost = 0;
         let currentValue = 0;
         let realizedGainLoss = 0;
         let income = 0;
 
         for (const investment of investments) {
+            if (
+                investment.currencyId !==
+                primaryCurrencyId
+            ) {
+                continue;
+            }
+
             const calculation =
                 portfolioCalculations[
                     investment.id
@@ -271,10 +326,15 @@ export default function InvestmentsPage() {
             income,
 
             totalReturn,
+
+            hasOtherCurrencies,
+
+            currencyCode,
         };
     }, [
         investments,
         portfolioCalculations,
+        currencies,
     ]);
 
     return (
@@ -363,6 +423,20 @@ export default function InvestmentsPage() {
                             }
                         />
                     </div>
+
+                    {summary.hasOtherCurrencies && (
+                        <p className="text-xs text-amber-600">
+                            Showing{" "}
+                            {summary.currencyCode ??
+                                "the primary currency"}{" "}
+                            investments only in the totals
+                            above - investments in other
+                            currencies are listed in the
+                            table below but excluded from
+                            these sums to avoid mixing
+                            currencies.
+                        </p>
+                    )}
                 </div>
 
                 <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm">
@@ -373,7 +447,10 @@ export default function InvestmentsPage() {
                             </h2>
 
                             <p className="mt-1 text-xs text-slate-500">
-                                Your current investment holdings.
+                                Your current investment
+                                holdings. Prices are entered
+                                manually and are not fetched
+                                automatically.
                             </p>
                         </div>
 
@@ -462,7 +539,7 @@ export default function InvestmentsPage() {
                                         </TableHeader>
 
                                         <TableHeader align="right">
-                                            Gain / Loss
+                                            Unrealized Gain/Loss
                                         </TableHeader>
 
                                         <TableHeader>
@@ -516,8 +593,9 @@ export default function InvestmentsPage() {
                                                     </td>
 
                                                     <td className="px-5 py-4 text-sm font-medium text-slate-700">
-                                                        {investment.symbol ||
-                                                            "â€”"}
+                                                        {getInvestmentSymbolDisplay(
+                                                            investment.symbol
+                                                        )}
                                                     </td>
 
                                                     <td className="px-5 py-4 text-right text-sm text-slate-700">
@@ -536,6 +614,15 @@ export default function InvestmentsPage() {
                                                         {formatAmount(
                                                             investment.currentPrice
                                                         )}
+
+                                                        <PriceFreshnessCaption
+                                                            priceUpdatedAt={
+                                                                investment.priceUpdatedAt
+                                                            }
+                                                            formatDate={
+                                                                formatPriceDate
+                                                            }
+                                                        />
                                                     </td>
 
                                                     <td className="px-5 py-4 text-right text-sm font-medium text-slate-900">
@@ -544,16 +631,33 @@ export default function InvestmentsPage() {
                                                         )}
                                                     </td>
 
-                                                    <td
-                                                        className={`px-5 py-4 text-right text-sm font-medium ${
-                                                            gainLoss >=
-                                                            0
-                                                                ? "text-emerald-600"
-                                                                : "text-red-600"
-                                                        }`}
-                                                    >
-                                                        {formatAmount(
-                                                            gainLoss
+                                                    <td className="px-5 py-4 text-right text-sm font-medium">
+                                                        {investment.quantity ===
+                                                        0 ? (
+                                                            <ClosedPositionPerformance
+                                                                calculation={
+                                                                    portfolioCalculations[
+                                                                        investment
+                                                                            .id
+                                                                    ]
+                                                                }
+                                                                formatAmount={
+                                                                    formatAmount
+                                                                }
+                                                            />
+                                                        ) : (
+                                                            <span
+                                                                className={
+                                                                    gainLoss >=
+                                                                    0
+                                                                        ? "text-emerald-600"
+                                                                        : "text-red-600"
+                                                                }
+                                                            >
+                                                                {formatAmount(
+                                                                    gainLoss
+                                                                )}
+                                                            </span>
                                                         )}
                                                     </td>
 
@@ -606,6 +710,15 @@ export default function InvestmentsPage() {
                                                                             );
                                                                         }
                                                                     }
+                                                                }
+                                                            />
+
+                                                            <UpdateInvestmentPriceDialog
+                                                                investment={
+                                                                    investment
+                                                                }
+                                                                onSuccess={
+                                                                    loadInvestments
                                                                 }
                                                             />
 
@@ -828,7 +941,7 @@ function TransactionHistory({
                                         <td className="px-4 py-2 text-sm text-slate-500">
                                             {
                                                 transaction.referenceNumber ||
-                                                "â€”"
+                                                "—"
                                             }
                                         </td>
 
@@ -952,6 +1065,103 @@ function StatusBadge({
         <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
             {label}
         </span>
+    );
+}
+
+/**
+ * Once quantity hits 0, currentValue and averageCost*quantity are both
+ * 0, so the "Unrealized Gain/Loss" column would show a flat 0 for a
+ * fully-sold position - indistinguishable from "this never made or
+ * lost money," even though it may have realized a large gain or loss
+ * before being closed out. Show that lifetime realized performance
+ * (realized gain/loss + dividend/interest income - both already
+ * accurately tracked, see the Investments Phase 5 review) instead,
+ * rather than a misleading 0. Renders "—" while the per-investment
+ * calculation is still loading, never a fabricated 0.
+ */
+function ClosedPositionPerformance({
+    calculation,
+    formatAmount,
+}: {
+    calculation:
+        | {
+              realizedGainLoss: number;
+              income: number;
+          }
+        | undefined;
+    formatAmount(value: number): string;
+}) {
+    if (!calculation) {
+        return (
+            <span className="text-slate-400">—</span>
+        );
+    }
+
+    const lifetimeResult =
+        calculation.realizedGainLoss +
+        calculation.income;
+
+    return (
+        <div>
+            <span
+                className={
+                    lifetimeResult >= 0
+                        ? "text-emerald-600"
+                        : "text-red-600"
+                }
+            >
+                {formatAmount(lifetimeResult)}
+            </span>
+
+            <div className="mt-0.5 text-[11px] font-normal text-slate-400">
+                Realized - fully sold
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Small caption under a manually-entered current price: the stored
+ * date, plus a plain-language freshness note when it's stale (see
+ * getInvestmentPriceFreshness - the single source of truth for the
+ * 30-day rule, not re-derived here).
+ */
+function PriceFreshnessCaption({
+    priceUpdatedAt,
+    formatDate,
+}: {
+    priceUpdatedAt: string | null;
+    formatDate: (
+        value: string | Date | null | undefined
+    ) => string;
+}) {
+    const freshness = getInvestmentPriceFreshness(
+        priceUpdatedAt
+    );
+    const formattedDate = priceUpdatedAt
+        ? formatDate(priceUpdatedAt)
+        : "";
+
+    if (freshness === "unknown" || !formattedDate) {
+        return (
+            <div className="mt-0.5 text-[11px] text-slate-400">
+                Price update date unknown
+            </div>
+        );
+    }
+
+    if (freshness === "stale") {
+        return (
+            <div className="mt-0.5 text-[11px] font-medium text-amber-600">
+                Stale since {formattedDate}
+            </div>
+        );
+    }
+
+    return (
+        <div className="mt-0.5 text-[11px] text-slate-400">
+            Updated {formattedDate}
+        </div>
     );
 }
 

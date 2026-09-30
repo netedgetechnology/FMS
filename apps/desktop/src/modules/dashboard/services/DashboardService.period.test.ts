@@ -9,7 +9,9 @@ import {
 import {
     computeCashFlowSeries,
     computeExpensesByCategory,
+    computeTopExpenseTransactions,
     DEFAULT_DASHBOARD_PERIOD,
+    MAX_EXPENSE_TRANSACTIONS,
     rangeFromDays,
     resolveDashboardPeriod,
     type DashboardPeriod,
@@ -22,12 +24,21 @@ const freezeAt = (iso: string) => {
     vi.setSystemTime(new Date(iso));
 };
 
+let txSequence = 0;
+
 const tx = (
     transactionDate: string,
     type: string,
     amount: number,
     categoryId: string | null = null,
-) => ({ transactionDate, type, amount, categoryId });
+    id?: string,
+) => ({
+    id: id ?? `tx-${++txSequence}`,
+    transactionDate,
+    type,
+    amount,
+    categoryId,
+});
 
 describe("resolveDashboardPeriod", () => {
     afterEach(() => vi.useRealTimers());
@@ -180,6 +191,131 @@ describe("computeExpensesByCategory", () => {
 
         expect(sep).toEqual([{ name: "Groceries", value: 300 }]);
         expect(oct).toEqual([{ name: "Rent", value: 800 }]);
+    });
+});
+
+describe("computeTopExpenseTransactions", () => {
+    const range = { start: "2026-09-01", end: "2026-09-30" };
+
+    const expenseTx = (
+        transactionDate: string,
+        amount: number,
+        payee: string = "Vendor",
+        type: string = "expense",
+        id?: string,
+    ) => ({
+        id: id ?? `tx-${++txSequence}`,
+        transactionDate,
+        type,
+        amount,
+        payee,
+    });
+
+    it("returns only the top 10 transactions, sorted by amount descending, when more than 10 exist", () => {
+        const txns = Array.from({ length: 12 }, (_, i) =>
+            expenseTx("2026-09-05", i + 1, `Payee ${i + 1}`),
+        ); // amounts 1..12
+
+        const result = computeTopExpenseTransactions(txns, range);
+
+        expect(result).toHaveLength(MAX_EXPENSE_TRANSACTIONS);
+        expect(result.map((r) => r.value)).toEqual([
+            12, 11, 10, 9, 8, 7, 6, 5, 4, 3,
+        ]);
+    });
+
+    it("filters by the selected period, excluding transactions outside the range", () => {
+        const txns = [
+            expenseTx("2026-09-05", 300, "In range"),
+            expenseTx("2026-10-05", 999999, "Out of range - next month"),
+            expenseTx("2026-08-05", 999999, "Out of range - previous month"),
+        ];
+
+        const result = computeTopExpenseTransactions(txns, range);
+
+        expect(result).toEqual([{ name: "In range", value: 300 }]);
+    });
+
+    it("changes with the range (filter is functional, like computeExpensesByCategory)", () => {
+        const txns = [
+            expenseTx("2026-09-02", 300, "Sep purchase"),
+            expenseTx("2026-10-02", 800, "Oct purchase"),
+        ];
+
+        const sep = computeTopExpenseTransactions(txns, {
+            start: "2026-09-01",
+            end: "2026-09-30",
+        });
+        const oct = computeTopExpenseTransactions(txns, {
+            start: "2026-10-01",
+            end: "2026-10-31",
+        });
+
+        expect(sep).toEqual([{ name: "Sep purchase", value: 300 }]);
+        expect(oct).toEqual([{ name: "Oct purchase", value: 800 }]);
+    });
+
+    it("selects expense transactions only, ignoring income and transfers", () => {
+        const txns = [
+            expenseTx("2026-09-05", 5000, "Salary", "income"),
+            expenseTx("2026-09-06", 2000, "Savings transfer", "transfer"),
+            expenseTx("2026-09-07", 400, "Groceries", "expense"),
+        ];
+
+        const result = computeTopExpenseTransactions(txns, range);
+
+        expect(result).toEqual([{ name: "Groceries", value: 400 }]);
+    });
+
+    it("returns all available transactions when fewer than 10 exist", () => {
+        const txns = [
+            expenseTx("2026-09-01", 300, "A"),
+            expenseTx("2026-09-02", 100, "B"),
+            expenseTx("2026-09-03", 200, "C"),
+        ];
+
+        const result = computeTopExpenseTransactions(txns, range);
+
+        expect(result).toHaveLength(3);
+        expect(result.map((r) => r.value)).toEqual([300, 200, 100]);
+    });
+
+    it("never produces an 'Others' entry, and the top-10 sum excludes amounts beyond the top 10 (so percentages against it total 100%)", () => {
+        // 11 expenses: the smallest (50) falls outside the top 10 and
+        // must be dropped entirely, not merged into any bucket.
+        const txns = [
+            ...Array.from({ length: 10 }, (_, i) =>
+                expenseTx("2026-09-05", 100 + i, `Payee ${i}`),
+            ), // 100..109
+            expenseTx("2026-09-06", 50, "Smallest - dropped"),
+        ];
+
+        const result = computeTopExpenseTransactions(txns, range);
+
+        expect(result).toHaveLength(10);
+        expect(result.some((r) => r.name === "Others")).toBe(false);
+
+        const top10Sum = result.reduce((sum, r) => sum + r.value, 0);
+        const allExpensesSum = txns.reduce((sum, t) => sum + t.amount, 0);
+
+        // sum of the returned top 10 (104.5..109 range) must exclude the
+        // dropped 50, so it is strictly less than the sum of all 11.
+        expect(top10Sum).toBe(1045); // 100+101+...+109
+        expect(top10Sum).toBeLessThan(allExpensesSum);
+    });
+
+    it("labels each transaction with its payee, falling back to 'Transaction' when payee is blank", () => {
+        const txns = [
+            expenseTx("2026-09-05", 500, "Amazon"),
+            expenseTx("2026-09-06", 300, ""),
+        ];
+
+        const result = computeTopExpenseTransactions(txns, range);
+
+        expect(result).toEqual([
+            { name: "Amazon", value: 500 },
+            { name: "Transaction", value: 300 },
+        ]);
     });
 });
 

@@ -1,0 +1,79 @@
+{
+  "source": "Structure of a real Indian current-account statement (anonymised): newest-first, reference column before description, unused Withdrawals/Deposits cell left blank so only amount + balance appear, narration wrapped over several lines, repeated per-page header block and page markers, opening balance only in the footer summary.",
+  "importType": "BANK_PDF",
+  "features": [
+    "withdrawal-deposit",
+    "blank-unused-cell",
+    "direction-from-balance-delta",
+    "newest-first",
+    "same-day-rows",
+    "reference-column-before-description",
+    "multi-line-narration",
+    "multi-page-repeated-header",
+    "opening-balance-footer",
+    "zero-balance",
+    "comma-amounts"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 6,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-02-15",
+        "type": "income",
+        "amount": 12345.67,
+        "balance": 12345.67,
+        "reference": "YES0N6046000000007",
+        "description": "NEFT Cr-TEST0000001-ACME CLIENT LTD- INVOICE 1042"
+      },
+      {
+        "date": "2026-02-12",
+        "type": "expense",
+        "amount": 2499.5,
+        "balance": 0,
+        "reference": "2414920260212000300000001",
+        "description": "own account/own account/MOBTXN"
+      },
+      {
+        "date": "2026-02-10",
+        "type": "expense",
+        "amount": 3000,
+        "balance": 2499.5,
+        "reference": "10002047620260210000001",
+        "description": "EMI_LOAN000000000001_TEST BORROWER"
+      },
+      {
+        "date": "2026-01-05",
+        "type": "income",
+        "amount": 1000,
+        "balance": 5499.5,
+        "reference": "YESI6005000000004"
+      },
+      {
+        "date": "2026-01-05",
+        "type": "expense",
+        "amount": 1250.5,
+        "balance": 4499.5,
+        "reference": "YBS6005000000003"
+      },
+      {
+        "date": "2026-01-05",
+        "type": "expense",
+        "amount": 250,
+        "balance": 5750,
+        "reference": "YBS6005000000002"
+      },
+      {
+        "date": "2026-01-02",
+        "type": "income",
+        "amount": 5000,
+        "balance": 6000,
+        "reference": "YES0N6002000000001",
+        "description": "NEFT Cr-TEST0000001-ACME CLIENT LTD- ADVANCE"
+      }
+    ]
+  }
+}

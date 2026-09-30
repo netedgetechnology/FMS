@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 import { InvestmentService } from "../services";
 import { Investment } from "../types";
 
@@ -11,7 +12,13 @@ export function useInvestments() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // Guards against a slower, still in-flight refresh overwriting state
+    // with stale data after a newer refresh has already resolved - see
+    // LatestRequestGuard.
+    const requestGuard = useRef(new LatestRequestGuard());
+
     const loadInvestments = useCallback(async () => {
+        const requestId = requestGuard.current.start();
 
         try {
 
@@ -20,9 +27,17 @@ export function useInvestments() {
 
             const data = await service.getAll();
 
+            if (requestGuard.current.isStale(requestId)) {
+                return;
+            }
+
             setInvestments(data);
 
         } catch (err) {
+
+            if (requestGuard.current.isStale(requestId)) {
+                return;
+            }
 
             console.error("INVESTMENTS LOAD ERROR:", err);
 
@@ -35,7 +50,9 @@ export function useInvestments() {
 
         } finally {
 
-            setLoading(false);
+            if (!requestGuard.current.isStale(requestId)) {
+                setLoading(false);
+            }
 
         }
 

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { Budget } from "../types";
 
 import {
+    calculateAllBudgetsSpending,
     calculateBudgetSpending,
+    calculateBudgetSpendingForView,
     type BudgetLedgerEntry,
 } from "./budgetSpending";
 
@@ -325,6 +327,54 @@ describe("calculateBudgetSpending - zero / under / exact / over budget", () => {
         expect(line.percentageUsed).toBe(120);
         expect(line.overBudget).toBe(true);
         expect(line.thresholdState).toBe("over");
+    });
+
+    it("50,100 / 60,000 is exactly 83.5%, not rounded to 84", () => {
+        const [line] = calculateBudgetSpending({
+            budgets: [makeBudget({ amount: 60000 })],
+            currencyId: INR,
+            month: september2026,
+            transactions: [expense({ amount: 50100 })],
+        }).lines;
+
+        expect(line.percentageUsed).toBeCloseTo(83.5, 10);
+    });
+
+    it("1,000 / 60,000 is exactly 1.666...%, not rounded to 2", () => {
+        const [line] = calculateBudgetSpending({
+            budgets: [makeBudget({ amount: 60000 })],
+            currencyId: INR,
+            month: september2026,
+            transactions: [expense({ amount: 1000 })],
+        }).lines;
+
+        expect(line.percentageUsed).toBeCloseTo(
+            (1000 / 60000) * 100,
+            10
+        );
+    });
+
+    it("60,000 / 60,000 is exactly 100%", () => {
+        const [line] = calculateBudgetSpending({
+            budgets: [makeBudget({ amount: 60000 })],
+            currencyId: INR,
+            month: september2026,
+            transactions: [expense({ amount: 60000 })],
+        }).lines;
+
+        expect(line.percentageUsed).toBe(100);
+    });
+
+    it("over-budget spend keeps its exact decimal, not rounded", () => {
+        const [line] = calculateBudgetSpending({
+            budgets: [makeBudget({ amount: 60000 })],
+            currencyId: INR,
+            month: september2026,
+            transactions: [expense({ amount: 75300 })],
+        }).lines;
+
+        expect(line.percentageUsed).toBeCloseTo(125.5, 10);
+        expect(line.overBudget).toBe(true);
     });
 
     it("does not clamp the overall totals either", () => {
@@ -1039,5 +1089,131 @@ describe("calculateBudgetSpending - Phase 5 credit-card bill payment", () => {
 
         expect(result.lines[0].actualAmount).toBe(22000);
         expect(result.totalExpense).toBe(22000);
+    });
+});
+
+describe("calculateAllBudgetsSpending - All Budgets scope", () => {
+    it("includes every active budget in the currency, whatever month it covers", () => {
+        const result = calculateAllBudgetsSpending({
+            budgets: [
+                makeBudget({ id: "aug", startDate: "2026-08-01", endDate: "2026-08-31" }),
+                makeBudget({ id: "dec", startDate: "2026-12-01", endDate: "2026-12-31" }),
+                makeBudget({ id: "inactive", isActive: false }),
+                makeBudget({ id: "usd", currencyId: USD }),
+            ],
+            transactions: [],
+            currencyId: INR,
+        });
+
+        expect(result.lines.map(line => line.budgetId)).toEqual([
+            "aug",
+            "dec",
+        ]);
+        expect(result.monthStart).toBe("");
+        expect(result.monthEnd).toBe("");
+    });
+
+    it("measures each budget only over its own date range; open-ended / blank endDate has no upper bound", () => {
+        const result = calculateAllBudgetsSpending({
+            budgets: [
+                makeBudget({
+                    id: "sept",
+                    startDate: "2026-09-01",
+                    endDate: "2026-09-30",
+                }),
+                makeBudget({
+                    id: "open",
+                    categoryId: "cat-travel",
+                    startDate: "2026-09-15",
+                    endDate: "" as unknown as null,
+                }),
+            ],
+            transactions: [
+                expense({ transactionDate: "2026-09-30", amount: 100 }),
+                expense({ transactionDate: "2026-10-01", amount: 200 }),
+                expense({ categoryId: "cat-travel", transactionDate: "2026-09-14", amount: 400 }),
+                expense({ categoryId: "cat-travel", transactionDate: "2027-03-01", amount: 800 }),
+            ],
+            currencyId: INR,
+        });
+
+        expect(
+            result.lines.map(line => [line.budgetId, line.actualAmount])
+        ).toEqual([
+            ["sept", 100],
+            ["open", 800],
+        ]);
+        // 2026-09-14 travel precedes "open" but is inside "sept"'s range,
+        // and 2026-10-01 food is after "sept" but inside "open"'s range -
+        // both are in scope, and both count as unbudgeted.
+        expect(result.totalExpense).toBe(1500);
+        expect(result.budgetedActual).toBe(900);
+        expect(result.unbudgetedSpending).toBe(600);
+    });
+
+    it("never double-counts spend covered by two budgets for the same category", () => {
+        const result = calculateAllBudgetsSpending({
+            budgets: [
+                makeBudget({ id: "a", startDate: "2026-09-01", endDate: "2026-09-30", amount: 5000 }),
+                makeBudget({ id: "b", startDate: "2026-09-15", endDate: "2026-10-15", amount: 5000 }),
+            ],
+            transactions: [
+                expense({ transactionDate: "2026-09-20", amount: 1000 }),
+            ],
+            currencyId: INR,
+        });
+
+        expect(result.lines.map(line => line.actualAmount)).toEqual([
+            1000, 1000,
+        ]);
+        expect(result.budgetedActual).toBe(1000);
+        expect(result.totalBudgetAmount).toBe(10000);
+    });
+
+    it("equals the month engine when every budget covers that single month", () => {
+        const budgets = [
+            makeBudget({ id: "food", startDate: "2026-09-01", endDate: "2026-09-30" }),
+            makeBudget({ id: "overall", categoryId: null, startDate: "2026-09-01", endDate: "2026-09-30" }),
+        ];
+        const transactions = [
+            expense({ amount: 700 }),
+            expense({ categoryId: "cat-rent", amount: 300 }),
+            expense({ categoryId: null, amount: 50 }),
+            expense({ transactionDate: "2026-10-02", amount: 999 }),
+        ];
+
+        const all = calculateAllBudgetsSpending({
+            budgets,
+            transactions,
+            currencyId: INR,
+        });
+        const month = calculateBudgetSpending({
+            budgets,
+            transactions,
+            month: september2026,
+            currencyId: INR,
+        });
+
+        expect({ ...all, monthStart: "", monthEnd: "" }).toEqual({
+            ...month,
+            monthStart: "",
+            monthEnd: "",
+        });
+    });
+
+    it("calculateBudgetSpendingForView dispatches on the view mode", () => {
+        const input = {
+            budgets: [makeBudget({ startDate: "2026-10-01", endDate: "2026-10-31" })],
+            transactions: [expense({ transactionDate: "2026-10-05" })],
+            month: september2026,
+            currencyId: INR,
+        };
+
+        expect(
+            calculateBudgetSpendingForView({ ...input, viewMode: "all" }).lines
+        ).toHaveLength(1);
+        expect(
+            calculateBudgetSpendingForView({ ...input, viewMode: "month" })
+        ).toEqual(calculateBudgetSpending(input));
     });
 });

@@ -19,6 +19,7 @@ export class CounterpartyRuleRepository
                     counterparty,
                     type,
                     notes,
+                    category_id AS categoryId,
                     match_count AS matchCount,
                     created_at AS createdAt,
                     updated_at AS updatedAt
@@ -38,14 +39,16 @@ export class CounterpartyRuleRepository
     // - same id, incremented match_count - rather than duplicated. The
     // same pattern in a *different* account is a separate rule
     // entirely. Payee always overwrites (it's never blank); a null
-    // `type` or `notes` preserves whatever was previously learned
-    // instead of erasing it - only a real value ever replaces one.
+    // `type`, `notes` or `categoryId` preserves whatever was previously
+    // learned instead of erasing it - only a real value ever replaces
+    // one.
     async upsert(
         accountId: string,
         pattern: string,
         counterparty: string,
         type: string | null = null,
-        notes: string | null = null
+        notes: string | null = null,
+        categoryId: string | null = null
     ): Promise<CounterpartyRule> {
         const existing =
             await this.findByAccountAndPattern(
@@ -65,19 +68,21 @@ export class CounterpartyRuleRepository
                 counterparty,
                 type,
                 notes,
+                category_id,
                 match_count,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(account_id, pattern) DO UPDATE SET
                 counterparty = excluded.counterparty,
                 type = COALESCE(excluded.type, counterparty_rules.type),
                 notes = COALESCE(excluded.notes, counterparty_rules.notes),
+                category_id = COALESCE(excluded.category_id, counterparty_rules.category_id),
                 match_count = counterparty_rules.match_count + 1,
                 updated_at = CURRENT_TIMESTAMP
             `,
-            [id, accountId, pattern, counterparty, type, notes]
+            [id, accountId, pattern, counterparty, type, notes, categoryId]
         );
 
         const saved =

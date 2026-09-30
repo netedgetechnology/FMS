@@ -1,9 +1,17 @@
 import { Eye, Pencil, Trash2 } from "lucide-react";
 
+import { Checkbox } from "@/components/ui/checkbox";
+
 import { Category } from "../types";
+import { financeScopeLabel } from "../utils";
 
 interface CategoryTableProps {
     categories: Category[];
+    selectedIds: Set<string>;
+    allSelected: boolean;
+    someSelected: boolean;
+    onToggleRow: (id: string) => void;
+    onToggleAll: () => void;
     onView: (category: Category) => void;
     onEdit: (category: Category) => void;
     onDelete: (category: Category) => void;
@@ -16,12 +24,13 @@ function formatType(value: string): string {
         .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-function formatScope(value: string): string {
-    return value === "PERSONAL" ? "Personal" : "Business";
-}
-
 export function CategoryTable({
     categories,
+    selectedIds,
+    allSelected,
+    someSelected,
+    onToggleRow,
+    onToggleAll,
     onView,
     onEdit,
     onDelete,
@@ -35,6 +44,16 @@ export function CategoryTable({
             <table className="w-full text-left">
                 <thead>
                     <tr className="border-b border-slate-100">
+                        <th className="w-10 px-3 py-2.5">
+                            <Checkbox
+                                checked={allSelected}
+                                indeterminate={someSelected}
+                                onCheckedChange={() => onToggleAll()}
+                                aria-label="Select all categories"
+                                className="border border-slate-400 bg-white"
+                            />
+                        </th>
+
                         <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
                             Category
                         </th>
@@ -67,6 +86,17 @@ export function CategoryTable({
                             key={category.id}
                             className="transition-colors hover:bg-slate-50/70"
                         >
+                            <td className="px-3 py-3">
+                                <Checkbox
+                                    checked={selectedIds.has(category.id)}
+                                    onCheckedChange={() =>
+                                        onToggleRow(category.id)
+                                    }
+                                    aria-label={`Select ${category.name}`}
+                                    className="border border-slate-400 bg-white"
+                                />
+                            </td>
+
                             <td className="px-4 py-3">
                                 <div className="text-sm font-medium text-slate-800">
                                     {category.parentId ? (
@@ -90,7 +120,7 @@ export function CategoryTable({
                             </td>
 
                             <td className="px-4 py-3 text-sm text-slate-600">
-                                {formatScope(category.financeScope)}
+                                {financeScopeLabel(category.financeScope)}
                             </td>
 
                             <td className="px-4 py-3 text-sm text-slate-500">

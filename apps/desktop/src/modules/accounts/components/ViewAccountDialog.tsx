@@ -11,6 +11,15 @@ import { Account } from "../types";
 
 interface ViewAccountDialogProps {
     account: Account | null;
+    /**
+     * The account's current balance (opening balance + every
+     * income/expense transaction posted against it since - see
+     * modules/accounts/utils/accountBalance.ts). Optional and falls
+     * back to the account's raw, un-recalculated openingBalance so this
+     * dialog still renders something sensible before the caller's
+     * transactions have finished loading.
+     */
+    balance?: number;
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }
@@ -46,6 +55,7 @@ function Detail({
 
 export function ViewAccountDialog({
     account,
+    balance,
     open,
     onOpenChange,
 }: ViewAccountDialogProps) {
@@ -87,11 +97,14 @@ export function ViewAccountDialog({
                     <div className="grid grid-cols-2 gap-4">
                         <div className="rounded-2xl bg-slate-50 px-5 py-4">
                             <div className="text-[11px] font-medium uppercase tracking-[0.05em] text-slate-400">
-                                Balance
+                                Current Balance
                             </div>
 
                             <div className="mt-2 text-xl font-semibold tracking-tight text-slate-900">
-                                {formatMoney(Number(account.openingBalance ?? 0), account.currencyId)}
+                                {formatMoney(
+                                    balance ?? Number(account.openingBalance ?? 0),
+                                    account.currencyId
+                                )}
                             </div>
                         </div>
 
@@ -119,6 +132,14 @@ export function ViewAccountDialog({
                             <Detail
                                 label="Account Type"
                                 value={formatType(account.type)}
+                            />
+
+                            <Detail
+                                label="Opening Balance"
+                                value={formatMoney(
+                                    Number(account.openingBalance ?? 0),
+                                    account.currencyId
+                                )}
                             />
 
                             <Detail

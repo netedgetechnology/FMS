@@ -3,6 +3,7 @@ import type { FinancialGoal } from "@/modules/financial-goals/types";
 
 import {
     FINANCIAL_PLAN_CATEGORIES,
+    FINANCIAL_PLAN_STATUSES,
     PLAN_PERIOD_TYPES,
     PLAN_TYPES,
     planTypeRequiresTarget,
@@ -25,7 +26,7 @@ import type { PlanType } from "../types";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function isValidIsoDate(value: string): boolean {
+export function isValidIsoDate(value: string): boolean {
     return (
         ISO_DATE.test(value) &&
         !Number.isNaN(Date.parse(value))
@@ -42,6 +43,7 @@ export interface FinancialPlanFieldInput {
     endDate?: string | null;
     currencyId: string;
     targetAmount?: number | null;
+    status: string;
 }
 
 /** First validation problem, or null when the fields are acceptable. */
@@ -82,6 +84,14 @@ export function validateFinancialPlanFields(
         )
     ) {
         return "Select a valid plan focus for this category.";
+    }
+
+    if (
+        !(
+            FINANCIAL_PLAN_STATUSES as readonly string[]
+        ).includes(input.status)
+    ) {
+        return "Select a valid plan status.";
     }
 
     if (

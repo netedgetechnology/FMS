@@ -17,6 +17,9 @@ export interface CounterpartyRule {
     // The learned Notes for this pattern, or null when none has been
     // learned yet - see migration 028. Independent from Description.
     notes: string | null;
+    // The learned Category (Categories module id) for this pattern, or
+    // null when none has been learned yet - see migration 039.
+    categoryId: string | null;
     matchCount: number;
     createdAt: string;
     updatedAt: string;

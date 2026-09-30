@@ -29,6 +29,17 @@ export interface Investment {
 
     currentValue: number;
 
+    /**
+     * When currentPrice was last changed - set at creation, and
+     * whenever InvestmentService.update sees a different currentPrice
+     * than what is stored. Never touched by transaction-driven
+     * recalculation (updatePortfolioValues), since that only re-derives
+     * quantity/averageCost/currentValue from the ledger and never
+     * changes currentPrice itself. null means unknown (e.g. rows that
+     * predate this field).
+     */
+    priceUpdatedAt: string | null;
+
     purchaseDate: string | null;
 
     status: InvestmentStatus;

@@ -1,3 +1,4 @@
+import { balanceSide } from "@/core/accounting/transferClassification";
 import type { GoalAccountLink } from "../types/GoalAccountLink";
 import type { GoalCategoryLink } from "../types/GoalCategoryLink";
 import type { GoalLoanLink } from "../types/GoalLoanLink";
@@ -97,6 +98,8 @@ export interface GoalLedgerAccount {
 export interface GoalLedgerTransaction {
     accountId: string;
     type: "income" | "expense" | "transfer";
+    /** For type "transfer": "OUT" / "IN" (see balanceSide). */
+    transferDirection?: string | null;
     amount: number;
     transactionDate: string;
     /** Phase 3 only. Optional so Phase 1/2 ledger fixtures need not set it. */
@@ -220,8 +223,11 @@ function computeAccountBalance(
         if (t.accountId !== accountId) {
             continue;
         }
-        if (t.type !== "income" && t.type !== "expense") {
-            continue; // transfer rows never touch the balance here
+        // Income / expense, or a transfer by its direction - see
+        // balanceSide. A legacy transfer with no direction is skipped.
+        const side = balanceSide(t);
+        if (!side) {
+            continue;
         }
         if (!isValidDate(t.transactionDate)) {
             continue;
@@ -231,7 +237,7 @@ function computeAccountBalance(
             continue;
         }
         balance +=
-            t.type === "income" ? amount : -amount;
+            side === "income" ? amount : -amount;
     }
 
     for (const tr of ledger.transfers) {

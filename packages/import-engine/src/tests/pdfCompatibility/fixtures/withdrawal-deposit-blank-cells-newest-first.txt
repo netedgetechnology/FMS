@@ -1,0 +1,37 @@
+Statement of account: 000000000000001
+Period: 01 Jan 2026 - 28 Feb 2026
+TEST HOLDER
+Transaction details for your account number 000000000000001 (CURRENT) (Currency - INR)
+Primary Holder: TEST HOLDER A/C Opening Date: 01/01/2020 Account Variant/ Description: TEST VARIANT
+Transaction
+Date Value Date Cheque No/Reference No Description Withdrawals Deposits Running Balance
+15 Feb 2026 15 Feb 2026 YES0N6046000000007 NEFT Cr-TEST0000001-ACME CLIENT LTD-
+INVOICE 1042
+12,345.67 12,345.67
+12 Feb 2026 12 Feb 2026 2414920260212000300000001 own account/own account/MOBTXN 2,499.50 0.00
+10 Feb 2026 10 Feb 2026 10002047620260210000001 EMI_LOAN000000000001_TEST
+BORROWER
+3,000.00 2,499.50
+
+-- 1 of 2 --
+
+Customer Id: 1000001
+Primary Account Holder Name: TEST HOLDER
+Transaction details for your account number 000000000000001 (CURRENT) (Currency - INR)
+Transaction
+Date Value Date Cheque No/Reference No Description Withdrawals Deposits Running Balance
+05 Jan 2026 05 Jan 2026 YESI6005000000004 IMPS/NA/XXXX0001/
+RRN:600500000004/TEST SENDER
+1,000.00 5,499.50
+05 Jan 2026 05 Jan 2026 YBS6005000000003 UPI/600500000003/From:test@bank/
+To:merchant@bank/Sent using UPI
+1,250.50 4,499.50
+05 Jan 2026 05 Jan 2026 YBS6005000000002 UPI/600500000002/From:test@bank/
+To:shop@bank/NA
+250.00 5,750.00
+02 Jan 2026 02 Jan 2026 YES0N6002000000001 NEFT Cr-TEST0000001-ACME CLIENT LTD-
+ADVANCE
+5,000.00 6,000.00
+Opening Balance: 1,000.00 Total Withdrawals: 7,000.00 Total Deposits: 18,345.67 Closing Balance: 12,345.67
+
+-- 2 of 2 --

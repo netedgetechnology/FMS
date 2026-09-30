@@ -1,7 +1,10 @@
-﻿import {
+import { useDateFormatter } from "@/core/formatting";
+import {
     CalendarCheck,
     CheckCircle2,
+    Eye,
     Plus,
+    X,
 } from "lucide-react";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -19,6 +22,7 @@ import { ReconciliationService } from "../services";
 import { Reconciliation } from "../types";
 
 export default function ReconciliationPage() {
+    const formatDate = useDateFormatter();
     const [reconciliations, setReconciliations] =
         useState<Reconciliation[]>([]);
 
@@ -386,8 +390,13 @@ export default function ReconciliationPage() {
                                                                     reconciliation
                                                                 )
                                                             }
-                                                            className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                                                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                                                         >
+                                                            <Eye
+                                                                size={
+                                                                    14
+                                                                }
+                                                            />
                                                             Review
                                                         </button>
 
@@ -451,8 +460,9 @@ export default function ReconciliationPage() {
                             onClick={() =>
                                 setSelectedReconciliation(null)
                             }
-                            className="text-sm font-medium text-slate-500 hover:text-slate-900"
+                            className="inline-flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-900"
                         >
+                            <X size={14} />
                             Close
                         </button>
                     </div>
@@ -539,30 +549,6 @@ function formatAmount(
     ).format(value);
 }
 
-function formatDate(
-    value: string
-) {
-    if (!value) {
-        return "â€”";
-    }
 
-    const date = new Date(value);
 
-    if (
-        Number.isNaN(
-            date.getTime()
-        )
-    ) {
-        return value;
-    }
-
-    return new Intl.DateTimeFormat(
-        "en-IN",
-        {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-        }
-    ).format(date);
-}
 

@@ -4,6 +4,132 @@ import type { CsvDocument, CsvRow } from "../types";
 
 import { findHeaderRow } from "./tableDetector";
 
+import {
+    decryptAgileWorkbook,
+    isAgileEncryptedWorkbook,
+} from "./excelAgileDecryption";
+
+// Why a password can fail in three different ways. Two libraries are
+// involved, at two different stages:
+//
+// - Modern .xlsx "Encrypt with Password" files use ECMA-376 Agile
+//   Encryption ([MS-OFFCRYPTO] 2.3.4.10) - the installed xlsx@0.18.5
+//   (SheetJS Community Edition) build can detect these but never
+//   decrypt them (no decrypt_agile routine at all in this build). See
+//   resolveExcelWorkbookContent below: a supplied password is tried
+//   against excelAgileDecryption.ts's own real Agile decryption
+//   FIRST, before ever reaching xlsx.read - so "required"/"incorrect"
+//   for THIS format come from that module's own verifier check, not
+//   from xlsx's error text.
+// - Everything else funnels through xlsx.read itself (verified against
+//   its source):
+//   - "required": no password was supplied for a protected file.
+//   - "incorrect": a password was supplied and rejected. Only reachable
+//     for the legacy BIFF (.xls) XOR-obfuscation scheme ("Method1"),
+//     the one format xlsx.read itself can genuinely decrypt.
+//   - "unsupported": the file's protection was detected but can never
+//     be decrypted here, no matter what password is tried - legacy
+//     .xls RC4/RC4-CryptoAPI encryption, or ECMA-376 Standard
+//     Encryption (2.3.4.5 - an older, less common sibling of Agile;
+//     genuinely unimplemented on both sides of this file). Retrying
+//     can never succeed here - the UI must report this as a
+//     limitation, not prompt for another attempt.
+export type ExcelPasswordErrorReason =
+    | "required"
+    | "incorrect"
+    | "unsupported";
+
+export class ExcelPasswordError extends Error {
+    reason: ExcelPasswordErrorReason;
+
+    constructor(
+        reason: ExcelPasswordErrorReason,
+        message: string
+    ) {
+        super(message);
+        this.name = "ExcelPasswordError";
+        this.reason = reason;
+    }
+}
+
+const UNSUPPORTED_PROTECTION_MESSAGE =
+    "This file's password protection isn't supported. Please save an unprotected copy and try again.";
+
+// Translates the exact error xlsx@0.18.5 throws for a protected
+// workbook (see ExcelPasswordErrorReason above) into a typed
+// ExcelPasswordError - never guesses at a password's correctness beyond
+// what the library itself reports. Returns null for anything else (a
+// genuinely corrupt/unrelated file), which the caller re-throws
+// unchanged. Kept as its own pure function (rather than inlined in a
+// try/catch around XLSX.read) so the three-way classification is
+// directly testable against the library's own documented/verified
+// error contract, without needing a real encrypted file fixture.
+export function classifyExcelReadError(
+    err: unknown,
+    passwordProvided: boolean
+): ExcelPasswordError | null {
+    const message =
+        err instanceof Error
+            ? err.message
+            : String(err);
+
+    if (message === "Password is incorrect") {
+        return new ExcelPasswordError(
+            "incorrect",
+            "The password is incorrect."
+        );
+    }
+
+    if (message === "Encryption scheme unsupported") {
+        return new ExcelPasswordError(
+            "unsupported",
+            UNSUPPORTED_PROTECTION_MESSAGE
+        );
+    }
+
+    if (message === "File is password-protected") {
+        // A password was supplied yet this exact message recurred
+        // unchanged - only the unconditional CFB "/encryption" check
+        // (modern .xlsx) behaves this way; the legacy BIFF path always
+        // throws a different message once a password is given (see
+        // above). Never treat this as "incorrect" - no password will
+        // ever get past it.
+        if (passwordProvided) {
+            return new ExcelPasswordError(
+                "unsupported",
+                UNSUPPORTED_PROTECTION_MESSAGE
+            );
+        }
+
+        return new ExcelPasswordError(
+            "required",
+            "This file is password-protected."
+        );
+    }
+
+    return null;
+}
+
+function readWorkbook(
+    content: ArrayBuffer,
+    xlsxOptions: XLSX.ParsingOptions,
+    password: string | undefined
+): XLSX.WorkBook {
+    try {
+        return XLSX.read(content, {
+            ...xlsxOptions,
+            password,
+        });
+    } catch (err) {
+        throw (
+            classifyExcelReadError(
+                err,
+                Boolean(password)
+            ) ?? err
+        );
+    }
+}
+
 function cellToString(value: unknown): string {
     if (value === null || value === undefined) {
         return "";
@@ -43,16 +169,23 @@ function trimTrailingEmpty(
 
 export interface ExcelParseOptions {
     sheetName?: string;
+    // Memory-only for the duration of this call - never stored on the
+    // returned CsvDocument/workbook, never logged.
+    password?: string;
 }
 
 export function parseExcel(
     content: ArrayBuffer,
     options: ExcelParseOptions = {},
 ): CsvDocument {
-    const workbook = XLSX.read(content, {
-        type: "array",
-        cellDates: true,
-    });
+    const workbook = readWorkbook(
+        content,
+        {
+            type: "array",
+            cellDates: true,
+        },
+        options.password
+    );
 
     if (workbook.SheetNames.length === 0) {
         throw new Error("The Excel workbook does not contain any sheets.");
@@ -139,11 +272,48 @@ export function parseExcel(
 
 export function getExcelSheetNames(
     content: ArrayBuffer,
+    password?: string,
 ): string[] {
-    const workbook = XLSX.read(content, {
-        type: "array",
-        bookSheets: true,
-    });
+    const workbook = readWorkbook(
+        content,
+        {
+            type: "array",
+            bookSheets: true,
+        },
+        password
+    );
 
     return workbook.SheetNames;
+}
+
+// Resolves the ArrayBuffer that parseExcel/getExcelSheetNames should
+// actually read: for an Agile-Encryption-protected .xlsx (the common,
+// modern "Encrypt with Password" case - see excelAgileDecryption.ts),
+// this performs real decryption and returns the plain OOXML ZIP bytes,
+// so every downstream step (parseExcel, header detection, column
+// mapping, preview) runs completely unchanged, exactly as it would for
+// a file that was never protected. Every other case - an unprotected
+// file, a legacy XOR/RC4 .xls, ECMA-376 Standard Encryption, or a
+// corrupt file - is returned unchanged, deferring entirely to
+// parseExcel/getExcelSheetNames's own existing readWorkbook/
+// classifyExcelReadError handling (unaffected by this function).
+export async function resolveExcelWorkbookContent(
+    content: ArrayBuffer,
+    password?: string,
+): Promise<ArrayBuffer> {
+    if (!isAgileEncryptedWorkbook(content)) {
+        return content;
+    }
+
+    if (!password) {
+        throw new ExcelPasswordError(
+            "required",
+            "This file is password-protected."
+        );
+    }
+
+    return await decryptAgileWorkbook(
+        content,
+        password
+    );
 }

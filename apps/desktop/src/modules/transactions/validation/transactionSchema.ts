@@ -107,6 +107,18 @@ export const transactionSchema = z.object({
         z.string()
             .trim()
             .optional(),
+
+    // Never entered by the user: derived by TransactionForm from the
+    // transaction's Debit/Credit (Expense -> OUT, Income -> IN) when its
+    // Type becomes Transfer. null for Income/Expense, or for a legacy
+    // transfer saved before directions were recorded.
+    transferDirection:
+        z.enum([
+            "OUT",
+            "IN",
+        ])
+            .nullable()
+            .optional(),
 });
 
 export type TransactionFormInput =

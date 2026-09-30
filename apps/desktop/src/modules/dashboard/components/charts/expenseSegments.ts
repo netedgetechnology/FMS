@@ -8,11 +8,14 @@ export interface ExpenseSegment {
     fill: string;
 }
 
-/** Categories shown individually before the rest collapse into "Others". */
-export const MAX_EXPENSE_SEGMENTS = 9;
+/** Top expense categories shown; fewer are shown if fewer exist. */
+export const MAX_EXPENSE_SEGMENTS = 10;
 
 /**
- * Turn raw category totals into donut/legend segments.
+ * Turn raw category totals into donut/legend segments: the "Others"
+ * category (uncategorized transactions, see computeExpensesByCategory)
+ * is excluded entirely, and the remaining categories are shown top-N by
+ * value with no overflow bucket for the rest.
  *
  * Colour is assigned exactly once here, by final position. The donut
  * reads `fill` straight off this array and the legend renders the same
@@ -22,22 +25,13 @@ export const MAX_EXPENSE_SEGMENTS = 9;
 export function buildExpenseSegments(
     items: readonly ExpenseBreakdownItem[],
 ): ExpenseSegment[] {
-    const sorted = items
+    const top = items
+        .filter((item) => item.name !== "Others")
         .slice()
-        .sort((a, b) => b.value - a.value);
+        .sort((a, b) => b.value - a.value)
+        .slice(0, MAX_EXPENSE_SEGMENTS);
 
-    const top = sorted.slice(0, MAX_EXPENSE_SEGMENTS);
-
-    const othersValue = sorted
-        .slice(MAX_EXPENSE_SEGMENTS)
-        .reduce((sum, item) => sum + item.value, 0);
-
-    const base =
-        othersValue > 0
-            ? [...top, { name: "Others", value: othersValue }]
-            : top;
-
-    return base.map((item, index) => ({
+    return top.map((item, index) => ({
         name: item.name,
         value: item.value,
         fill: colorForIndex(index),

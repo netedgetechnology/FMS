@@ -327,6 +327,7 @@ export class PlanActualsService {
             transactions: transactions.map(t => ({
                 id: t.id,
                 type: t.type,
+                transferDirection: t.transferDirection ?? null,
                 amount: t.amount,
                 transactionDate: t.transactionDate,
                 categoryId: t.categoryId,

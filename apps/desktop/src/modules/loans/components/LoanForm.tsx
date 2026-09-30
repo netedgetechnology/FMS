@@ -104,6 +104,21 @@ function toNumberOrNull(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+// react-hook-form's `valueAsNumber` reads the native <input>'s own
+// `.valueAsNumber`, which the DOM spec defines as NaN - not undefined -
+// for a blank number input. For an optional field (Tenure, EMI Amount)
+// that NaN then reaches the zod schema as a "present" value, so
+// `.optional()` never gets a chance to skip it, and validation fails
+// with "expected number, received NaN" before the user has entered
+// anything. `setValueAs` receives the raw input string instead, so a
+// blank field can be represented as the actual undefined the schema's
+// `.optional()` expects.
+export function optionalNumberValue(
+    value: string
+): number | undefined {
+    return value === "" ? undefined : Number(value);
+}
+
 export function LoanForm({
     defaultValues,
     loading = false,
@@ -566,7 +581,7 @@ export function LoanForm({
                             min="1"
                             placeholder="Months"
                             {...register("tenureMonths", {
-                                valueAsNumber: true,
+                                setValueAs: optionalNumberValue,
                             })}
                         />
                     </FormField>
@@ -608,7 +623,7 @@ export function LoanForm({
                             step="0.01"
                             placeholder="0.00"
                             {...register("emiAmount", {
-                                valueAsNumber: true,
+                                setValueAs: optionalNumberValue,
                             })}
                         />
                     </FormField>

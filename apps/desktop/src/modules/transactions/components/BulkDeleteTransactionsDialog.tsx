@@ -9,7 +9,10 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 
-import { TransactionService } from "../services";
+import {
+    TransactionService,
+    evaluateBulkTransactionDelete,
+} from "../services";
 
 export interface BulkDeleteTransactionsDialogProps {
     transactionIds: string[];
@@ -37,6 +40,25 @@ export function BulkDeleteTransactionsDialog({
 
         try {
             setLoading(true);
+
+            // Pre-validate the whole batch before deleting anything -
+            // otherwise an EMI-linked transaction later in the list
+            // would only be caught after every transaction before it
+            // was already deleted, leaving a confusing partial result.
+            const emiLinkedIds =
+                await service.findEmiLinkedTransactionIds(
+                    transactionIds
+                );
+
+            const decision = evaluateBulkTransactionDelete(
+                transactionIds,
+                emiLinkedIds
+            );
+
+            if (!decision.allowed) {
+                toast.error(decision.message);
+                return;
+            }
 
             for (const id of transactionIds) {
                 await service.delete(id);

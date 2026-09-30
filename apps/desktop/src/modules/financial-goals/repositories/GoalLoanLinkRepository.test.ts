@@ -206,4 +206,54 @@ describe("GoalLoanLinkRepository", () => {
             await repo.listByGoal("goal-2")
         ).toHaveLength(1);
     });
+
+    it("softDeleteByLoan removes every link to that loan only, leaving the goal and its links to other loans intact", async () => {
+        const repo = new GoalLoanLinkRepository();
+
+        await repo.create({
+            id: "link-1",
+            goalId: "goal-1",
+            loanId: "loan-1",
+        });
+        await repo.create({
+            id: "link-2",
+            goalId: "goal-1",
+            loanId: "loan-2",
+        });
+        await repo.create({
+            id: "link-3",
+            goalId: "goal-2",
+            loanId: "loan-1",
+        });
+
+        await repo.softDeleteByLoan("loan-1");
+
+        const goal1Links = await repo.listByGoal(
+            "goal-1"
+        );
+
+        expect(
+            goal1Links.map(link => link.loanId)
+        ).toEqual(["loan-2"]);
+
+        expect(
+            await repo.listByGoal("goal-2")
+        ).toEqual([]);
+    });
+
+    it("softDeleteByLoan is a no-op for a loan with no links", async () => {
+        const repo = new GoalLoanLinkRepository();
+
+        await repo.create({
+            id: "link-1",
+            goalId: "goal-1",
+            loanId: "loan-1",
+        });
+
+        await repo.softDeleteByLoan("loan-unlinked");
+
+        expect(
+            await repo.listByGoal("goal-1")
+        ).toHaveLength(1);
+    });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useDateFormatter } from "@/core/formatting";
 
 import PageHeader from "@/components/common/PageHeader";
 import SectionCard from "@/components/common/SectionCard";
@@ -14,36 +15,31 @@ import type {
 
 const PAGE_SIZE = 5;
 
-function formatMoney(value: number): string {
-    return value.toLocaleString("en-IN", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    });
-}
 
-function formatPercent(value: number): string {
+
+function formatMoney(value: number): string {
+    return new Intl.NumberFormat("en-IN", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4,
+    }).format(value);
+}
+// null means there is no valid cost basis to divide by (e.g. an
+// investment that only ever had BONUS/DIVIDEND activity, never a
+// BUY) - shown as "N/A" rather than a fabricated 0%.
+function formatPercent(value: number | null): string {
+    if (value === null) {
+        return "N/A";
+    }
+
     return `${value.toFixed(2)}%`;
 }
 
-function formatDate(value: string): string {
-    if (!value) {
-        return "";
+
+function getValueClass(value: number | null): string {
+    if (value === null) {
+        return "text-slate-400";
     }
 
-    const date = new Date(`${value}T00:00:00`);
-
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
-    return date.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-    });
-}
-
-function getValueClass(value: number): string {
     if (value > 0) {
         return "text-emerald-600";
     }
@@ -56,6 +52,7 @@ function getValueClass(value: number): string {
 }
 
 export default function ReportsPage() {
+    const formatDate = useDateFormatter();
     const reportingService =
         useMemo(
             () =>
@@ -320,6 +317,27 @@ export default function ReportsPage() {
                 </div>
             )}
 
+            <p className="mb-3 text-xs text-slate-500">
+                The totals below and the Investment Performance table
+                reflect all-time transactions and today&apos;s prices -
+                they are not limited to the From/To Date filter above.
+                The Transactions, Dividend/Interest Income and Realized
+                Gain/Loss tables further down are the ones scoped to
+                that date range.
+            </p>
+
+            {report.portfolio.hasOtherCurrencies && (
+                <p className="mb-3 text-xs text-amber-600">
+                    Showing{" "}
+                    {report.portfolio.currencyCode ??
+                        "the primary currency"}{" "}
+                    investments only in the totals below - investments
+                    in other currencies are listed in Investment
+                    Performance but excluded from these sums to avoid
+                    mixing currencies.
+                </p>
+            )}
+
             <div className="mb-5 grid grid-cols-8 gap-3">
                 <ReportStatCard
                     title="Invested Cost"
@@ -422,7 +440,7 @@ export default function ReportsPage() {
                                         Current Value
                                     </th>
                                     <th className="px-2 py-3 text-right">
-                                        Gain/Loss
+                                        Unrealized Gain/Loss
                                     </th>
                                     <th className="px-2 py-3 text-right">
                                         Return
@@ -939,3 +957,8 @@ function ReportStatCard({
         </div>
     );
 }
+
+
+
+
+

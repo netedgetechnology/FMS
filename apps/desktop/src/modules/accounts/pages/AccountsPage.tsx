@@ -1,4 +1,5 @@
 import { useMoneyFormatter } from "@/core/formatting";
+import { getErrorMessage } from "@/core/errors";
 import {
     CreditCard,
     Eye,
@@ -37,13 +38,19 @@ import {
 } from "../components";
 
 import { AddInvestmentDialog } from "@/modules/investments/components";
+import { useInvestments } from "@/modules/investments/hooks";
 import {
     AddLoanDialog,
     EditLoanDialog,
     EMIScheduleDialog,
 } from "@/modules/loans/components";
-import { LoanService } from "@/modules/loans/services";
+import {
+    LoanService,
+    computeOutstandingLoanSummary,
+} from "@/modules/loans/services";
 import type { Loan } from "@/modules/loans/types";
+import { useCurrencies } from "@/modules/currencies";
+import { useTransactions } from "@/modules/transactions/hooks";
 
 import {
     BANK_ACCOUNT_TYPE_OPTIONS,
@@ -51,9 +58,13 @@ import {
 } from "../constants";
 import { useAccounts } from "../hooks";
 import { useLoans } from "@/modules/loans/hooks";
-import { AccountService } from "../services";
+import {
+    AccountService,
+    isUnlinkedLoanAccount,
+} from "../services";
 import { Account } from "../types";
 import { AccountType } from "../types/AccountType";
+import { computeAccountCurrentBalances } from "../utils";
 export default function AccountsPage() {
     const formatMoney = useMoneyFormatter();
 
@@ -64,6 +75,37 @@ export default function AccountsPage() {
         refresh,
     } = useAccounts();
     const { loans, refresh: refreshLoans } = useLoans();
+    const { investments: investmentRecords } =
+        useInvestments();
+    const { currencies } = useCurrencies();
+    const { transactions } = useTransactions();
+
+    // Delete Account - transaction deletion protection. Lets the delete
+    // click short-circuit with an immediate, specific toast (mirrors the
+    // investment-linked check right below) instead of opening the confirm
+    // dialog only to have AccountService.delete() reject it a click
+    // later. The service enforces the same guard independently, so this
+    // is a UX fast path, not the source of truth.
+    const accountIdsWithTransactions = useMemo(() => {
+        const ids = new Set<string>();
+
+        for (const transaction of transactions) {
+            ids.add(transaction.accountId);
+        }
+
+        return ids;
+    }, [transactions]);
+
+    // The account's stored opening_balance is a snapshot, not a running
+    // balance - every income/expense transaction posted against it
+    // since must be added on top to show what the account is actually
+    // worth today (see computeAccountCurrentBalances). This is the same
+    // formula the Dashboard's Accounts Summary already uses, so the two
+    // pages can't disagree about an account's balance again.
+    const accountBalances = useMemo(
+        () => computeAccountCurrentBalances(accounts, transactions),
+        [accounts, transactions]
+    );
     const [viewingAccount, setViewingAccount] = useState<Account | null>(null);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null);
     const [selectedAccountFilter, setSelectedAccountFilter] = useState<
@@ -99,6 +141,32 @@ const [deleting, setDeleting] = useState(false);
         return map;
     }, [loans]);
 
+    // An investment is shown in Accounts through its 1:1 INVESTMENT
+    // account, the same as a loan above. Unlike a loan, deleting that
+    // mirror account does not delete the investment - it just orphans
+    // it (invisible under Accounts until the investment is next
+    // edited, which self-heals the link - see InvestmentService.update).
+    // Block the delete here instead and point the user at the
+    // Investments page, where deleting the investment itself also
+    // cleans up its transactions/holdings and this mirror account.
+    const investmentByAccountId = useMemo(() => {
+        const map = new Map<
+            string,
+            (typeof investmentRecords)[number]
+        >();
+
+        for (const investment of investmentRecords) {
+            if (investment.accountId) {
+                map.set(
+                    investment.accountId,
+                    investment
+                );
+            }
+        }
+
+        return map;
+    }, [investmentRecords]);
+
     function handleViewAccount(account: Account) {
         const loan = loanByAccountId.get(account.id);
 
@@ -129,6 +197,24 @@ const [deleting, setDeleting] = useState(false);
             return;
         }
 
+        const investment = investmentByAccountId.get(
+            account.id
+        );
+
+        if (investment) {
+            toast.error(
+                "This account is linked to an investment. Delete or manage it from the Investments page instead."
+            );
+            return;
+        }
+
+        if (accountIdsWithTransactions.has(account.id)) {
+            toast.error(
+                "This account has transactions linked to it and can't be deleted. Delete or reassign its transactions first, or keep the account for your records."
+            );
+            return;
+        }
+
         setDeletingAccount(account);
     }
 
@@ -147,7 +233,12 @@ const [deleting, setDeleting] = useState(false);
             setDeletingLoan(null);
         } catch (error) {
             console.error("Failed to delete loan:", error);
-            toast.error("Unable to delete the loan. Please try again.");
+            toast.error(
+                getErrorMessage(
+                    error,
+                    "Unable to delete the loan. Please try again."
+                )
+            );
         } finally {
             setDeletingLoanBusy(false);
         }
@@ -169,7 +260,12 @@ const [deleting, setDeleting] = useState(false);
             setDeletingAccount(null);
         } catch (error) {
             console.error("Failed to delete account:", error);
-            toast.error("Unable to delete the account. Please try again.");
+            toast.error(
+                getErrorMessage(
+                    error,
+                    "Unable to delete the account. Please try again."
+                )
+            );
         } finally {
             setDeleting(false);
         }
@@ -206,10 +302,16 @@ const walletAccounts = accounts.filter(
 
 const totalLoans = loans.length;
 
-const outstandingLoanPrincipal = loans.reduce(
-    (total, loan) => total + Number(loan.outstandingPrincipal ?? 0),
-    0
-);
+// CLOSED loans excluded and scoped to one resolved primary currency -
+// see computeOutstandingLoanSummary. Summing loans in different
+// currencies as one number would be meaningless; when every loan
+// shares one currency (the common case) this behaves exactly as
+// before (Loans Phase 2).
+const {
+    outstandingPrincipal: outstandingLoanPrincipal,
+    currencyCode: loanCurrencyCode,
+    hasOtherCurrencies: hasOtherLoanCurrencies,
+} = computeOutstandingLoanSummary(loans, currencies);
 
 
     const accountsByType =
@@ -250,7 +352,7 @@ const totalBalance = accounts.reduce(
             account.type === AccountType.INVESTMENT ||
             account.type === AccountType.LOAN
                 ? total
-                : total + Number(account.openingBalance ?? 0),
+                : total + (accountBalances.get(account.id) ?? 0),
         0
     );
 
@@ -497,8 +599,22 @@ const totalBalance = accounts.reduce(
                     {totalLoans}
                 </div>
 
-                <div className="mt-4 text-small text-slate-400">
-                    {formatMoney(outstandingLoanPrincipal)} outstanding
+                <div
+                    className="mt-4 text-small text-slate-400"
+                    title={
+                        hasOtherLoanCurrencies
+                            ? `Showing ${
+                                  loanCurrencyCode ??
+                                  "the primary currency"
+                              } loans only - other currencies are excluded from this total to avoid mixing currencies.`
+                            : undefined
+                    }
+                >
+                    {formatMoney(outstandingLoanPrincipal)}{" "}
+                    outstanding
+                    {hasOtherLoanCurrencies && loanCurrencyCode
+                        ? ` (${loanCurrencyCode})`
+                        : ""}
                 </div>
             </div>
 
@@ -654,9 +770,16 @@ const totalBalance = accounts.reduce(
                             >
                                 <AccountTable
                                 accounts={filteredAccounts}
+                                balances={accountBalances}
                                 onView={handleViewAccount}
                                 onEdit={handleEditAccount}
                                 onDelete={handleDeleteAccount}
+                                isUnlinkedLoanAccount={account =>
+                                    isUnlinkedLoanAccount(
+                                        account,
+                                        loanByAccountId
+                                    )
+                                }
                             />
                             </div>
                         )}
@@ -667,6 +790,11 @@ const totalBalance = accounts.reduce(
 
                 <ViewAccountDialog
                 account={viewingAccount}
+                balance={
+                    viewingAccount
+                        ? accountBalances.get(viewingAccount.id)
+                        : undefined
+                }
                 open={viewingAccount !== null}
                 onOpenChange={open => {
                     if (!open) {
@@ -782,10 +910,18 @@ const totalBalance = accounts.reduce(
                         <span className="font-medium text-slate-800">
                             {" "}{deletingLoan?.name}
                         </span>
-                        ?
+                        ? It will be permanently removed from your Loans
+                        records. This action cannot be undone.
                         <br />
-                        This removes the loan, its EMI schedule and its
-                        Accounts entry. This action cannot be undone.
+                        <br />
+                        If this loan has any recorded EMI payments, every
+                        one of them must be reversed from the loan&apos;s
+                        EMI schedule first - deletion is blocked while any
+                        payment history remains.
+                        <br />
+                        <br />
+                        Linked bank transactions are never deleted by this
+                        action.
                     </AlertDialogDescription>
                 </AlertDialogHeader>
 

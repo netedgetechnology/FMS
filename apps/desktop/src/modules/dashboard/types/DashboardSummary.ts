@@ -48,10 +48,19 @@ export interface DashboardBudgetOverview {
 }
 
 export interface DashboardSummary {
-    cashBalance: number;
+    /** Sum of CURRENT + SAVINGS account balances (see DashboardService's BANK_ACCOUNT_TYPES). */
+    bankBalance: number;
+    /** Sum of CASH + WALLET account balances - "Cash on Hand" (see DashboardService's CASH_ON_HAND_ACCOUNT_TYPES). */
+    cashOnHand: number;
     income: number;
     expenses: number;
     netWorth: number;
+    /**
+     * `YYYY-MM-DD` when bankBalance / cashOnHand / netWorth are a
+     * historical snapshot as of the selected period's end date (a period
+     * ending in the past); null when they are the current figures.
+     */
+    balanceAsOf: string | null;
     savingsRate: number;
 
     cashFlow: {
@@ -94,7 +103,12 @@ export interface DashboardSummary {
         lender: string;
         amount: number;
         dueDate: string;
+        /** Days until due - unchanged meaning; 0 for an overdue row (see daysOverdue instead). */
         dueIn: number;
+        /** Derived at read time, never persisted (Loans Phase 5) - a PAID row is never overdue. */
+        isOverdue: boolean;
+        /** Whole calendar days past due; 0 when not overdue. */
+        daysOverdue: number;
         progress: number;
         type: "home" | "car" | "card" | "other";
     }[];
@@ -111,11 +125,26 @@ export interface DashboardSummary {
 
     investmentSummary: {
         totalValue: number;
-        monthlyChangePercentage: number;
+        /**
+         * null when there is no historical value to compare against -
+         * no price/value history is stored (Investments Phase 5
+         * review), so a month-over-month change cannot be calculated
+         * accurately and must never be shown as a fabricated 0%.
+         */
+        monthlyChangePercentage: number | null;
         allocation: {
             name: string;
             value: number;
             amount: number;
         }[];
+        /** The single currency totalValue/allocation are aggregated over. */
+        currencyCode: string | null;
+        /**
+         * True when investments exist in more than one currency -
+         * totalValue/allocation only cover currencyCode's investments,
+         * never summed across currencies (mirrors the Budgets
+         * module's currency-scope pattern).
+         */
+        hasOtherCurrencies: boolean;
     };
 }

@@ -62,8 +62,8 @@ export function EditFinancialGoalDialog({
             aria-modal="true"
             aria-labelledby="edit-financial-goal-title"
         >
-            <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
-                <div className="border-b border-slate-100 px-6 py-5">
+            <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+                <div className="shrink-0 border-b border-slate-100 px-6 py-5">
                     <div className="flex items-center justify-between">
                         <div>
                             <h2
@@ -90,7 +90,7 @@ export function EditFinancialGoalDialog({
                     </div>
                 </div>
 
-                <div className="p-6">
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
                     <FinancialGoalForm
                         initialGoal={goal}
                         onSubmit={handleSubmit}

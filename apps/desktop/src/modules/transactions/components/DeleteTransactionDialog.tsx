@@ -1,4 +1,5 @@
-﻿import { useState } from "react";
+import { useDateFormatter } from "@/core/formatting";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -25,6 +26,7 @@ export function DeleteTransactionDialog({
     onOpenChange,
     onSuccess,
 }: DeleteTransactionDialogProps) {
+    const formatDate = useDateFormatter();
     const service = new TransactionService();
 
     const [loading, setLoading] = useState(false);
@@ -104,7 +106,7 @@ export function DeleteTransactionDialog({
                         </div>
 
                         <div className="mt-1 text-xs text-slate-500">
-                            {transaction.transactionDate}
+                            {formatDate(transaction.transactionDate)}
                         </div>
                     </div>
                 </div>
@@ -161,3 +163,4 @@ export function DeleteTransactionDialog({
         </Dialog>
     );
 }
+

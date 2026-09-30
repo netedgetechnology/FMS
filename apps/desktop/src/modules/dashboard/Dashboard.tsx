@@ -1,5 +1,6 @@
 import {
     useEffect,
+    useRef,
     useState,
 } from "react";
 
@@ -24,13 +25,87 @@ import { InvestmentSummaryCard } from "./components/widgets/InvestmentSummaryCar
 
 import {
     DashboardService,
-    DEFAULT_DASHBOARD_RANGE_DAYS,
-    rangeFromDays,
+    DEFAULT_DASHBOARD_RANGE_SELECTION,
+    formatBalanceAsOfLabel,
+    resolveDashboardRangeSelection,
+    type DashboardRangeSelection,
 } from "./services";
 import { useMoneyFormatter } from "@/core/formatting";
+import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 import type { DashboardSummary } from "./types";
 
 
+
+/**
+ * Replaces the old single "Cash Balance" tile with two stacked values in
+ * the same tile slot (no new tile is added to the stat-card grid):
+ * Bank Balance (CURRENT + SAVINGS accounts) and Cash On Hand (CASH +
+ * WALLET accounts) - see DashboardService's BANK_ACCOUNT_TYPES /
+ * CASH_ON_HAND_ACCOUNT_TYPES for the exact classification.
+ */
+function BankAndCashOnHandCard({
+    loading,
+    bankBalance,
+    cashOnHand,
+    asOfLabel,
+    formatMoney,
+}: {
+    loading: boolean;
+    bankBalance: number;
+    cashOnHand: number;
+    /** "As of DD Mon YYYY" for a historical period; null for current figures. */
+    asOfLabel: string | null;
+    formatMoney: (value: number) => string;
+}) {
+    return (
+        <div className="h-[156px] rounded-3xl bg-white px-5 py-5 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
+
+            <div className="flex justify-between">
+
+                <div>
+                    <div className="text-caption font-medium text-slate-500">
+                        Bank Balance
+                    </div>
+
+                    <div className="mt-2 text-card-value amount leading-none tracking-[-0.02em] text-[#0F172A]">
+                        {loading ? "Loading..." : formatMoney(bankBalance)}
+                    </div>
+
+                    {asOfLabel && !loading && (
+                        <div className="mt-1 text-small text-slate-400">
+                            {asOfLabel}
+                        </div>
+                    )}
+                </div>
+
+                <div
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl shadow-sm"
+                    style={{ backgroundColor: "#EEF4FF" }}
+                >
+                    <Wallet size={20} style={{ color: "#2563EB" }} />
+                </div>
+
+            </div>
+
+            <div
+                className={
+                    asOfLabel && !loading
+                        ? "mt-2 border-t border-slate-100 pt-2"
+                        : "mt-4 border-t border-slate-100 pt-3"
+                }
+            >
+                <div className="text-caption font-medium text-slate-500">
+                    Cash On Hand
+                </div>
+
+                <div className="mt-2 text-card-value amount leading-none tracking-[-0.02em] text-[#0F172A]">
+                    {loading ? "Loading..." : formatMoney(cashOnHand)}
+                </div>
+            </div>
+
+        </div>
+    );
+}
 
 function TopSpendingCategoriesCard({
     data,
@@ -101,9 +176,9 @@ function TopSpendingCategoriesCard({
 export default function Dashboard() {
     const formatMoney = useMoneyFormatter();
 
-    const [rangeDays, setRangeDays] =
-        useState<number>(
-            DEFAULT_DASHBOARD_RANGE_DAYS
+    const [rangeSelection, setRangeSelection] =
+        useState<DashboardRangeSelection>(
+            DEFAULT_DASHBOARD_RANGE_SELECTION
         );
 
     const [summary, setSummary] =
@@ -117,8 +192,15 @@ export default function Dashboard() {
     const [error, setError] =
         useState<string | null>(null);
 
+    // Guards against a slower, still in-flight load overwriting state
+    // with stale data after a newer one (from quickly switching between
+    // presets / Custom (previous days) / Custom Date Range) has already
+    // resolved - see LatestRequestGuard.
+    const requestGuard = useRef(new LatestRequestGuard());
+
     useEffect(() => {
         let mounted = true;
+        const requestId = requestGuard.current.start();
 
         const loadDashboard =
             async () => {
@@ -131,10 +213,17 @@ export default function Dashboard() {
 
                     const data =
                         await service.getSummary(
-                            rangeFromDays(rangeDays)
+                            resolveDashboardRangeSelection(
+                                rangeSelection
+                            )
                         );
 
-                    if (mounted) {
+                    if (
+                        mounted &&
+                        !requestGuard.current.isStale(
+                            requestId
+                        )
+                    ) {
                         setSummary(data);
                     }
                 } catch (err) {
@@ -143,7 +232,12 @@ export default function Dashboard() {
                         err
                     );
 
-                    if (mounted) {
+                    if (
+                        mounted &&
+                        !requestGuard.current.isStale(
+                            requestId
+                        )
+                    ) {
                         setError(
                             err instanceof Error
                                 ? err.message
@@ -151,7 +245,12 @@ export default function Dashboard() {
                         );
                     }
                 } finally {
-                    if (mounted) {
+                    if (
+                        mounted &&
+                        !requestGuard.current.isStale(
+                            requestId
+                        )
+                    ) {
                         setLoading(false);
                     }
                 }
@@ -162,14 +261,16 @@ export default function Dashboard() {
         return () => {
             mounted = false;
         };
-    }, [rangeDays]);
+    }, [rangeSelection]);
 
     const dashboardSummary =
         summary ?? {
-            cashBalance: 0,
+            bankBalance: 0,
+            cashOnHand: 0,
             income: 0,
             expenses: 0,
             netWorth: 0,
+            balanceAsOf: null,
             savingsRate: 0,
             cashFlow: [],
             expenseBreakdown: [],
@@ -193,10 +294,18 @@ export default function Dashboard() {
             goalsProgress: [],
             investmentSummary: {
                 totalValue: 0,
-                monthlyChangePercentage: 0,
+                monthlyChangePercentage: null,
                 allocation: [],
+                currencyCode: null,
+                hasOtherCurrencies: false,
             },
         };
+
+    // "As of DD Mon YYYY" under Bank Balance and Net Worth for a period
+    // ending in the past (see DashboardService.resolveBalanceAsOf).
+    const balanceAsOfLabel = formatBalanceAsOfLabel(
+        dashboardSummary.balanceAsOf
+    );
 
     return (
         <div className="min-h-full bg-slate-50">
@@ -204,8 +313,8 @@ export default function Dashboard() {
             <div className="w-full space-y-5 px-0 py-0">
 
                 <DashboardHeader
-                    rangeDays={rangeDays}
-                    onRangeDaysChange={setRangeDays}
+                    selection={rangeSelection}
+                    onSelectionChange={setRangeSelection}
                 />
 
                 {error && (
@@ -217,18 +326,12 @@ export default function Dashboard() {
 
                 <section className="grid gap-6 grid-cols-1 md:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-5">
 
-                    <DashboardStatCard
-                        title="Cash Balance"
-                        value={
-                            loading
-                                ? "Loading..."
-                                : formatMoney(dashboardSummary.cashBalance)
-                        }
-                        change={null}
-                        positive
-                        icon={Wallet}
-                        iconBackground="#EEF4FF"
-                        iconColor="#2563EB"
+                    <BankAndCashOnHandCard
+                        loading={loading}
+                        bankBalance={dashboardSummary.bankBalance}
+                        cashOnHand={dashboardSummary.cashOnHand}
+                        asOfLabel={balanceAsOfLabel}
+                        formatMoney={formatMoney}
                     />
 
                     <DashboardStatCard
@@ -266,6 +369,7 @@ export default function Dashboard() {
                                 ? "Loading..."
                                 : formatMoney(dashboardSummary.netWorth)
                         }
+                        caption={balanceAsOfLabel}
                         change={null}
                         positive
                         icon={Landmark}

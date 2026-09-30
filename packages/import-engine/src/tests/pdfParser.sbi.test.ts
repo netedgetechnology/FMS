@@ -144,7 +144,7 @@ describe("PDF parser - real SBI Credit Card statement (2-digit years, single-let
         ).toBe(true);
     });
 
-    it("correctly parses a real transaction line using a single-letter 'C' marker - amount and description intact, direction left undetermined rather than guessed from the letter", async () => {
+    it("correctly parses a real transaction line using a single-letter 'C' marker - amount and description intact, direction read from the trailing marker cell", async () => {
         mockState.text = loadSbiFixtureText();
 
         const result = await parsePdf(
@@ -165,13 +165,14 @@ describe("PDF parser - real SBI Credit Card statement (2-digit years, single-let
         expect(paymentReceived?.values[2]).toBe(
             "50000.00"
         );
-        // Single-letter C/D is not CR/DR - findTail's 3-shape marker
-        // check never matches a single letter, so this resolves to the
-        // amount-only shape and direction is left blank rather than
-        // silently mapping "C"/"D" to credit/debit (that would be a
-        // bank/issuer-specific vocabulary rule, which this pipeline
-        // deliberately never hardcodes).
-        expect(paymentReceived?.values[3]).toBe("");
+        // A lone C/D is the generic single-letter form of a CR/DR
+        // marker - trusted only as the row's final token, directly after
+        // its amount (see SINGLE_LETTER_MARKER_RE), never mid-narration.
+        // Previously left blank here, which let the normalizer classify
+        // every unmarked positive amount - card purchases included - as
+        // income.
+        expect(paymentReceived?.values[3]).toBe("CR");
+        expect(paymentReceived?.values[6]).toBe("50000.00");
     });
 
     it("correctly parses a real transaction line using a single-letter 'D' marker too", async () => {
@@ -190,7 +191,8 @@ describe("PDF parser - real SBI Credit Card statement (2-digit years, single-let
 
         expect(e2e).toBeDefined();
         expect(e2e?.values[2]).toBe("17700.00");
-        expect(e2e?.values[3]).toBe("");
+        expect(e2e?.values[3]).toBe("DR");
+        expect(e2e?.values[5]).toBe("17700.00");
     });
 
     it("no candidate produced from the full pipeline has an empty payee/description, and all 80 real transactions survive as candidates", async () => {

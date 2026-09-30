@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { toast } from "sonner";
 
@@ -12,7 +12,10 @@ import {
 } from "@/components/ui/dialog";
 
 import { InvestmentForm } from "./InvestmentForm";
-import { InvestmentService } from "../services";
+import {
+    InvestmentService,
+    InvestmentTransactionService,
+} from "../services";
 import type { Investment } from "../types";
 
 import {
@@ -32,9 +35,42 @@ export function EditInvestmentDialog({
     trigger,
 }: EditInvestmentDialogProps) {
     const service = new InvestmentService();
+    const transactionService =
+        new InvestmentTransactionService();
 
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [hasTransactions, setHasTransactions] =
+        useState(false);
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+
+        let active = true;
+
+        transactionService
+            .getAllByInvestmentId(investment.id)
+            .then((transactions) => {
+                if (active) {
+                    setHasTransactions(
+                        transactions.length > 0
+                    );
+                }
+            })
+            .catch((error) => {
+                console.error(
+                    "Failed to load investment transactions:",
+                    error
+                );
+            });
+
+        return () => {
+            active = false;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, investment.id]);
 
     const defaultValues: Partial<InvestmentFormValues> = {
         businessEntityId: investment.businessEntityId ?? "",
@@ -145,6 +181,11 @@ export function EditInvestmentDialog({
                         defaultValues={defaultValues}
                         loading={loading}
                         submitLabel="Save Changes"
+                        isEdit
+                        hasTransactions={hasTransactions}
+                        priceUpdatedAt={
+                            investment.priceUpdatedAt
+                        }
                         onSubmit={handleSubmit}
                         onCancel={() => setOpen(false)}
                     />

@@ -9,10 +9,27 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
 import { EMIScheduleService } from "../services/EMIScheduleService";
 import { LoanPaymentService } from "../services/LoanPaymentService";
+import { isScheduleOverdue } from "../services/loanScheduleOverdue";
 import type { PaymentMethod } from "@/modules/transactions/types";
-import type { Loan, LoanPaymentSchedule } from "../types";
+import { useMoneyFormatter, useDateFormatter } from "@/core/formatting";
+import type {
+    Loan,
+    LoanPaymentSchedule,
+    LoanSchedulePayment,
+} from "../types";
 
 export interface EMIScheduleDialogProps {
     loan: Loan | null;
@@ -21,41 +38,40 @@ export interface EMIScheduleDialogProps {
     onSuccess?: () => void | Promise<void>;
 }
 
-function formatAmount(value: number | null | undefined) {
-    return new Intl.NumberFormat("en-IN", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    }).format(Number(value ?? 0));
+
+
+
+// How much of this instalment is still unpaid - the maximum a new
+// payment against it can be for (LoanPaymentService.processPayment
+// enforces the same cap server-side). paidAmount is the running total
+// across every payment already recorded against the row (Loans Phase
+// 4 correction), so this is correct whether the row has never been
+// paid, is PARTIAL, or (defensively) already PAID.
+function remainingAmount(
+    item: LoanPaymentSchedule
+): number {
+    return Math.max(
+        0,
+        item.totalAmount - (item.paidAmount ?? 0)
+    );
 }
 
-function formatDate(value: string | null | undefined) {
-    if (!value) {
-        return "—";
-    }
-
-    const date = new Date(value);
-
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
-    return new Intl.DateTimeFormat("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-    }).format(date);
-}
-
-function formatStatus(status: LoanPaymentSchedule["status"]) {
+// Overdue is never a persisted status (Loans Phase 5 - derived, not
+// stored) - it is layered on top of the real UPCOMING/PARTIAL status
+// here, so a row can correctly read "Partial · Overdue" rather than
+// losing the partial-payment fact the moment it's also late. A PAID
+// row is never overdue (isScheduleOverdue already excludes it).
+function formatStatus(
+    status: LoanPaymentSchedule["status"],
+    overdue: boolean
+) {
     switch (status) {
         case "PAID":
             return "Paid";
         case "PARTIAL":
-            return "Partial";
-        case "OVERDUE":
-            return "Overdue";
+            return overdue ? "Partial · Overdue" : "Partial";
         case "UPCOMING":
-            return "Upcoming";
+            return overdue ? "Overdue" : "Upcoming";
         default:
             return status;
     }
@@ -63,23 +79,25 @@ function formatStatus(status: LoanPaymentSchedule["status"]) {
 
 function StatusBadge({
     status,
+    overdue,
 }: {
     status: LoanPaymentSchedule["status"];
+    overdue: boolean;
 }) {
-    const classes = {
-        PAID: "border-emerald-200 bg-emerald-50 text-emerald-700",
-        PARTIAL: "border-amber-200 bg-amber-50 text-amber-700",
-        OVERDUE: "border-red-200 bg-red-50 text-red-700",
-        UPCOMING: "border-slate-200 bg-slate-50 text-slate-600",
-    };
+    const className =
+        status === "PAID"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : overdue
+              ? "border-red-200 bg-red-50 text-red-700"
+              : status === "PARTIAL"
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-slate-200 bg-slate-50 text-slate-600";
 
     return (
         <span
-            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${
-                classes[status]
-            }`}
+            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${className}`}
         >
-            {formatStatus(status)}
+            {formatStatus(status, overdue)}
         </span>
     );
 }
@@ -90,6 +108,8 @@ export function EMIScheduleDialog({
     onOpenChange,
     onSuccess,
 }: EMIScheduleDialogProps) {
+    const formatDate = useDateFormatter();
+    const formatMoney = useMoneyFormatter();
     const [schedule, setSchedule] = useState<LoanPaymentSchedule[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -111,6 +131,34 @@ export function EMIScheduleDialog({
     const [paymentDate, setPaymentDate] = useState(
         () => new Date().toISOString().slice(0, 10)
     );
+
+    // Defaults to the full scheduled instalment - editable down to any
+    // amount greater than zero (Loans Phase 4: partial payment of one
+    // instalment). Never above the scheduled amount - that would be an
+    // extra principal payment, a different, not-yet-supported feature.
+    const [paymentAmount, setPaymentAmount] =
+        useState("");
+
+    // Reversal (Loans Phase 6) - a separate panel from the payment
+    // form above, listing the actual loan_schedule_payments rows for
+    // one schedule row so a specific payment can be picked, rather
+    // than assuming the schedule's own cached transactionId is the
+    // only (or the right) one to reverse.
+    const [viewingPaymentsFor, setViewingPaymentsFor] =
+        useState<LoanPaymentSchedule | null>(null);
+
+    const [payments, setPayments] = useState<
+        LoanSchedulePayment[]
+    >([]);
+
+    const [paymentsLoading, setPaymentsLoading] =
+        useState(false);
+
+    const [confirmingPayment, setConfirmingPayment] =
+        useState<LoanSchedulePayment | null>(null);
+
+    const [reversingPaymentId, setReversingPaymentId] =
+        useState<string | null>(null);
 
     useEffect(() => {
         if (!open || !loan) {
@@ -169,6 +217,97 @@ export function EMIScheduleDialog({
         setSchedule(result);
     }
 
+    async function loadPayments(scheduleId: string) {
+        const service = new EMIScheduleService();
+
+        try {
+            setPaymentsLoading(true);
+
+            const result =
+                await service.getPaymentsForSchedule(
+                    scheduleId
+                );
+
+            setPayments(result);
+        } catch (error) {
+            console.error(
+                "Failed to load payments for this instalment:",
+                error
+            );
+
+            setPayments([]);
+
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to load payments for this instalment."
+            );
+        } finally {
+            setPaymentsLoading(false);
+        }
+    }
+
+    function openPaymentsPanel(item: LoanPaymentSchedule) {
+        // Only a row that already has at least one recorded payment
+        // can have anything to reverse.
+        if (item.status === "UPCOMING") {
+            return;
+        }
+
+        setViewingPaymentsFor(item);
+        void loadPayments(item.id);
+    }
+
+    function closePaymentsPanel() {
+        if (reversingPaymentId) {
+            return;
+        }
+
+        setViewingPaymentsFor(null);
+        setPayments([]);
+    }
+
+    async function handleReversePayment(
+        payment: LoanSchedulePayment
+    ) {
+        try {
+            setReversingPaymentId(payment.id);
+
+            const service = new LoanPaymentService();
+
+            await service.reversePayment(payment.id);
+
+            await refreshSchedule();
+
+            if (viewingPaymentsFor) {
+                await loadPayments(
+                    viewingPaymentsFor.id
+                );
+            }
+
+            await onSuccess?.();
+
+            setConfirmingPayment(null);
+
+            toast.success(
+                "Payment reversed successfully."
+            );
+        } catch (error) {
+            console.error(
+                "Failed to reverse payment:",
+                error
+            );
+
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to reverse payment."
+            );
+        } finally {
+            setReversingPaymentId(null);
+        }
+    }
+
     function openPaymentForm(item: LoanPaymentSchedule) {
         if (item.status === "PAID") {
             return;
@@ -179,6 +318,9 @@ export function EMIScheduleDialog({
         setPaymentReference("");
         setPaymentNotes("");
         setPaymentDate(item.dueDate);
+        setPaymentAmount(
+            String(remainingAmount(item))
+        );
     }
 
     function closePaymentForm() {
@@ -190,6 +332,7 @@ export function EMIScheduleDialog({
         setPaymentMethod(null);
         setPaymentReference("");
         setPaymentNotes("");
+        setPaymentAmount("");
     }
 
     async function handlePayEMI(item: LoanPaymentSchedule) {
@@ -211,6 +354,26 @@ export function EMIScheduleDialog({
             return;
         }
 
+        const amount = Number(paymentAmount);
+
+        if (!Number.isFinite(amount) || amount <= 0) {
+            toast.error(
+                "Please enter a payment amount greater than zero."
+            );
+            return;
+        }
+
+        const remaining = remainingAmount(item);
+
+        if (amount > remaining) {
+            toast.error(
+                `Payment amount cannot exceed the remaining scheduled amount of ${formatMoney(
+                    remaining
+                )} for this instalment. Paying more than what remains isn't supported yet.`
+            );
+            return;
+        }
+
         try {
             setPayingScheduleId(item.id);
 
@@ -220,6 +383,7 @@ export function EMIScheduleDialog({
                 loanId: loan.id,
                 scheduleId: item.id,
                 paymentDate,
+                amount,
                 paymentMethod,
                 referenceNumber:
                     paymentReference.trim() || null,
@@ -237,6 +401,7 @@ export function EMIScheduleDialog({
             setPaymentDate(
                 new Date().toISOString().slice(0, 10)
             );
+            setPaymentAmount("");
 
             toast.success(
                 "EMI payment recorded successfully."
@@ -265,12 +430,21 @@ export function EMIScheduleDialog({
                 item => item.status === "PAID"
             ).length,
 
+            // A PARTIAL row still needs a further payment to
+            // complete it - grouped with Upcoming rather than
+            // invisible between the Paid/Overdue counts. Overdue
+            // (derived, never persisted - Loans Phase 5) is split out
+            // from Upcoming rather than double-counted in both, so
+            // Paid + Upcoming + Overdue always adds up to Total.
             upcoming: schedule.filter(
-                item => item.status === "UPCOMING"
+                item =>
+                    (item.status === "UPCOMING" ||
+                        item.status === "PARTIAL") &&
+                    !isScheduleOverdue(item)
             ).length,
 
-            overdue: schedule.filter(
-                item => item.status === "OVERDUE"
+            overdue: schedule.filter(item =>
+                isScheduleOverdue(item)
             ).length,
 
             totalAmount: schedule
@@ -387,7 +561,7 @@ export function EMIScheduleDialog({
                                     </div>
 
                                     <div className="mt-1 text-lg font-semibold text-slate-900">
-                                        {formatAmount(summary.totalAmount)}
+                                        {formatMoney(summary.totalAmount)}
                                     </div>
                                 </div>
                             </div>
@@ -404,7 +578,7 @@ export function EMIScheduleDialog({
                                                 Installment{" "}
                                                 {selectedSchedule.installmentNumber}
                                                 {" · "}
-                                                {formatAmount(
+                                                {formatMoney(
                                                     selectedSchedule.totalAmount
                                                 )}
                                             </p>
@@ -421,6 +595,48 @@ export function EMIScheduleDialog({
                                     </div>
 
                                     <div className="mt-4 grid gap-4 md:grid-cols-2">
+                                        <label className="block">
+                                            <span className="mb-1.5 block text-xs font-medium text-slate-600">
+                                                Amount
+                                            </span>
+
+                                            <input
+                                                type="number"
+                                                min="0.01"
+                                                step="0.01"
+                                                max={remainingAmount(
+                                                    selectedSchedule
+                                                )}
+                                                value={
+                                                    paymentAmount
+                                                }
+                                                onChange={event =>
+                                                    setPaymentAmount(
+                                                        event.target.value
+                                                    )
+                                                }
+                                                disabled={Boolean(
+                                                    payingScheduleId
+                                                )}
+                                                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-slate-400"
+                                            />
+
+                                            <span className="mt-1 block text-[11px] text-slate-400">
+                                                {selectedSchedule.status ===
+                                                "PARTIAL"
+                                                    ? `${formatMoney(
+                                                          remainingAmount(
+                                                              selectedSchedule
+                                                          )
+                                                      )} remaining on this instalment - paying less than that records another partial payment.`
+                                                    : `Up to ${formatMoney(
+                                                          remainingAmount(
+                                                              selectedSchedule
+                                                          )
+                                                      )} - paying less records a partial payment.`}
+                                            </span>
+                                        </label>
+
                                         <label className="block">
                                             <span className="mb-1.5 block text-xs font-medium text-slate-600">
                                                 Payment Date
@@ -553,17 +769,174 @@ export function EMIScheduleDialog({
                                                     payingScheduleId
                                                 ) ||
                                                 !paymentMethod ||
-                                                !paymentDate
+                                                !paymentDate ||
+                                                !(
+                                                    Number(
+                                                        paymentAmount
+                                                    ) > 0
+                                                ) ||
+                                                Number(
+                                                    paymentAmount
+                                                ) >
+                                                    remainingAmount(
+                                                        selectedSchedule
+                                                    )
                                             }
                                             className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {payingScheduleId ===
                                             selectedSchedule.id
                                                 ? "Recording..."
-                                                : `Record Payment of ${formatAmount(
-                                                      selectedSchedule.totalAmount
+                                                : `Record Payment of ${formatMoney(
+                                                      Number(
+                                                          paymentAmount
+                                                      ) || 0
                                                   )}`}
                                         </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {viewingPaymentsFor && (
+                                <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <h3 className="text-sm font-semibold text-slate-900">
+                                                Payments —
+                                                Installment{" "}
+                                                {
+                                                    viewingPaymentsFor.installmentNumber
+                                                }
+                                            </h3>
+
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                Reversing a
+                                                payment
+                                                soft-deletes
+                                                its linked
+                                                bank
+                                                transaction
+                                                and restores
+                                                the loan's
+                                                outstanding
+                                                balance by
+                                                that
+                                                payment's own
+                                                amount.
+                                            </p>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={
+                                                closePaymentsPanel
+                                            }
+                                            disabled={Boolean(
+                                                reversingPaymentId
+                                            )}
+                                            className="text-sm font-medium text-slate-500 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Close
+                                        </button>
+                                    </div>
+
+                                    <div className="mt-4">
+                                        {paymentsLoading ? (
+                                            <p className="text-sm text-slate-500">
+                                                Loading
+                                                payments...
+                                            </p>
+                                        ) : payments.length ===
+                                          0 ? (
+                                            <p className="text-sm text-slate-500">
+                                                No payments
+                                                found for
+                                                this
+                                                instalment.
+                                            </p>
+                                        ) : (
+                                            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                                                <table className="w-full min-w-[600px] border-collapse">
+                                                    <thead className="bg-slate-50">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                                                Payment
+                                                                Date
+                                                            </th>
+
+                                                            <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                                                Principal
+                                                            </th>
+
+                                                            <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                                                Interest
+                                                            </th>
+
+                                                            <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                                                Amount
+                                                            </th>
+
+                                                            <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                                                Action
+                                                            </th>
+                                                        </tr>
+                                                    </thead>
+
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {payments.map(
+                                                            item => (
+                                                                <tr
+                                                                    key={
+                                                                        item.id
+                                                                    }
+                                                                >
+                                                                    <td className="px-4 py-2 text-sm text-slate-600">
+                                                                        {formatDate(
+                                                                            item.paymentDate
+                                                                        )}
+                                                                    </td>
+
+                                                                    <td className="px-4 py-2 text-right text-sm text-slate-600">
+                                                                        {formatMoney(
+                                                                            item.principalAmount
+                                                                        )}
+                                                                    </td>
+
+                                                                    <td className="px-4 py-2 text-right text-sm text-slate-600">
+                                                                        {formatMoney(
+                                                                            item.interestAmount
+                                                                        )}
+                                                                    </td>
+
+                                                                    <td className="px-4 py-2 text-right text-sm font-medium text-slate-800">
+                                                                        {formatMoney(
+                                                                            item.amount
+                                                                        )}
+                                                                    </td>
+
+                                                                    <td className="px-4 py-2 text-right">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() =>
+                                                                                setConfirmingPayment(
+                                                                                    item
+                                                                                )
+                                                                            }
+                                                                            disabled={Boolean(
+                                                                                reversingPaymentId
+                                                                            )}
+                                                                            className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                        >
+                                                                            Reverse
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            )
+                                                        )}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}
@@ -629,25 +1002,25 @@ export function EMIScheduleDialog({
                                                 </td>
 
                                                 <td className="px-4 py-3 text-right text-sm text-slate-600">
-                                                    {formatAmount(
+                                                    {formatMoney(
                                                         item.principalAmount
                                                     )}
                                                 </td>
 
                                                 <td className="px-4 py-3 text-right text-sm text-slate-600">
-                                                    {formatAmount(
+                                                    {formatMoney(
                                                         item.interestAmount
                                                     )}
                                                 </td>
 
                                                 <td className="px-4 py-3 text-right text-sm font-medium text-slate-800">
-                                                    {formatAmount(
+                                                    {formatMoney(
                                                         item.totalAmount
                                                     )}
                                                 </td>
 
                                                 <td className="px-4 py-3 text-right text-sm text-slate-600">
-                                                    {formatAmount(
+                                                    {formatMoney(
                                                         item.outstandingPrincipal
                                                     )}
                                                 </td>
@@ -655,6 +1028,9 @@ export function EMIScheduleDialog({
                                                 <td className="px-4 py-3">
                                                     <StatusBadge
                                                         status={item.status}
+                                                        overdue={isScheduleOverdue(
+                                                            item
+                                                        )}
                                                     />
                                                 </td>
 
@@ -667,34 +1043,57 @@ export function EMIScheduleDialog({
                                                 <td className="px-4 py-3 text-right text-sm text-slate-600">
                                                     {item.paidAmount === null
                                                         ? "—"
-                                                        : formatAmount(
+                                                        : formatMoney(
                                                               item.paidAmount
                                                           )}
                                                 </td>
 
                                                 <td className="px-4 py-3 text-right">
-                                                    {item.status === "PAID" ? (
-                                                        <span className="text-xs font-medium text-slate-400">
-                                                            Paid
-                                                        </span>
-                                                    ) : (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() =>
-                                                                openPaymentForm(
-                                                                    item
-                                                                )
-                                                            }
-                                                            disabled={
-                                                                Boolean(
-                                                                    payingScheduleId
-                                                                )
-                                                            }
-                                                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                                        >
-                                                            Pay EMI
-                                                        </button>
-                                                    )}
+                                                    <div className="flex flex-nowrap items-center justify-end gap-1.5">
+                                                        {item.status ===
+                                                        "PAID" ? (
+                                                            <span className="text-xs font-medium text-slate-400">
+                                                                Paid
+                                                            </span>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    openPaymentForm(
+                                                                        item
+                                                                    )
+                                                                }
+                                                                disabled={
+                                                                    Boolean(
+                                                                        payingScheduleId
+                                                                    )
+                                                                }
+                                                                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                            >
+                                                                {item.status ===
+                                                                "PARTIAL"
+                                                                    ? "Complete Payment"
+                                                                    : "Pay EMI"}
+                                                            </button>
+                                                        )}
+
+                                                        {item.status !==
+                                                            "UPCOMING" && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    openPaymentsPanel(
+                                                                        item
+                                                                    )
+                                                                }
+                                                                title="View and reverse payments"
+                                                                aria-label="View and reverse payments"
+                                                                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                                                            >
+                                                                Payments
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}
@@ -705,6 +1104,80 @@ export function EMIScheduleDialog({
                     )}
                 </div>
             </DialogContent>
+
+            <AlertDialog
+                open={confirmingPayment !== null}
+                onOpenChange={nextOpen => {
+                    if (!nextOpen && !reversingPaymentId) {
+                        setConfirmingPayment(null);
+                    }
+                }}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            Reverse this payment?
+                        </AlertDialogTitle>
+
+                        <AlertDialogDescription>
+                            {confirmingPayment && (
+                                <>
+                                    This will reverse the{" "}
+                                    <span className="font-medium text-slate-700">
+                                        {formatMoney(
+                                            confirmingPayment.amount
+                                        )}
+                                    </span>{" "}
+                                    payment made on{" "}
+                                    <span className="font-medium text-slate-700">
+                                        {formatDate(
+                                            confirmingPayment.paymentDate
+                                        )}
+                                    </span>{" "}
+                                    and delete its linked
+                                    bank transaction. The
+                                    loan's outstanding
+                                    balance will be restored
+                                    by this payment's own
+                                    amount. This can&apos;t
+                                    be undone from here.
+                                </>
+                            )}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+
+                    <AlertDialogFooter>
+                        <AlertDialogCancel
+                            disabled={Boolean(
+                                reversingPaymentId
+                            )}
+                        >
+                            Cancel
+                        </AlertDialogCancel>
+
+                        <AlertDialogAction
+                            type="button"
+                            disabled={Boolean(
+                                reversingPaymentId
+                            )}
+                            onClick={() => {
+                                if (confirmingPayment) {
+                                    void handleReversePayment(
+                                        confirmingPayment
+                                    );
+                                }
+                            }}
+                            className="bg-red-600 text-white hover:bg-red-700"
+                        >
+                            {reversingPaymentId
+                                ? "Reversing..."
+                                : "Reverse Payment"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </Dialog>
     );
 }
+
+

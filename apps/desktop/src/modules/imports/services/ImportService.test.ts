@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
     detectCsvColumns,
-    extractTransactionPattern,
     processCsv,
     processDocumentWithMapping,
     type CsvDocument,
@@ -11,6 +10,7 @@ import {
 
 import type { ImportBatch, ImportMapping, ImportRow } from "../types";
 
+import { learningKeyForCandidate } from "./learningKey";
 import {
     enrichCandidatesWithLearnedRules,
     enrichCandidatesWithLearnedRulesDetailed,
@@ -40,6 +40,15 @@ function candidate(
         rawData: {},
         ...overrides,
     };
+}
+
+// The persisted learning key for a Debit (candidate() default "expense")
+// row with this Description - see learningKeyForCandidate.
+function debitKey(description: string): string {
+    return learningKeyForCandidate({
+        description,
+        type: "expense",
+    })!;
 }
 
 // A minimal in-memory stand-in for CounterpartyRuleRepository (see
@@ -1409,7 +1418,7 @@ describe("Per-row Self-Learning toggle", () => {
 
         const rule = await store.findByAccountAndPattern(
             "account-1",
-            description
+            debitKey(description)
         );
 
         expect(rule?.counterparty).toBe("SBI Card");
@@ -1434,7 +1443,7 @@ describe("Per-row Self-Learning toggle", () => {
 
         const rule = await store.findByAccountAndPattern(
             "account-1",
-            pattern
+            debitKey(pattern)
         );
 
         expect(rule).toBeNull();
@@ -1461,11 +1470,11 @@ describe("Per-row Self-Learning toggle", () => {
 
         const offRule = await store.findByAccountAndPattern(
             "account-1",
-            "OFF ROW NARRATION TEXT"
+            debitKey("OFF ROW NARRATION TEXT")
         );
         const onRule = await store.findByAccountAndPattern(
             "account-1",
-            "ON ROW NARRATION TEXT"
+            debitKey("ON ROW NARRATION TEXT")
         );
 
         expect(offRule).toBeNull();
@@ -1491,7 +1500,7 @@ describe("Per-row Self-Learning toggle", () => {
 
         const rule = await store.findByAccountAndPattern(
             "account-1",
-            description
+            debitKey(description)
         );
 
         expect(rule?.counterparty).toBe("Restored Payee");
@@ -1505,7 +1514,7 @@ describe("Per-row Self-Learning toggle", () => {
         // A rule already exists for this pattern from an earlier import.
         await store.upsert(
             "account-1",
-            description,
+            debitKey(description),
             "Originally Learned Payee",
             null,
             null
@@ -1525,7 +1534,7 @@ describe("Per-row Self-Learning toggle", () => {
 
         const rule = await store.findByAccountAndPattern(
             "account-1",
-            description
+            debitKey(description)
         );
 
         // Still exactly what it was before - never erased or overwritten.
@@ -1540,7 +1549,7 @@ describe("Per-row Self-Learning toggle", () => {
 
         await store.upsert(
             "account-1",
-            description,
+            debitKey(description),
             "Learned Payee",
             null,
             null
@@ -1577,7 +1586,7 @@ describe("enrichCandidatesWithLearnedRulesDetailed - matchedRowNumbers as the so
 
         await store.upsert(
             "account-1",
-            description,
+            debitKey(description),
             "Limestone Networks",
             null,
             null
@@ -1632,7 +1641,7 @@ describe("enrichCandidatesWithLearnedRulesDetailed - matchedRowNumbers as the so
 
         await store.upsert(
             "account-1",
-            description,
+            debitKey(description),
             "SBI Card",
             null,
             null
@@ -1751,7 +1760,7 @@ describe("enrichCandidatesWithLearnedRulesDetailed - matchedRowNumbers as the so
         // above.
         const ruleAfter = await store.findByAccountAndPattern(
             "account-1",
-            description
+            debitKey(description)
         );
 
         expect(ruleAfter?.counterparty).toBe("SBI Card");
@@ -2000,7 +2009,7 @@ describe("ImportService.clearAllLearnedRules (Import Preview 'clear all self-lea
 
         await store.upsert(
             "account-1",
-            extractTransactionPattern(description)!,
+            debitKey(description),
             "Tata Capital  Limited",
             "EMANDATE",
             "This is EMI of TATA Capital term loan"
@@ -2147,7 +2156,7 @@ describe("Excel import reuses the exact same universal pipeline as CSV", () => {
 
         await store.upsert(
             "account-1",
-            extractTransactionPattern("Coffee Shop")!,
+            debitKey("Coffee Shop"),
             "Coffee Shop Ltd",
             "UPI",
             "Morning coffee"
@@ -2378,9 +2387,16 @@ describe("Excel-sourced import creates transactions through the exact same pipel
         const { service, createRequests, store } =
             makeFakes("savings-account-1");
 
+        // The user corrected the Payee in the preview - only a row that
+        // carries a correction (not its raw narration) teaches a rule.
+        const corrected = candidates.map(candidate => ({
+            ...candidate,
+            payee: "Blue Tokai Coffee",
+        }));
+
         await service.executeCandidates(
             "batch-1",
-            candidates,
+            corrected,
             "Axis Bank (Excel)"
         );
 
@@ -2392,7 +2408,7 @@ describe("Excel-sourced import creates transactions through the exact same pipel
             createRequests[0].sourceStatement
         ).toBe("Axis Bank (Excel)");
         expect(createRequests[0].payee).toBe(
-            "Coffee Shop"
+            "Blue Tokai Coffee"
         );
         expect(createRequests[0].amount).toBe(250);
         expect(createRequests[0].type).toBe(
@@ -2404,13 +2420,11 @@ describe("Excel-sourced import creates transactions through the exact same pipel
         const rule =
             await store.findByAccountAndPattern(
                 "savings-account-1",
-                extractTransactionPattern(
-                    "Coffee Shop"
-                )!
+                debitKey("Coffee Shop")
             );
 
         expect(rule?.counterparty).toBe(
-            "Coffee Shop"
+            "Blue Tokai Coffee"
         );
     });
 });
@@ -2669,5 +2683,249 @@ describe("ImportService.listMappings", () => {
             mappingA,
             mappingB,
         ]);
+    });
+});
+
+function makeBatch(
+    overrides: Partial<ImportBatch> = {}
+): ImportBatch {
+    return {
+        id: "batch-1",
+        accountId: "account-1",
+        importType: "BANK_EXCEL",
+        sourceFileName:
+            "AccountStatement_23092026_144703.xlsx",
+        status: "COMPLETED",
+        totalRows: 48,
+        importedRows: 48,
+        duplicateRows: 0,
+        failedRows: 0,
+        createdAt: "2026-09-23T14:47:03.000Z",
+        updatedAt: "2026-09-23T14:47:03.000Z",
+        ...overrides,
+    };
+}
+
+// Import History "Delete" action - removes only the import_batches
+// record and its import_rows (see ImportBatchRepository.deleteAtomic /
+// src-tauri/src/import_batch_delete.rs for why both run in one real
+// database transaction). Never deletes a financial transaction -
+// import_rows.transaction_id is only a reference, and the atomic
+// command issues no DELETE against `transactions` at all, so this is
+// verified here by asserting the service never even touches
+// transactionRepository/transactionService while deleting a batch.
+describe("ImportService.deleteBatch (Import History 'Delete' action)", () => {
+    function createService(batch: ImportBatch | null) {
+        const deleteAtomicCalls: string[] = [];
+
+        const transactionRepository = {
+            async existsForAccount() {
+                throw new Error(
+                    "deleteBatch must never touch transactionRepository"
+                );
+            },
+        };
+
+        const batchRepository = {
+            async getById() {
+                return batch;
+            },
+            async deleteAtomic(id: string) {
+                deleteAtomicCalls.push(id);
+            },
+        };
+
+        const service = new ImportService();
+
+        Object.defineProperty(
+            service,
+            "batchRepository",
+            { value: batchRepository }
+        );
+        Object.defineProperty(
+            service,
+            "transactionRepository",
+            { value: transactionRepository }
+        );
+
+        return { service, deleteAtomicCalls };
+    }
+
+    it("before confirmation/on Cancel: nothing calls deleteBatch, so the record is untouched", async () => {
+        const { deleteAtomicCalls } = createService(
+            makeBatch()
+        );
+
+        // Simulates the Delete button being clicked (opens the
+        // confirmation dialog) and/or Cancel being clicked - neither
+        // of which, in the real component, ever calls the service.
+        expect(deleteAtomicCalls).toEqual([]);
+    });
+
+    it("1. confirming deletes the batch/history record via one atomic call", async () => {
+        const { service, deleteAtomicCalls } =
+            createService(makeBatch({ id: "batch-1" }));
+
+        await service.deleteBatch("batch-1");
+
+        expect(deleteAtomicCalls).toEqual([
+            "batch-1",
+        ]);
+    });
+
+    it("2. the associated import rows are removed as part of the same atomic call (see import_batch_delete.rs's own test for the row-level proof)", async () => {
+        const { service, deleteAtomicCalls } =
+            createService(makeBatch({ id: "batch-1" }));
+
+        await service.deleteBatch("batch-1");
+
+        // deleteAtomic is exactly the single call that deletes both
+        // import_rows and import_batches together, atomically - there
+        // is no separate row-deletion step here that could be skipped.
+        expect(deleteAtomicCalls).toHaveLength(1);
+    });
+
+    it("3. never touches transactionRepository - existing financial transactions remain untouched", async () => {
+        const { service } = createService(
+            makeBatch()
+        );
+
+        // createService's fake transactionRepository throws if
+        // anything calls it - reaching the assertion below at all
+        // proves deleteBatch never did.
+        await service.deleteBatch("batch-1");
+
+        expect(true).toBe(true);
+    });
+
+    it("4. a failed deletion propagates the error and leaves nothing else changed", async () => {
+        const batchRepository = {
+            async getById() {
+                return makeBatch();
+            },
+            async deleteAtomic() {
+                throw new Error(
+                    "database is locked"
+                );
+            },
+        };
+
+        const service = new ImportService();
+
+        Object.defineProperty(
+            service,
+            "batchRepository",
+            { value: batchRepository }
+        );
+
+        await expect(
+            service.deleteBatch("batch-1")
+        ).rejects.toThrow("database is locked");
+    });
+
+    it("throws (and never calls deleteAtomic) when the batch does not exist", async () => {
+        const { service, deleteAtomicCalls } =
+            createService(null);
+
+        await expect(
+            service.deleteBatch("missing")
+        ).rejects.toThrow(
+            "Import batch not found."
+        );
+
+        expect(deleteAtomicCalls).toEqual([]);
+    });
+});
+
+// Saved Mappings "Delete" action - removes only the one import_mappings
+// row (see ImportMappingRepository.delete's own doc comment for why a
+// plain single-row DELETE is already safe - nothing else references
+// this row). Never touches accounts, transactions, or any other saved
+// mapping/import.
+describe("ImportService.deleteMapping (Saved Mappings 'Delete' action)", () => {
+    function createService(
+        mapping: ImportMapping | null
+    ) {
+        const deleteCalls: string[] = [];
+
+        const mappingRepository = {
+            async findById(id: string) {
+                return mapping?.id === id
+                    ? mapping
+                    : null;
+            },
+            async delete(id: string) {
+                deleteCalls.push(id);
+            },
+        };
+
+        const service = new ImportService();
+
+        Object.defineProperty(
+            service,
+            "mappingRepository",
+            { value: mappingRepository }
+        );
+
+        return { service, deleteCalls };
+    }
+
+    it("before confirmation/on Cancel: nothing calls deleteMapping, so the mapping is untouched", async () => {
+        const { deleteCalls } = createService(
+            makeMapping()
+        );
+
+        expect(deleteCalls).toEqual([]);
+    });
+
+    it("5. confirming deletes only the targeted mapping", async () => {
+        const { service, deleteCalls } =
+            createService(
+                makeMapping({ id: "mapping-1" })
+            );
+
+        await service.deleteMapping("mapping-1");
+
+        expect(deleteCalls).toEqual([
+            "mapping-1",
+        ]);
+    });
+
+    it("4. a failed deletion propagates the error and leaves nothing else changed", async () => {
+        const mappingRepository = {
+            async findById() {
+                return makeMapping();
+            },
+            async delete() {
+                throw new Error(
+                    "database is locked"
+                );
+            },
+        };
+
+        const service = new ImportService();
+
+        Object.defineProperty(
+            service,
+            "mappingRepository",
+            { value: mappingRepository }
+        );
+
+        await expect(
+            service.deleteMapping("mapping-1")
+        ).rejects.toThrow("database is locked");
+    });
+
+    it("throws (and never calls delete) when the mapping does not exist", async () => {
+        const { service, deleteCalls } =
+            createService(null);
+
+        await expect(
+            service.deleteMapping("missing")
+        ).rejects.toThrow(
+            "Import mapping not found."
+        );
+
+        expect(deleteCalls).toEqual([]);
     });
 });

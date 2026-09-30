@@ -124,9 +124,41 @@ describe("describeBudgetStatus - reads the engine verdict, never recalculates", 
 });
 
 describe("formatPercentUsed", () => {
-    it("rounds to a whole percent", () => {
-        expect(formatPercentUsed(49.6, 10000)).toBe("50%");
-        expect(formatPercentUsed(120, 10000)).toBe("120%");
+    it("formats to exactly 1 decimal place, not a whole percent", () => {
+        expect(formatPercentUsed(49.6, 10000)).toBe("49.6%");
+        expect(formatPercentUsed(120, 10000)).toBe("120.0%");
+    });
+
+    it("83.5% (50,100 / 60,000) displays as 83.5%, not 84%", () => {
+        const percentageUsed = (50100 / 60000) * 100;
+
+        expect(formatPercentUsed(percentageUsed, 60000)).toBe(
+            "83.5%"
+        );
+    });
+
+    it("1.7% (1,000 / 60,000) displays with its decimal, not 2%", () => {
+        const percentageUsed = (1000 / 60000) * 100;
+
+        expect(formatPercentUsed(percentageUsed, 60000)).toBe(
+            "1.7%"
+        );
+    });
+
+    it("100% (60,000 / 60,000) displays as 100.0%", () => {
+        const percentageUsed = (60000 / 60000) * 100;
+
+        expect(formatPercentUsed(percentageUsed, 60000)).toBe(
+            "100.0%"
+        );
+    });
+
+    it("over-budget values keep their decimal past 100%", () => {
+        const percentageUsed = (75000 / 60000) * 100;
+
+        expect(formatPercentUsed(percentageUsed, 60000)).toBe(
+            "125.0%"
+        );
     });
 
     it("returns an em dash when there is no budget to measure against", () => {
@@ -347,6 +379,77 @@ describe("resolveBudgetCurrencyScopes", () => {
 
     it("returns an empty list when the system has no currencies and no budgets", () => {
         expect(resolveBudgetCurrencyScopes([], [])).toEqual([]);
+    });
+
+    // Production bug: with 0 budgets, the Budgets page showed every
+    // amount in "$" instead of the app's actual configured default
+    // currency ("₹" / INR). Root cause (confirmed against the real
+    // database): the `currencies` table's own `is_default` column had
+    // drifted out of sync with app_settings' general.default_currency
+    // (the single source of truth every other module already reads via
+    // useDisplaySettings) - is_default was left set on USD from
+    // initial seeding, while the app's real configured default had
+    // since been changed to INR. Passing the real app default as the
+    // third argument fixes exactly this, without ever hardcoding INR -
+    // it's driven entirely by whatever value is passed in.
+    describe("when the currencies table's own isDefault flag has drifted out of sync with the app's real default currency setting", () => {
+        // Mirrors the actual production data: USD (not INR) has
+        // isDefault: true on the currencies table.
+        const driftedCurrencies = [
+            { id: USD, code: "USD", isDefault: true },
+            { id: INR, code: "INR", isDefault: false },
+        ];
+
+        it("1. prefers the app's real default currency (INR) over the stale isDefault flag when no budget exists yet", () => {
+            expect(
+                resolveBudgetCurrencyScopes(
+                    [],
+                    driftedCurrencies,
+                    "INR"
+                )
+            ).toEqual([INR]);
+        });
+
+        it("2. is not hardcoded to INR - it dynamically follows whatever the app's real default currency actually is", () => {
+            const withGbp = [
+                ...driftedCurrencies,
+                {
+                    id: "currency-gbp",
+                    code: "GBP",
+                    isDefault: false,
+                },
+            ];
+
+            expect(
+                resolveBudgetCurrencyScopes(
+                    [],
+                    withGbp,
+                    "GBP"
+                )
+            ).toEqual(["currency-gbp"]);
+        });
+
+        it("without the app-default argument, preserves the previous isDefault-only fallback exactly (backward compatible)", () => {
+            expect(
+                resolveBudgetCurrencyScopes(
+                    [],
+                    driftedCurrencies
+                )
+            ).toEqual([USD]);
+        });
+
+        it("also prefers the real app default over the stale isDefault flag when budgets exist in both currencies (ordering, not just the fallback)", () => {
+            expect(
+                resolveBudgetCurrencyScopes(
+                    [
+                        { currencyId: USD },
+                        { currencyId: INR },
+                    ],
+                    driftedCurrencies,
+                    "INR"
+                )
+            ).toEqual([INR, USD]);
+        });
     });
 });
 

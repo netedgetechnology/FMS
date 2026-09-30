@@ -15,12 +15,15 @@ import { CardViewAllLink } from "../common/CardViewAllLink";
 interface InvestmentSummaryCardProps {
     data: {
         totalValue: number;
-        monthlyChangePercentage: number;
+        /** null when there is no historical value to compare against. */
+        monthlyChangePercentage: number | null;
         allocation: {
             name: string;
             value: number;
             amount: number;
         }[];
+        currencyCode?: string | null;
+        hasOtherCurrencies?: boolean;
     };
 }
 
@@ -50,7 +53,9 @@ export function InvestmentSummaryCard({
         })
     );
 
-    const changePositive = data.monthlyChangePercentage >= 0;
+    const changePositive =
+        data.monthlyChangePercentage !== null &&
+        data.monthlyChangePercentage >= 0;
 
     return (
         <Card className="h-full rounded-[20px] border border-slate-200/80 bg-white p-5 shadow-[0_4px_20px_rgba(15,23,42,0.05)]">
@@ -110,13 +115,18 @@ export function InvestmentSummaryCard({
 
                     <div
                         className={`mt-2 whitespace-nowrap text-[11px] font-medium ${
-                            changePositive
-                                ? "text-emerald-600"
-                                : "text-red-500"
+                            data.monthlyChangePercentage ===
+                            null
+                                ? "text-slate-400"
+                                : changePositive
+                                  ? "text-emerald-600"
+                                  : "text-red-500"
                         }`}
                     >
-                        {changePositive ? "+" : ""}
-                        {data.monthlyChangePercentage.toFixed(1)}% this month
+                        {data.monthlyChangePercentage ===
+                        null
+                            ? "Historical data unavailable"
+                            : `${changePositive ? "+" : ""}${data.monthlyChangePercentage.toFixed(1)}% this month`}
                     </div>
 
                 </div>
@@ -164,6 +174,16 @@ export function InvestmentSummaryCard({
                     )}
 
                 </div>
+
+                {data.hasOtherCurrencies && (
+                    <p className="text-[11px] text-slate-400">
+                        Showing{" "}
+                        {data.currencyCode ??
+                            "the primary currency"}{" "}
+                        only - other currencies are on the
+                        Investments page.
+                    </p>
+                )}
 
             </div>
 

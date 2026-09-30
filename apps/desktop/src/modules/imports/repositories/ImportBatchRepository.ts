@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 import { Repository } from "@/core/database/engine/Repository";
 
 import type {
@@ -8,6 +10,27 @@ import type {
 export class ImportBatchRepository
     extends Repository
 {
+    /**
+     * Deletes this Import History record and its import_rows inside
+     * one real, single-connection database transaction (a dedicated
+     * Rust command - see src-tauri/src/import_batch_delete.rs). Same
+     * reasoning as LoanRepository.createAtomic/deleteAtomic: a
+     * `beginTransaction()`/several `execute()` calls/`commit()`
+     * sequence through SQLiteProvider cannot guarantee both DELETE
+     * statements land on the same connection. Never touches
+     * `transactions` - deleting import_rows does not cascade to the
+     * transaction rows it references, and this command issues no
+     * DELETE against that table at all.
+     */
+    async deleteAtomic(
+        batchId: string
+    ): Promise<void> {
+        await invoke(
+            "delete_import_batch_atomic",
+            { request: { batchId } }
+        );
+    }
+
     async getAll(): Promise<ImportBatch[]> {
         return await this.select<ImportBatch>(
             `

@@ -14,6 +14,12 @@ import {
 } from "../../services/InvestmentPortfolioCalculator";
 
 import {
+    resolvePrimaryInvestmentCurrencyId,
+} from "../../services/investmentCurrencyScope";
+
+import { CurrencyRepository } from "@/modules/currencies/repositories/CurrencyRepository";
+
+import {
     InvestmentReport,
     InvestmentReportDateRange,
     InvestmentReportRow,
@@ -29,14 +35,20 @@ export class InvestmentReportingService {
     private readonly transactionRepository =
         new InvestmentTransactionRepository();
 
+    private readonly currencyRepository =
+        new CurrencyRepository();
+
     private readonly calculator =
         new InvestmentPortfolioCalculator();
 
     async generateReport(
         dateRange?: InvestmentReportDateRange
     ): Promise<InvestmentReport> {
-        const investments =
-            await this.investmentRepository.getAll();
+        const [investments, currencies] =
+            await Promise.all([
+                this.investmentRepository.getAll(),
+                this.currencyRepository.getAll(),
+            ]);
 
         const transactionResults =
             await Promise.all(
@@ -150,7 +162,8 @@ export class InvestmentReportingService {
         const portfolio =
             this.buildPortfolioReport(
                 investments,
-                investmentRows
+                investmentRows,
+                currencies
             );
 
         return {
@@ -221,12 +234,20 @@ export class InvestmentReportingService {
             calculation.realizedGainLoss +
             calculation.income;
 
+        // totalInvested (cumulative OPENING_BALANCE/BUY cost, never
+        // reduced by a SELL) is the only basis that stays consistent
+        // with totalReturn's scope across a no-sale, partial-sell or
+        // fully-sold history - see the field's doc comment on
+        // InvestmentPortfolioCalculation. totalCost (residual basis)
+        // would overstate the % after a partial sell and floor it at
+        // 0% after a full sell regardless of actual performance.
+        // null (not 0%) when there is no valid basis to divide by.
         const returnPercentage =
-            calculation.totalCost !== 0
+            calculation.totalInvested > 0
                 ? (totalReturn /
-                      calculation.totalCost) *
+                      calculation.totalInvested) *
                   100
-                : 0;
+                : null;
 
         return {
             investmentId:
@@ -253,6 +274,9 @@ export class InvestmentReportingService {
             investedCost:
                 calculation.totalCost,
 
+            totalInvested:
+                calculation.totalInvested,
+
             currentValue,
 
             unrealizedGainLoss,
@@ -271,24 +295,65 @@ export class InvestmentReportingService {
 
     private buildPortfolioReport(
         investments: Investment[],
-        rows: InvestmentReportRow[]
+        rows: InvestmentReportRow[],
+        currencies: readonly {
+            id: string;
+            code: string;
+            isDefault: boolean;
+        }[]
     ) {
+        const investmentById = new Map(
+            investments.map(
+                (investment) => [investment.id, investment]
+            )
+        );
+
+        const primaryCurrencyId =
+            resolvePrimaryInvestmentCurrencyId(
+                investments,
+                currencies
+            );
+
+        // Mixed-currency portfolios must never be summed together
+        // (INR + USD is not a meaningful number) - aggregate only the
+        // rows in the resolved primary currency, same as the Budgets
+        // module's resolveBudgetCurrencyScopes pattern. When every
+        // investment shares one currency this is a no-op: every row
+        // is in scope and totals are unchanged from before.
+        const scopedRows = rows.filter((row) => {
+            const investment = investmentById.get(
+                row.investmentId
+            );
+
+            return (
+                investment?.currencyId ===
+                primaryCurrencyId
+            );
+        });
+
         const investedCost =
-            rows.reduce(
+            scopedRows.reduce(
                 (total, row) =>
                     total + row.investedCost,
                 0
             );
 
+        const totalInvested =
+            scopedRows.reduce(
+                (total, row) =>
+                    total + row.totalInvested,
+                0
+            );
+
         const currentValue =
-            rows.reduce(
+            scopedRows.reduce(
                 (total, row) =>
                     total + row.currentValue,
                 0
             );
 
         const unrealizedGainLoss =
-            rows.reduce(
+            scopedRows.reduce(
                 (total, row) =>
                     total +
                     row.unrealizedGainLoss,
@@ -296,7 +361,7 @@ export class InvestmentReportingService {
             );
 
         const realizedGainLoss =
-            rows.reduce(
+            scopedRows.reduce(
                 (total, row) =>
                     total +
                     row.realizedGainLoss,
@@ -304,7 +369,7 @@ export class InvestmentReportingService {
             );
 
         const income =
-            rows.reduce(
+            scopedRows.reduce(
                 (total, row) =>
                     total + row.income,
                 0
@@ -316,17 +381,30 @@ export class InvestmentReportingService {
             income;
 
         const returnPercentage =
-            investedCost !== 0
+            totalInvested > 0
                 ? (totalReturn /
-                      investedCost) *
+                      totalInvested) *
                   100
-                : 0;
+                : null;
 
         const activeInvestments =
             investments.filter(
                 (investment) =>
                     investment.status === "ACTIVE"
             ).length;
+
+        const distinctCurrencyCount =
+            new Set(
+                investments.map(
+                    (investment) => investment.currencyId
+                )
+            ).size;
+
+        const currencyCode =
+            currencies.find(
+                (currency) =>
+                    currency.id === primaryCurrencyId
+            )?.code ?? null;
 
         return {
             totalInvestments:
@@ -347,6 +425,13 @@ export class InvestmentReportingService {
             totalReturn,
 
             returnPercentage,
+
+            currencyId: primaryCurrencyId,
+
+            currencyCode,
+
+            hasOtherCurrencies:
+                distinctCurrencyCount > 1,
         };
     }
 

@@ -6,6 +6,7 @@ import {
   IconBuildingStore,
   IconReceipt,
   IconFileImport,
+  IconWand,
   IconFileDescription,
   IconWallet,
   IconTarget,
@@ -29,7 +30,9 @@ const menu = [
   { icon: IconBuildingBank, label: "Accounts", path: "/accounts" },
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
   { icon: IconReceipt, label: "Transactions", path: "/transactions" },
-  { icon: IconFileImport, label: "Imports", path: "/imports" },
+  { icon: IconFileImport, label: "Imports", path: "/imports", end: true },
+  // Sub-entry of Imports (indented below it).
+  { icon: IconWand, label: "Import Rules", path: "/imports/rules", child: true },
   { icon: IconWallet, label: "Budgets", path: "/budgets" },
   { icon: IconWallet, label: "Financial Plans", path: "/financial-plans" },
   { icon: IconTarget, label: "Financial Goals", path: "/financial-goals" },
@@ -74,9 +77,12 @@ export default function AppSidebar() {
           <NavLink
             key={item.label}
             to={item.path}
+            end={item.end}
             className={({ isActive }) =>
               [
-                "mb-0.5 flex h-9 items-center gap-3 rounded-xl px-3 text-[14px] transition-all",
+                item.child
+                  ? "mb-0.5 flex h-8 items-center gap-2.5 rounded-xl pl-9 pr-3 text-[13px] transition-all"
+                  : "mb-0.5 flex h-9 items-center gap-3 rounded-xl px-3 text-[14px] transition-all",
                 isActive
                   ? "bg-[#EEF4FF] font-semibold text-[#2563EB]"
                   : "text-slate-700 hover:bg-slate-50",
@@ -84,7 +90,7 @@ export default function AppSidebar() {
             }
           >
             <item.icon
-              size={18}
+              size={item.child ? 15 : 18}
               stroke={1.8}
               className="shrink-0"
             />

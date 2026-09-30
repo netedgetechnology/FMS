@@ -1,0 +1,41 @@
+{
+  "source": "Synthetic: DR/CR suffix attached to the number (1,500.00Dr) or separated by a space, on both amount and balance; balance goes overdrawn (Dr); in-table 'Balance Brought Forward' row.",
+  "importType": "BANK_PDF",
+  "features": [
+    "drcr-suffix-attached",
+    "drcr-suffix-separate",
+    "balance-with-drcr-marker",
+    "overdrawn-balance",
+    "brought-forward-row"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 2,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-03-02",
+        "type": "expense",
+        "amount": 1500,
+        "balance": -500,
+        "description": "ATM Cash Withdrawal"
+      },
+      {
+        "date": "2026-03-05",
+        "type": "income",
+        "amount": 2000,
+        "balance": 1500,
+        "description": "Cheque Deposit"
+      },
+      {
+        "date": "2026-03-06",
+        "type": "expense",
+        "amount": 25,
+        "balance": 1475,
+        "description": "Bank Charges"
+      }
+    ]
+  }
+}

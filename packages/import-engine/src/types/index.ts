@@ -65,6 +65,12 @@ export interface NormalizedTransactionCandidate {
     // `description` (the source narration) - always null from
     // normalization itself; filled in only via per-row manual entry.
     notes: string | null;
+    // The FinanceOS category (Categories module id) the imported
+    // transaction is saved under, or null/absent for Uncategorized.
+    // Never set by normalization - the import-engine knows nothing about
+    // categories; the desktop layer fills it in from a previously-learned
+    // rule and/or a per-row manual selection in the Import Preview.
+    categoryId?: string | null;
     rawData: Record<string, string>;
 }
 

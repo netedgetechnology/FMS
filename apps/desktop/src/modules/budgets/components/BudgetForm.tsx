@@ -15,6 +15,9 @@ import {
 import {
     useCategories,
 } from "@/modules/categories/hooks";
+import type {
+    Category,
+} from "@/modules/categories/types";
 
 import {
     useBusinessEntities,
@@ -32,6 +35,85 @@ export interface BudgetFormProps {
         values: BudgetFormValues
     ) => Promise<void> | void;
     onCancel?: () => void;
+}
+
+/**
+ * The Category <select>'s options when editing a budget. Only active
+ * EXPENSE categories are normally eligible (the service enforces the
+ * same rule), but the budget's *own current* category must always end
+ * up with a matching <option> here too - never just the eligible list
+ * - regardless of why it isn't eligible:
+ *
+ *   - still present but deactivated/retyped: shown as itself, marked
+ *     "(unavailable)" by the existing ineligible-label logic.
+ *   - not present in `categories` at all (soft-deleted - see
+ *     useCategories(), which filters deleted_at IS NULL): synthesized
+ *     as an "Unknown category" placeholder carrying the exact stored
+ *     id, once `categoriesLoading` is false (never during the brief
+ *     initial fetch, when every id is momentarily "not found" and
+ *     this would otherwise wrongly fire for a perfectly normal
+ *     category).
+ *
+ * This second case is the important one: without a matching <option>
+ * for the stored id at all, a native <select> silently falls back to
+ * its first option ("All Categories") - and react-hook-form reads an
+ * uncontrolled select's value straight from that DOM element, so
+ * saving without ever touching this field would submit that fallback,
+ * silently converting a category-specific budget into an overall one.
+ * Exported so this is unit testable without rendering the form (this
+ * repo has no jsdom / component-render setup - see
+ * DeletePlanComponentDialog.test.ts for the same convention).
+ */
+export function resolveBudgetCategoryOptions(
+    categories: readonly Category[],
+    categoriesLoading: boolean,
+    currentCategoryId: string | null | undefined
+): Category[] {
+    const eligible = categories.filter(
+        category =>
+            category.categoryType === "EXPENSE" &&
+            category.isActive
+    );
+
+    if (
+        !currentCategoryId ||
+        eligible.some(
+            category =>
+                String(category.id) ===
+                String(currentCategoryId)
+        )
+    ) {
+        return eligible;
+    }
+
+    const current = categories.find(
+        category =>
+            String(category.id) ===
+            String(currentCategoryId)
+    );
+
+    if (current) {
+        return [current, ...eligible];
+    }
+
+    if (!categoriesLoading) {
+        const placeholder: Category = {
+            id: String(currentCategoryId),
+            parentId: null,
+            name: "Unknown category",
+            categoryType: "EXPENSE",
+            financeScope: "PERSONAL",
+            businessEntityId: null,
+            description: null,
+            isActive: false,
+            createdAt: "",
+            updatedAt: "",
+        };
+
+        return [placeholder, ...eligible];
+    }
+
+    return eligible;
 }
 
 export function BudgetForm({
@@ -56,40 +138,22 @@ export function BudgetForm({
         loading: currenciesLoading,
     } = useCurrencies();
 
-    // Only active EXPENSE categories can be assigned to a budget (the
-    // service enforces the same rule). When editing a budget whose
-    // category has since been deactivated or changed type, that category
-    // is still shown - marked - so the edit does not silently drop it.
-    const budgetCategoryOptions = useMemo(() => {
-        const eligible = categories.filter(
-            category =>
-                category.categoryType === "EXPENSE" &&
-                category.isActive
-        );
-
-        const currentId = defaultValues?.categoryId;
-
-        if (
-            currentId &&
-            !eligible.some(
-                category =>
-                    String(category.id) ===
-                    String(currentId)
-            )
-        ) {
-            const current = categories.find(
-                category =>
-                    String(category.id) ===
-                    String(currentId)
-            );
-
-            if (current) {
-                return [current, ...eligible];
-            }
-        }
-
-        return eligible;
-    }, [categories, defaultValues?.categoryId]);
+    // See resolveBudgetCategoryOptions's own doc comment above for why
+    // the budget's current category always gets a matching <option>
+    // here, even when it's no longer eligible or no longer exists.
+    const budgetCategoryOptions = useMemo(
+        () =>
+            resolveBudgetCategoryOptions(
+                categories,
+                categoriesLoading,
+                defaultValues?.categoryId
+            ),
+        [
+            categories,
+            categoriesLoading,
+            defaultValues?.categoryId,
+        ]
+    );
 
     const initialValues = useMemo<BudgetFormValues>(
         () => ({
@@ -122,8 +186,8 @@ export function BudgetForm({
 useEffect(() => {
         if (
             defaultValues?.categoryId &&
-            categories.length > 0 &&
-            categories.some(
+            !categoriesLoading &&
+            budgetCategoryOptions.some(
                 category =>
                     String(category.id) ===
                     String(defaultValues.categoryId)
@@ -183,6 +247,8 @@ useEffect(() => {
     }, [
         defaultValues,
         categories,
+        categoriesLoading,
+        budgetCategoryOptions,
         currencies,
         businessEntities,
         form,

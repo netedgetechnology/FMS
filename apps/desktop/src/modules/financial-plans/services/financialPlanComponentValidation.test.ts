@@ -246,23 +246,29 @@ describe("source reference checks", () => {
         ).toBe(false);
     });
 
-    it("CATEGORY role must match category_type; TRANSFER is rejected", () => {
+    it("CATEGORY role matches category_type; TRANSFER is always rejected", () => {
         expect(
-            validateCategorySource("CONTRIBUTION", {
-                categoryType: "INCOME",
-            }).ok
+            validateCategorySource(
+                "CONTRIBUTION",
+                { categoryType: "INCOME" },
+                false
+            ).ok
         ).toBe(true);
 
         expect(
-            validateCategorySource("SPENDING", {
-                categoryType: "EXPENSE",
-            }).ok
+            validateCategorySource(
+                "SPENDING",
+                { categoryType: "EXPENSE" },
+                false
+            ).ok
         ).toBe(true);
 
         expect(
-            validateCategorySource("SPENDING", {
-                categoryType: "INCOME",
-            })
+            validateCategorySource(
+                "SPENDING",
+                { categoryType: "INCOME" },
+                false
+            )
         ).toMatchObject({
             ok: false,
             unavailableReason:
@@ -270,10 +276,30 @@ describe("source reference checks", () => {
         });
 
         expect(
-            validateCategorySource("SPENDING", {
-                categoryType: "TRANSFER",
-            })
+            validateCategorySource(
+                "SPENDING",
+                { categoryType: "TRANSFER" },
+                true
+            )
         ).toMatchObject({ ok: false });
+    });
+
+    it("CATEGORY role mismatch is still eligible with a real matching transaction", () => {
+        expect(
+            validateCategorySource(
+                "CONTRIBUTION",
+                { categoryType: "EXPENSE" },
+                true
+            ).ok
+        ).toBe(true);
+
+        expect(
+            validateCategorySource(
+                "SPENDING",
+                { categoryType: "INCOME" },
+                true
+            ).ok
+        ).toBe(true);
     });
 
     it("INVESTMENT / LOAN sources must be ACTIVE", () => {

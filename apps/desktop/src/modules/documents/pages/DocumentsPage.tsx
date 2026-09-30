@@ -1,5 +1,8 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDateFormatter } from "@/core/formatting";
+import { getErrorMessage } from "@/core/errors";
+import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 import {
     FileArchive,
     FileImage,
@@ -67,23 +70,13 @@ function formatFileSize(size: number) {
     return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function formatDate(value: string) {
-    const date = new Date(value);
-
-    if (Number.isNaN(date.getTime())) {
-        return "—";
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-    }).format(date);
-}
 
 function createDocumentId() {
     return crypto.randomUUID();
 }
 
 export function DocumentsPage() {
+    const formatDate = useDateFormatter();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [search, setSearch] = useState("");
     const [loading, setLoading] = useState(true);
@@ -100,6 +93,13 @@ export function DocumentsPage() {
     const [editName, setEditName] = useState("");
     const [editType, setEditType] = useState("");
     const [editDescription, setEditDescription] = useState("");
+
+    // Guards against a slower, still in-flight load (e.g. the mount-time
+    // fetch, delayed by database contention) overwriting state with stale
+    // data after a newer refresh - such as the one triggered right after a
+    // delete - has already resolved and shown the correct list.
+    const requestGuard = useRef(new LatestRequestGuard());
+
     async function handleOpen(document: Document) {
         if (!document.filePath) {
             setError("This document has no stored file.");
@@ -120,17 +120,30 @@ export function DocumentsPage() {
     }
 
     async function loadDocuments() {
+        const requestId = requestGuard.current.start();
+
         try {
             setLoading(true);
             setError(null);
 
             const result = await documentService.getAll();
+
+            if (requestGuard.current.isStale(requestId)) {
+                return;
+            }
+
             setDocuments(result);
         } catch (error) {
+            if (requestGuard.current.isStale(requestId)) {
+                return;
+            }
+
             console.error(error);
             setError("Unable to load documents.");
         } finally {
-            setLoading(false);
+            if (!requestGuard.current.isStale(requestId)) {
+                setLoading(false);
+            }
         }
     }
 
@@ -210,9 +223,6 @@ export function DocumentsPage() {
             setUploading(false);
         }
     }
-    useEffect(() => {
-        void loadDocuments();
-    }, []);
 
     function startEditing(document: Document) {
         setOpenMenuId(null);
@@ -268,7 +278,7 @@ export function DocumentsPage() {
     }
 
     async function confirmDelete() {
-        if (!deletingDocument) {
+        if (!deletingDocument || saving) {
             return;
         }
 
@@ -286,7 +296,12 @@ export function DocumentsPage() {
             await loadDocuments();
         } catch (error) {
             console.error(error);
-            setError("Unable to delete the document.");
+            setError(
+                getErrorMessage(
+                    error,
+                    "Unable to delete the document."
+                )
+            );
         } finally {
             setSaving(false);
         }
@@ -766,6 +781,7 @@ export function DocumentsPage() {
         </div>
     );
 }
+
 
 
 

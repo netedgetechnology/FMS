@@ -1,0 +1,55 @@
+{
+  "source": "Synthetic: leading serial-number column, trailing Branch column, 'INR' currency code as its own token, Indian lakh digit grouping, '-' placeholders, reference column after description, three pages with repeated headers and page footers.",
+  "importType": "BANK_PDF",
+  "features": [
+    "serial-number-column",
+    "extra-trailing-column",
+    "currency-code-token",
+    "indian-digit-grouping",
+    "dash-placeholder",
+    "reference-column-after-description",
+    "multi-page-repeated-header",
+    "multi-line-narration"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 3,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-07-01",
+        "type": "expense",
+        "amount": 350,
+        "balance": 9650,
+        "reference": "UTR600000000001",
+        "description": "UPI/TEST MERCHANT/PAYMENT"
+      },
+      {
+        "date": "2026-07-02",
+        "type": "income",
+        "amount": 145000,
+        "balance": 154650,
+        "reference": "UTR600000000002",
+        "description": "NEFT/TEST EMPLOYER PVT LTD/SALARY JULY 2026"
+      },
+      {
+        "date": "2026-07-03",
+        "type": "expense",
+        "amount": 4321,
+        "balance": 150329,
+        "reference": "CHQ000000000123",
+        "description": "CHQ PAID 000123 TEST VENDOR"
+      },
+      {
+        "date": "2026-07-04",
+        "type": "income",
+        "amount": 1000,
+        "balance": 151329,
+        "reference": "IMPS00000000004",
+        "description": "IMPS/TEST FRIEND/REPAY"
+      }
+    ]
+  }
+}

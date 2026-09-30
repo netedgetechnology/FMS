@@ -24,6 +24,7 @@ export class InvestmentRepository extends Repository {
                 average_cost AS averageCost,
                 current_price AS currentPrice,
                 current_value AS currentValue,
+                price_updated_at AS priceUpdatedAt,
                 purchase_date AS purchaseDate,
                 status,
                 notes,
@@ -56,6 +57,7 @@ export class InvestmentRepository extends Repository {
                 average_cost AS averageCost,
                 current_price AS currentPrice,
                 current_value AS currentValue,
+                price_updated_at AS priceUpdatedAt,
                 purchase_date AS purchaseDate,
                 status,
                 notes,
@@ -135,6 +137,7 @@ export class InvestmentRepository extends Repository {
                 average_cost,
                 current_price,
                 current_value,
+                price_updated_at,
                 purchase_date,
                 status,
                 notes,
@@ -142,7 +145,7 @@ export class InvestmentRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 investment.id,
@@ -159,6 +162,7 @@ export class InvestmentRepository extends Repository {
                 investment.averageCost,
                 investment.currentPrice,
                 investment.currentValue,
+                investment.priceUpdatedAt,
                 investment.purchaseDate,
                 investment.status,
                 investment.notes ?? null,
@@ -171,6 +175,7 @@ export class InvestmentRepository extends Repository {
     async update(
         investment: UpdateInvestmentRequest & {
             brokerInstitutionId: string | null;
+            priceUpdatedAt: string | null;
         }
     ): Promise<void> {
         await this.execute(
@@ -189,6 +194,7 @@ export class InvestmentRepository extends Repository {
                 average_cost = ?,
                 current_price = ?,
                 current_value = ?,
+                price_updated_at = ?,
                 purchase_date = ?,
                 status = ?,
                 notes = ?,
@@ -209,6 +215,7 @@ export class InvestmentRepository extends Repository {
                 investment.averageCost,
                 investment.currentPrice,
                 investment.currentValue,
+                investment.priceUpdatedAt,
                 investment.purchaseDate,
                 investment.status,
                 investment.notes ?? null,

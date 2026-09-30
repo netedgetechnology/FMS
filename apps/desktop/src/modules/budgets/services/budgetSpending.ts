@@ -6,7 +6,14 @@ import {
 
 import type { Budget } from "../types";
 
-import { selectBudgetsForMonth } from "./budgetPeriod";
+import {
+    monthRangeBounds,
+    selectBudgetsForMonth,
+    selectBudgetsForMonthRange,
+    yearMonthRange,
+    type BudgetMonthRange,
+    type BudgetViewMode,
+} from "./budgetPeriod";
 import {
     classifyBudgetTransaction,
 } from "./budgetTransaction";
@@ -58,6 +65,12 @@ function toNumber(value: unknown): number {
  * rows straight from a repository.
  */
 export interface BudgetLedgerEntry {
+    /**
+     * For type "transfer": "OUT" / "IN". Never used for spending (a
+     * transfer is never spending); read only by account-balance
+     * calculations sharing this shape (e.g. Financial Plans).
+     */
+    transferDirection?: string | null;
     /**
      * Transaction id. Optional so hand-built callers / tests need not
      * supply one; used only to look the row up in a Phase 5 context map
@@ -113,7 +126,10 @@ export interface BudgetSpendingLine {
 }
 
 export interface BudgetSpendingSummary {
-    /** Inclusive YYYY-MM-DD bounds of the reported calendar month. */
+    /**
+     * Inclusive YYYY-MM-DD bounds of the reported calendar month. Both
+     * "" for an All Budgets summary (calculateAllBudgetsSpending).
+     */
     monthStart: string;
     monthEnd: string;
     /** The currency every amount in this summary is denominated in. */
@@ -182,32 +198,23 @@ export interface CalculateBudgetSpendingInput {
      * expense is treated as a card payment.
      */
     creditCardAccountIds?: ReadonlySet<string>;
+    /**
+     * Ids of every TRANSFER-type category: expenses in these are
+     * transfers, never budget spending. Omit it and only
+     * `type === "transfer"` rows are treated as transfers.
+     */
+    transferCategoryIds?: ReadonlySet<string>;
 }
 
 export function calculateBudgetSpending(
     input: CalculateBudgetSpendingInput
 ): BudgetSpendingSummary {
-    const {
-        budgets,
-        transactions,
-        month,
-        currencyId,
-        emiInterestByTransactionId,
-        creditCardAccountIds,
-    } = input;
+    const { budgets, month, currencyId } = input;
 
-    const classificationContext: BudgetSpendingContext = {
-        emiInterestByTransactionId,
-        creditCardAccountIds,
+    const monthWindow: BudgetDateWindow = {
+        start: toISODateString(startOfMonth(month)),
+        end: toISODateString(endOfMonth(month)),
     };
-
-    const monthStart = toISODateString(
-        startOfMonth(month)
-    );
-
-    const monthEnd = toISODateString(
-        endOfMonth(month)
-    );
 
     // Phase 1 month applicability, then this engine's own currency +
     // active scoping (an inactive budget has no meaningful vs-actual).
@@ -220,8 +227,295 @@ export function calculateBudgetSpending(
             budget.currencyId === currencyId
     );
 
-    // --- aggregate the ledger for the selected month ---
-    const spendingByCategory = new Map<string, number>();
+    // Month view: the ledger and every budget line share the one
+    // calendar-month window.
+    const summary = summarizeBudgetSpending(
+        input,
+        applicableBudgets,
+        transactionDate =>
+            isWithinWindow(transactionDate, monthWindow),
+        () => monthWindow
+    );
+
+    return {
+        monthStart: monthWindow.start,
+        monthEnd: monthWindow.end as string,
+        ...summary,
+    };
+}
+
+export type CalculateAllBudgetsSpendingInput = Omit<
+    CalculateBudgetSpendingInput,
+    "month"
+>;
+
+/**
+ * "All Budgets" view: every active budget in `currencyId`, whatever
+ * month / date range it covers - no calendar-month applicability
+ * filter. Reuses exactly the same classification and aggregation as
+ * calculateBudgetSpending; only the date windows differ:
+ *
+ *  - Each budget line's actual is the spending inside THAT budget's
+ *    own [startDate, endDate] range (open-ended when endDate is
+ *    null/blank), so a budget is only ever measured against its own
+ *    period.
+ *  - The ledger totals (totalExpense / unbudgeted / uncategorized)
+ *    cover spending that falls inside at least one included budget's
+ *    range - i.e. the periods the budgets in this view cover.
+ *
+ * When every included budget covers the same single calendar month
+ * this yields exactly the month engine's numbers. `monthStart` /
+ * `monthEnd` are "" - this summary is not bound to one calendar month.
+ */
+export function calculateAllBudgetsSpending(
+    input: CalculateAllBudgetsSpendingInput
+): BudgetSpendingSummary {
+    const { budgets, currencyId } = input;
+
+    const applicableBudgets = budgets.filter(
+        budget =>
+            budget.isActive &&
+            budget.currencyId === currencyId
+    );
+
+    const windows = applicableBudgets.map(
+        budgetDateWindow
+    );
+
+    const summary = summarizeBudgetSpending(
+        input,
+        applicableBudgets,
+        transactionDate =>
+            windows.some(window =>
+                isWithinWindow(transactionDate, window)
+            ),
+        budgetDateWindow
+    );
+
+    return {
+        monthStart: "",
+        monthEnd: "",
+        ...summary,
+    };
+}
+
+export interface CalculateMonthRangeBudgetSpendingInput
+    extends Omit<CalculateBudgetSpendingInput, "month"> {
+    /** Inclusive month span (any dates within the first / last month). */
+    range: BudgetMonthRange;
+}
+
+/**
+ * "Year" / "Range" views: the active budgets in `currencyId` that apply
+ * to a span of whole calendar months (budgetAppliesToMonthRange). Same
+ * classification and aggregation as the other views; only the date
+ * windows differ:
+ *
+ *  - The ledger totals cover the whole span, first day of the first
+ *    month to last day of the last month - the multi-month analogue of
+ *    the month view, which covers the whole month.
+ *  - Each budget line is measured over the calendar months it applies
+ *    to within the span (from the first day of its start month to the
+ *    last day of its end month, clipped to the span) - i.e. the union of
+ *    the month-view windows it would get month by month. A budget that
+ *    applies to a single month therefore shows exactly its month-view
+ *    actual, and a one-month span equals the month view.
+ *
+ * `monthStart` / `monthEnd` carry the span's bounds.
+ */
+export function calculateMonthRangeBudgetSpending(
+    input: CalculateMonthRangeBudgetSpendingInput
+): BudgetSpendingSummary {
+    const { budgets, range, currencyId } = input;
+
+    const { start: spanStart, end: spanEnd } =
+        monthRangeBounds(range);
+
+    const spanWindow: BudgetDateWindow = {
+        start: spanStart,
+        end: spanEnd,
+    };
+
+    const applicableBudgets = selectBudgetsForMonthRange(
+        budgets,
+        range
+    ).filter(
+        budget =>
+            budget.isActive &&
+            budget.currencyId === currencyId
+    );
+
+    const lineWindow = (budget: Budget): BudgetDateWindow => {
+        const { start, end } = budgetDateWindow(budget);
+
+        const monthAlignedStart = toISODateString(
+            startOfMonth(parseISODate(start))
+        );
+        const monthAlignedEnd =
+            end === null
+                ? null
+                : toISODateString(
+                      endOfMonth(parseISODate(end))
+                  );
+
+        return {
+            start:
+                monthAlignedStart > spanStart
+                    ? monthAlignedStart
+                    : spanStart,
+            end:
+                monthAlignedEnd !== null &&
+                monthAlignedEnd < spanEnd
+                    ? monthAlignedEnd
+                    : spanEnd,
+        };
+    };
+
+    const summary = summarizeBudgetSpending(
+        input,
+        applicableBudgets,
+        transactionDate =>
+            isWithinWindow(transactionDate, spanWindow),
+        lineWindow
+    );
+
+    return {
+        monthStart: spanStart,
+        monthEnd: spanEnd,
+        ...summary,
+    };
+}
+
+/**
+ * "Year" view: the January - December span of `month`'s year (see
+ * calculateMonthRangeBudgetSpending).
+ */
+export function calculateYearBudgetSpending(
+    input: CalculateBudgetSpendingInput
+): BudgetSpendingSummary {
+    const { month, ...rest } = input;
+
+    return calculateMonthRangeBudgetSpending({
+        ...rest,
+        range: yearMonthRange(month.getFullYear()),
+    });
+}
+
+// YYYY-MM-DD -> local-midnight Date (the same local-time convention as
+// the month helpers).
+function parseISODate(value: string): Date {
+    const [year, month, day] = value
+        .slice(0, 10)
+        .split("-")
+        .map(Number);
+
+    return new Date(year, month - 1, day);
+}
+
+export interface CalculateBudgetSpendingForViewInput
+    extends CalculateBudgetSpendingInput {
+    viewMode: BudgetViewMode;
+    /**
+     * The selected month span - used only in "range" view, where it
+     * falls back to the single `month` when omitted.
+     */
+    range?: BudgetMonthRange | null;
+}
+
+// The Budgets page's single entry point: All Budgets, the selected year
+// (`month`'s year), the selected month, or the selected month range.
+// `month` is ignored in "all" and "range" view.
+export function calculateBudgetSpendingForView(
+    input: CalculateBudgetSpendingForViewInput
+): BudgetSpendingSummary {
+    const { viewMode, range, ...rest } = input;
+
+    switch (viewMode) {
+        case "all":
+            return calculateAllBudgetsSpending(rest);
+        case "year":
+            return calculateYearBudgetSpending(rest);
+        case "month":
+            return calculateBudgetSpending(rest);
+        case "range":
+            return calculateMonthRangeBudgetSpending({
+                ...rest,
+                range: range ?? {
+                    start: rest.month,
+                    end: rest.month,
+                },
+            });
+    }
+}
+
+/** Inclusive YYYY-MM-DD bounds; `end` null means open-ended. */
+interface BudgetDateWindow {
+    start: string;
+    end: string | null;
+}
+
+function budgetDateWindow(
+    budget: Pick<Budget, "startDate" | "endDate">
+): BudgetDateWindow {
+    return {
+        start: budget.startDate,
+        // Blank endDate is open-ended, same as budgetAppliesToMonth.
+        end: budget.endDate || null,
+    };
+}
+
+function isWithinWindow(
+    date: string,
+    window: BudgetDateWindow
+): boolean {
+    return (
+        date >= window.start &&
+        (window.end === null || date <= window.end)
+    );
+}
+
+interface CountedExpense {
+    transactionDate: string;
+    amount: number;
+}
+
+// The shared aggregation behind both views. `inLedgerScope` decides
+// which counted expenses feed the ledger totals; `lineWindow` gives the
+// date range a budget's own line (and its share of budgetedActual) is
+// measured over.
+function summarizeBudgetSpending(
+    input: Pick<
+        CalculateBudgetSpendingInput,
+        | "transactions"
+        | "currencyId"
+        | "emiInterestByTransactionId"
+        | "creditCardAccountIds"
+        | "transferCategoryIds"
+    >,
+    applicableBudgets: readonly Budget[],
+    inLedgerScope: (transactionDate: string) => boolean,
+    lineWindow: (budget: Budget) => BudgetDateWindow
+): Omit<BudgetSpendingSummary, "monthStart" | "monthEnd"> {
+    const {
+        transactions,
+        currencyId,
+        emiInterestByTransactionId,
+        creditCardAccountIds,
+        transferCategoryIds,
+    } = input;
+
+    const classificationContext: BudgetSpendingContext = {
+        emiInterestByTransactionId,
+        creditCardAccountIds,
+        transferCategoryIds,
+    };
+
+    // --- aggregate the ledger for the selected scope ---
+    const expenses: CountedExpense[] = [];
+    const expensesByCategory = new Map<
+        string,
+        CountedExpense[]
+    >();
     let uncategorizedSpending = 0;
     let totalExpense = 0;
 
@@ -239,31 +533,59 @@ export function calculateBudgetSpending(
             continue;
         }
 
-        // Inclusive month window; anything outside is a different
+        // Inclusive scope window; anything outside is a different
         // budget period.
-        if (
-            entry.transactionDate < monthStart ||
-            entry.transactionDate > monthEnd
-        ) {
+        if (!inLedgerScope(entry.transactionDate)) {
             continue;
         }
 
-        const amount = classification.amount;
+        const expense: CountedExpense = {
+            transactionDate: entry.transactionDate,
+            amount: classification.amount,
+        };
 
-        totalExpense += amount;
+        expenses.push(expense);
+        totalExpense += expense.amount;
 
         if (entry.categoryId === null) {
-            uncategorizedSpending += amount;
+            uncategorizedSpending += expense.amount;
             continue;
         }
 
-        spendingByCategory.set(
-            entry.categoryId,
-            (spendingByCategory.get(
-                entry.categoryId
-            ) ?? 0) + amount
-        );
+        const categoryExpenses =
+            expensesByCategory.get(entry.categoryId);
+
+        if (categoryExpenses) {
+            categoryExpenses.push(expense);
+        } else {
+            expensesByCategory.set(entry.categoryId, [
+                expense,
+            ]);
+        }
     }
+
+    const isCoveredBy = (
+        expense: CountedExpense,
+        windows: readonly BudgetDateWindow[]
+    ): boolean =>
+        windows.some(window =>
+            isWithinWindow(
+                expense.transactionDate,
+                window
+            )
+        );
+
+    const sumCovered = (
+        rows: readonly CountedExpense[],
+        windows: readonly BudgetDateWindow[]
+    ): number =>
+        rows.reduce(
+            (sum, row) =>
+                isCoveredBy(row, windows)
+                    ? sum + row.amount
+                    : sum,
+            0
+        );
 
     // --- per-budget lines ---
     const lines: BudgetSpendingLine[] =
@@ -272,12 +594,14 @@ export function calculateBudgetSpending(
                 budget.amount
             );
 
-            const actualAmount =
+            const actualAmount = sumCovered(
                 budget.categoryId === null
-                    ? totalExpense
-                    : spendingByCategory.get(
+                    ? expenses
+                    : expensesByCategory.get(
                           budget.categoryId
-                      ) ?? 0;
+                      ) ?? [],
+                [lineWindow(budget)]
+            );
 
             return buildLine(
                 budget,
@@ -287,23 +611,38 @@ export function calculateBudgetSpending(
         });
 
     // --- category-budget-scoped totals ---
-    // Distinct budgeted categories only, so two budgets for the same
-    // category never count that category's spend twice.
-    const budgetedCategoryIds = new Set<string>();
+    // Each expense counts at most once, even when two budgets for the
+    // same category cover its date, so a category's spend is never
+    // counted twice.
+    const windowsByBudgetedCategory = new Map<
+        string,
+        BudgetDateWindow[]
+    >();
 
     for (const budget of applicableBudgets) {
         if (budget.categoryId !== null) {
-            budgetedCategoryIds.add(
-                budget.categoryId
+            windowsByBudgetedCategory.set(
+                budget.categoryId,
+                [
+                    ...(windowsByBudgetedCategory.get(
+                        budget.categoryId
+                    ) ?? []),
+                    lineWindow(budget),
+                ]
             );
         }
     }
 
     let budgetedActual = 0;
 
-    for (const categoryId of budgetedCategoryIds) {
-        budgetedActual +=
-            spendingByCategory.get(categoryId) ?? 0;
+    for (const [
+        categoryId,
+        windows,
+    ] of windowsByBudgetedCategory) {
+        budgetedActual += sumCovered(
+            expensesByCategory.get(categoryId) ?? [],
+            windows
+        );
     }
 
     const totalBudgetAmount = applicableBudgets
@@ -327,8 +666,6 @@ export function calculateBudgetSpending(
         totalExpense - budgetedActual;
 
     return {
-        monthStart,
-        monthEnd,
         currencyId,
         lines,
         totalBudgetAmount,

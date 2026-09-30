@@ -22,7 +22,7 @@ export interface EditTransactionDialogProps {
     onSuccess?: () => Promise<void> | void;
 }
 
-function getDefaultValues(
+export function getDefaultValues(
     transaction: Transaction
 ): Partial<TransactionFormValues> {
     return {
@@ -32,6 +32,7 @@ function getDefaultValues(
         payee: transaction.payee,
         description: transaction.originalNarration ?? "",
         type: transaction.type,
+        transferDirection: transaction.transferDirection ?? null,
         amount: Number(transaction.amount ?? 0),
         transactionDate: transaction.transactionDate,
         referenceNumber: transaction.referenceNumber ?? "",

@@ -3,7 +3,7 @@
 // FinanceOS date columns and with DashboardService's own month math -
 // and never mutates its input.
 
-const MONTH_LABELS = [
+export const MONTH_LABELS: readonly string[] = [
     "January",
     "February",
     "March",

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 import { AccountService } from "../services";
 import { Account } from "../types";
 
@@ -10,7 +11,14 @@ export function useAccounts() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // Guards against a slower, still in-flight refresh (e.g. this page's
+    // initial load, delayed by database contention) overwriting state with
+    // stale data after a newer refresh - such as the one triggered right
+    // after a delete - has already resolved and shown the correct list.
+    const requestGuard = useRef(new LatestRequestGuard());
+
     const loadAccounts = useCallback(async () => {
+        const requestId = requestGuard.current.start();
 
         try {
 
@@ -19,9 +27,17 @@ export function useAccounts() {
 
             const data = await service.getAll();
 
+            if (requestGuard.current.isStale(requestId)) {
+                return;
+            }
+
             setAccounts(data);
 
         } catch (err) {
+
+            if (requestGuard.current.isStale(requestId)) {
+                return;
+            }
 
             console.error("ACCOUNTS LOAD ERROR:", err);
 
@@ -34,7 +50,9 @@ export function useAccounts() {
 
         } finally {
 
-            setLoading(false);
+            if (!requestGuard.current.isStale(requestId)) {
+                setLoading(false);
+            }
 
         }
 

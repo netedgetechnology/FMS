@@ -40,8 +40,8 @@ describe("buildExpenseSegments — donut/legend colour mapping", () => {
     });
 
     it("keeps every displayed segment's colour distinct", () => {
-        // Up to 9 individual categories + optional "Others" => <= 10
-        // segments, all within the palette, so all colours are unique.
+        // Top 10 categories max, all within the palette, so all
+        // colours are unique.
         for (const n of [2, 5, 9, 12, 20]) {
             const segments = buildExpenseSegments(cats(n));
             expect(new Set(segments.map((s) => s.fill)).size).toBe(
@@ -51,17 +51,13 @@ describe("buildExpenseSegments — donut/legend colour mapping", () => {
         }
     });
 
-    it("works for 2, 4, 10 and 15 categories without breaking", () => {
+    it("shows the top 10 categories, or fewer if fewer than 10 exist", () => {
         for (const n of [2, 4, 10, 15]) {
             const segments = buildExpenseSegments(cats(n));
 
-            // >9 categories collapse the tail into a single "Others"
-            const expectedLength = n <= 9 ? n : 10;
+            // beyond 10, the rest are dropped entirely - no overflow bucket
+            const expectedLength = Math.min(n, 10);
             expect(segments).toHaveLength(expectedLength);
-
-            if (n > 9) {
-                expect(segments[segments.length - 1].name).toBe("Others");
-            }
 
             // colour is still strictly positional for every segment
             segments.forEach((segment, index) =>
@@ -70,8 +66,7 @@ describe("buildExpenseSegments — donut/legend colour mapping", () => {
         }
     });
 
-    it("gives tiny (sub-1%) categories their own distinct colour", () => {
-        // Real-world shape: one dominant 'Others' bucket + small ones.
+    it("excludes 'Others' completely from the ranking and chart, even when it would otherwise be the largest category", () => {
         const segments = buildExpenseSegments([
             { name: "Others", value: 144048 },
             { name: "Hosting", value: 8000 },
@@ -80,16 +75,37 @@ describe("buildExpenseSegments — donut/legend colour mapping", () => {
         ]);
 
         expect(segments.map((s) => s.name)).toEqual([
-            "Others",
             "Hosting",
             "Shopping",
             "Petrol",
         ]);
 
-        // every segment — including the < 1% ones — has a unique colour
-        expect(new Set(segments.map((s) => s.fill)).size).toBe(4);
+        expect(
+            segments.some((s) => s.name === "Others"),
+        ).toBe(false);
+
+        // every remaining segment — including the small ones — has a
+        // unique, strictly positional colour
+        expect(new Set(segments.map((s) => s.fill)).size).toBe(3);
         segments.forEach((s, i) =>
             expect(s.fill).toBe(colorForIndex(i)),
+        );
+    });
+
+    it("excludes 'Others' even when more than 10 real categories remain, without reintroducing it as an overflow bucket", () => {
+        const segments = buildExpenseSegments([
+            { name: "Others", value: 999999 },
+            ...cats(12),
+        ]);
+
+        expect(segments).toHaveLength(10);
+        expect(
+            segments.some((s) => s.name === "Others"),
+        ).toBe(false);
+        expect(segments.map((s) => s.name)).toEqual(
+            cats(12)
+                .slice(0, 10)
+                .map((c) => c.name),
         );
     });
 

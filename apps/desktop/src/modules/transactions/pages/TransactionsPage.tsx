@@ -3,7 +3,13 @@ import {
     useMoneyFormatter,
 } from "@/core/formatting";
 import { useEffect, useMemo, useState } from "react";
-import { Calendar, Plus, Search, Trash2 } from "lucide-react";
+
+import {
+    balanceSide,
+    isTransferClassified,
+    transferCategoryIdSet,
+} from "@/core/accounting/transferClassification";
+import { ArrowRightLeft, Calendar, Plus, Search, Tags, Trash2 } from "lucide-react";
 
 import { EmptyState, PageHeader } from "@/components/common";
 
@@ -20,7 +26,9 @@ import { useCategories } from "@/modules/categories/hooks";
 
 import {
     AddTransactionDialog,
+    BulkChangeCategoryDialog,
     BulkDeleteTransactionsDialog,
+    BulkMoveToAccountDialog,
     DeleteTransactionDialog,
     EditTransactionDialog,
     TransactionTable,
@@ -185,6 +193,44 @@ export function filterTransactionsForList(
     });
 }
 
+export interface TransactionSummaryTotals {
+    totalIncome: number;
+    totalExpense: number;
+    net: number;
+}
+
+// The Total Income / Total Expenses / Net summary cards. A transfer -
+// `type === "transfer"`, or a transaction whose category or sub-category
+// is a TRANSFER category (e.g. "Bank Transfer") - is neither income nor
+// expense: the same shared rule the Dashboard and Budgets use (see
+// core/accounting/transferClassification.ts). Every other income/expense
+// transaction counts exactly as before.
+export function computeTransactionSummaryTotals(
+    transactions: readonly Transaction[],
+    transferCategoryIds: ReadonlySet<string>
+): TransactionSummaryTotals {
+    let totalIncome = 0;
+    let totalExpense = 0;
+
+    for (const transaction of transactions) {
+        if (isTransferClassified(transaction, transferCategoryIds)) {
+            continue;
+        }
+
+        if (transaction.type === "income") {
+            totalIncome += Number(transaction.amount || 0);
+        } else if (transaction.type === "expense") {
+            totalExpense += Number(transaction.amount || 0);
+        }
+    }
+
+    return {
+        totalIncome,
+        totalExpense,
+        net: totalIncome - totalExpense,
+    };
+}
+
 export interface FilteredTransactionTotals {
     totalDebit: number;
     totalCredit: number;
@@ -192,14 +238,15 @@ export interface FilteredTransactionTotals {
 }
 
 // Totals for the current Mapping Name + search result (pass the already-
-// filtered list) - never just the current page. Mirrors the existing
-// totalIncome/totalExpense convention: transfers contribute to neither.
+// filtered list) - never just the current page. Money out (Debit) / in
+// (Credit) of the account: a transfer counts by its direction (see
+// balanceSide), exactly as it did while stored as expense/income.
 export function computeFilteredTotals(
     transactions: Transaction[]
 ): FilteredTransactionTotals {
     const totalDebit = transactions
         .filter(
-            transaction => transaction.type === "expense"
+            transaction => balanceSide(transaction) === "expense"
         )
         .reduce(
             (total, transaction) =>
@@ -209,7 +256,7 @@ export function computeFilteredTotals(
 
     const totalCredit = transactions
         .filter(
-            transaction => transaction.type === "income"
+            transaction => balanceSide(transaction) === "income"
         )
         .reduce(
             (total, transaction) =>
@@ -319,6 +366,18 @@ export default function TransactionsPage() {
         useState<import("../types").Transaction | null>(null);
 
     const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkCategoryOpen, setIsBulkCategoryOpen] = useState(false);
+    const [isBulkMoveOpen, setIsBulkMoveOpen] = useState(false);
+
+    // The selected transactions themselves, for bulk Change Category /
+    // Move to Account.
+    const selectedTransactions = useMemo(
+        () =>
+            transactions.filter(transaction =>
+                selectedIds.has(transaction.id)
+            ),
+        [transactions, selectedIds]
+    );
 
     const accountMap = useMemo(
         () =>
@@ -461,39 +520,25 @@ export default function TransactionsPage() {
     const showPaginationControls =
         hasResults && rowsPerPage !== "All" && totalPages > 1;
 
-    const totalIncome = useMemo(
-        () =>
-            transactions
-                .filter(
-                    transaction =>
-                        transaction.type === "income"
-                )
-                .reduce(
-                    (total, transaction) =>
-                        total +
-                        Number(transaction.amount || 0),
-                    0
-                ),
-        [transactions]
+    // TRANSFER-type category ids (active or not) - see
+    // computeTransactionSummaryTotals.
+    const transferCategoryIds = useMemo(
+        () => transferCategoryIdSet(categories),
+        [categories]
     );
 
-    const totalExpense = useMemo(
+    const {
+        totalIncome,
+        totalExpense,
+        net: netAmount,
+    } = useMemo(
         () =>
-            transactions
-                .filter(
-                    transaction =>
-                        transaction.type === "expense"
-                )
-                .reduce(
-                    (total, transaction) =>
-                        total +
-                        Number(transaction.amount || 0),
-                    0
-                ),
-        [transactions]
+            computeTransactionSummaryTotals(
+                transactions,
+                transferCategoryIds
+            ),
+        [transactions, transferCategoryIds]
     );
-
-    const netAmount = totalIncome - totalExpense;
 
     // Totals for the current Mapping Name + search result (not just the
     // current page - filteredTransactions already combines both).
@@ -809,6 +854,50 @@ export default function TransactionsPage() {
                                     </button>
                                 )}
 
+                                {hasResults && (
+                                    // Acts on the same selection as bulk
+                                    // Delete, with the same enabled rule.
+                                    <button
+                                        type="button"
+                                        disabled={selectedIds.size === 0}
+                                        onClick={() => setIsBulkCategoryOpen(true)}
+                                        title={
+                                            selectedIds.size === 0
+                                                ? "Select transactions to change their category"
+                                                : `Change the category of ${selectedIds.size} selected transaction${
+                                                      selectedIds.size === 1 ? "" : "s"
+                                                  }`
+                                        }
+                                        aria-label="Change category of selected transactions"
+                                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white disabled:hover:text-slate-300"
+                                    >
+                                        <Tags size={16} />
+                                        Change Category
+                                    </button>
+                                )}
+
+                                {hasResults && (
+                                    // Same selection and enabled rule as the
+                                    // other bulk actions.
+                                    <button
+                                        type="button"
+                                        disabled={selectedIds.size === 0}
+                                        onClick={() => setIsBulkMoveOpen(true)}
+                                        title={
+                                            selectedIds.size === 0
+                                                ? "Select transactions to move them to another account"
+                                                : `Move ${selectedIds.size} selected transaction${
+                                                      selectedIds.size === 1 ? "" : "s"
+                                                  } to another account`
+                                        }
+                                        aria-label="Move selected transactions to another account"
+                                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white disabled:hover:text-slate-300"
+                                    >
+                                        <ArrowRightLeft size={16} />
+                                        Move to Account
+                                    </button>
+                                )}
+
                                 {appliedDateRange && (
                                     <>
                                         <div className="flex flex-col justify-center gap-1 rounded-xl border border-slate-100 bg-white px-4 py-2">
@@ -1055,6 +1144,29 @@ export default function TransactionsPage() {
                     transactionIds={Array.from(selectedIds)}
                     open={isBulkDeleteOpen}
                     onOpenChange={setIsBulkDeleteOpen}
+                    onSuccess={async () => {
+                        setSelectedIds(new Set());
+                        await refresh();
+                    }}
+                />
+
+                <BulkChangeCategoryDialog
+                    transactions={selectedTransactions}
+                    categories={categories}
+                    accounts={accounts}
+                    open={isBulkCategoryOpen}
+                    onOpenChange={setIsBulkCategoryOpen}
+                    onSuccess={async () => {
+                        setSelectedIds(new Set());
+                        await refresh();
+                    }}
+                />
+
+                <BulkMoveToAccountDialog
+                    transactions={selectedTransactions}
+                    accounts={accounts}
+                    open={isBulkMoveOpen}
+                    onOpenChange={setIsBulkMoveOpen}
                     onSuccess={async () => {
                         setSelectedIds(new Set());
                         await refresh();

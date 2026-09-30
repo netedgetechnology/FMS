@@ -3,14 +3,13 @@ import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 
 import { EmptyState, PageHeader } from "@/components/common";
 import {
-    addMonths,
     currentMonth,
-    formatMonthLabel,
-    isSameMonth,
+    useDisplaySettings,
 } from "@/core/formatting";
 
 import { useAccounts } from "@/modules/accounts/hooks";
 import { AccountType } from "@/modules/accounts/types";
+import { transferCategoryIdSet } from "@/core/accounting/transferClassification";
 import { useCategories } from "@/modules/categories/hooks";
 import { useBusinessEntities } from "@/modules/business-entities/hooks";
 import { useCurrencies } from "@/modules/currencies/hooks/useCurrencies";
@@ -21,15 +20,26 @@ import {
     useEmiInterestByTransactionId,
 } from "../hooks";
 import {
-    calculateBudgetSpending,
+    ALL_BUDGETS_LABEL,
+    calculateBudgetSpendingForView,
+    DEFAULT_BUDGET_VIEW_MODE,
     resolveBudgetCategoryLabel,
     resolveBudgetCurrencyScopes,
-    selectBudgetsForMonth,
+    selectBudgetsForView,
+    type BudgetMonthRange,
+    type BudgetViewMode,
 } from "../services";
 
 import {
     AddBudgetDialog,
+    BudgetMonthPicker,
     BudgetMonthReport,
+    BudgetRangePicker,
+    BudgetYearPicker,
+    formatBudgetPeriodLabel,
+    selectMonthInYear,
+    selectYearContext,
+    stepBudgetPeriod,
     DeleteBudgetDialog,
     EditBudgetDialog,
     ViewBudgetDialog,
@@ -76,33 +86,81 @@ export default function BudgetsPage() {
         loading: currenciesLoading,
     } = useCurrencies();
 
+    // The app's actual configured default currency (app_settings'
+    // general.default_currency) - the same source every other module
+    // already uses. Preferred over each currency's own (separate,
+    // occasionally out-of-sync) `isDefault` column when resolving
+    // which currency to report in when no budget exists yet - see
+    // resolveBudgetCurrencyScopes's own doc comment.
+    const { defaultCurrency } = useDisplaySettings();
+
     const [search, setSearch] = useState("");
 
-    // The calendar month the page is scoped to. Held as the first day of
-    // that month at local midnight (see currentMonth / addMonths).
-    // Defaults to the current calendar month.
+    // Which view the page shows: every budget ("all", the default), the
+    // selected year, one month of the selected year, or a month range.
+    // Kept separate from the selections below so switching views keeps
+    // each one's last choice.
+    const [viewMode, setViewMode] =
+        useState<BudgetViewMode>(
+            DEFAULT_BUDGET_VIEW_MODE
+        );
+
+    // The selected month, held as the first day of that month at local
+    // midnight (see currentMonth / addMonths). Its year is the selected
+    // year - the Year view's year and the Month view's context. Starts
+    // at the current calendar month.
     const [selectedMonth, setSelectedMonth] =
         useState<Date>(() => currentMonth());
 
-    const goToPreviousMonth = () =>
+    // The selected start -> end month range; null until one is picked.
+    const [selectedRange, setSelectedRange] =
+        useState<BudgetMonthRange | null>(null);
+
+    const viewingAllBudgets = viewMode === "all";
+
+    const canStep =
+        viewMode === "year" || viewMode === "month";
+
+    const showAllBudgets = () =>
+        setViewMode("all");
+
+    const showYear = (year: number) => {
         setSelectedMonth(month =>
-            addMonths(month, -1)
+            selectYearContext(month, year)
+        );
+        setViewMode("year");
+    };
+
+    const showMonth = (monthIndex: number) => {
+        setSelectedMonth(month =>
+            selectMonthInYear(month, monthIndex)
+        );
+        setViewMode("month");
+    };
+
+    const showRange = (range: BudgetMonthRange) => {
+        setSelectedRange(range);
+        setViewMode("range");
+    };
+
+    const goToPrevious = () =>
+        setSelectedMonth(month =>
+            stepBudgetPeriod(viewMode, month, -1)
         );
 
-    const goToNextMonth = () =>
+    const goToNext = () =>
         setSelectedMonth(month =>
-            addMonths(month, 1)
+            stepBudgetPeriod(viewMode, month, 1)
         );
 
-    const goToCurrentMonth = () =>
-        setSelectedMonth(currentMonth());
+    const stepUnit =
+        viewMode === "year" ? "year" : "month";
 
-    const viewingCurrentMonth = isSameMonth(
+    const monthLabel = formatBudgetPeriodLabel(
+        viewMode,
         selectedMonth,
-        currentMonth()
+        selectedRange
     );
-
-    const monthLabel = formatMonthLabel(selectedMonth);
 
     const [adding, setAdding] =
         useState(false);
@@ -160,17 +218,25 @@ export default function BudgetsPage() {
         [budgets]
     );
 
-    // Budgets whose date range covers the selected calendar month
-    // (Phase 1 rule). Used only for headline counts and to decide which
-    // currency sections to render - the spending engine re-applies the
-    // same rule internally.
+    // Every budget in All Budgets view, otherwise those whose date range
+    // overlaps the selected year / month (Phase 1 rule) / month range.
+    // Used only for headline counts and to decide which currency
+    // sections to render - the spending engine re-applies the same
+    // scoping internally.
     const applicableBudgets = useMemo(
         () =>
-            selectBudgetsForMonth(
+            selectBudgetsForView(
                 budgets,
-                selectedMonth
+                viewMode,
+                selectedMonth,
+                selectedRange
             ),
-        [budgets, selectedMonth]
+        [
+            budgets,
+            viewMode,
+            selectedMonth,
+            selectedRange,
+        ]
     );
 
     // One Budget-vs-Actual section per currency that has an applicable
@@ -180,9 +246,14 @@ export default function BudgetsPage() {
         () =>
             resolveBudgetCurrencyScopes(
                 applicableBudgets,
-                currencies
+                currencies,
+                defaultCurrency
             ),
-        [applicableBudgets, currencies]
+        [
+            applicableBudgets,
+            currencies,
+            defaultCurrency,
+        ]
     );
 
     // Ids of the CREDIT_CARD accounts, so the spending engine can drop a
@@ -202,6 +273,13 @@ export default function BudgetsPage() {
         [accounts]
     );
 
+    // TRANSFER-category ids: an expense in one of these is a transfer
+    // between the user's own accounts, never budget spending.
+    const transferCategoryIds = useMemo(
+        () => transferCategoryIdSet(categories),
+        [categories]
+    );
+
     const scopeSummaries = useMemo(
         () =>
             currencyScopeIds.map(currencyId => ({
@@ -212,13 +290,16 @@ export default function BudgetsPage() {
                 // engine applies month / active / currency filtering
                 // itself, so this always reflects the current
                 // transactions + budgets (Phase 2 stores nothing).
-                summary: calculateBudgetSpending({
+                summary: calculateBudgetSpendingForView({
+                    viewMode,
                     budgets,
                     transactions,
                     month: selectedMonth,
+                    range: selectedRange,
                     currencyId,
                     emiInterestByTransactionId,
                     creditCardAccountIds,
+                    transferCategoryIds,
                 }),
             })),
         [
@@ -226,9 +307,12 @@ export default function BudgetsPage() {
             currencyMap,
             budgets,
             transactions,
+            viewMode,
             selectedMonth,
+            selectedRange,
             emiInterestByTransactionId,
             creditCardAccountIds,
+            transferCategoryIds,
         ]
     );
 
@@ -296,43 +380,67 @@ export default function BudgetsPage() {
                             {applicableBudgets.length === 1
                                 ? "budget"
                                 : "budgets"}
-                            {" for "}
-                            {monthLabel}
+                            {viewingAllBudgets
+                                ? " across all periods"
+                                : ` in ${monthLabel}`}
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1">
                         <button
                             type="button"
-                            onClick={goToPreviousMonth}
-                            aria-label="Previous month"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                            onClick={showAllBudgets}
+                            aria-pressed={viewingAllBudgets}
+                            className={
+                                "mr-2 inline-flex h-9 items-center rounded-lg border px-3 text-sm font-medium transition-colors " +
+                                (viewingAllBudgets
+                                    ? "border-slate-900 bg-slate-900 text-white"
+                                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900")
+                            }
                         >
-                            <ChevronLeft size={16} />
+                            {ALL_BUDGETS_LABEL}
                         </button>
 
-                        <div className="min-w-[150px] text-center text-sm font-semibold text-slate-900">
-                            {monthLabel}
-                        </div>
+                        <BudgetYearPicker
+                            year={selectedMonth.getFullYear()}
+                            viewMode={viewMode}
+                            onSelectYear={showYear}
+                        />
 
-                        <button
-                            type="button"
-                            onClick={goToNextMonth}
-                            aria-label="Next month"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
-                        >
-                            <ChevronRight size={16} />
-                        </button>
+                        <BudgetMonthPicker
+                            month={selectedMonth}
+                            viewMode={viewMode}
+                            onSelectMonth={showMonth}
+                        />
 
-                        {!viewingCurrentMonth && (
+                        <BudgetRangePicker
+                            range={selectedRange}
+                            fallbackMonth={selectedMonth}
+                            viewMode={viewMode}
+                            onSelectRange={showRange}
+                        />
+
+                        <div className="ml-2 flex items-center gap-1">
                             <button
                                 type="button"
-                                onClick={goToCurrentMonth}
-                                className="ml-1 inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                                onClick={goToPrevious}
+                                disabled={!canStep}
+                                aria-label={`Previous ${stepUnit}`}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 disabled:hover:bg-white"
                             >
-                                This month
+                                <ChevronLeft size={16} />
                             </button>
-                        )}
+
+                            <button
+                                type="button"
+                                onClick={goToNext}
+                                disabled={!canStep}
+                                aria-label={`Next ${stepUnit}`}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 disabled:hover:bg-white"
+                            >
+                                <ChevronRight size={16} />
+                            </button>
+                        </div>
                     </div>
 
                     <div className="w-[280px]">
@@ -382,7 +490,7 @@ export default function BudgetsPage() {
                     showNoBudgetsThisMonth && (
                         <div className="mt-6 flex min-h-[180px] items-center justify-center rounded-2xl border border-slate-100">
                             <p className="text-sm text-slate-400">
-                                No budgets for{" "}
+                                No budgets in{" "}
                                 {monthLabel}.
                             </p>
                         </div>
@@ -410,6 +518,9 @@ export default function BudgetsPage() {
                                         }
                                         monthLabel={
                                             monthLabel
+                                        }
+                                        viewMode={
+                                            viewMode
                                         }
                                         categoryNameById={
                                             categoryNameById

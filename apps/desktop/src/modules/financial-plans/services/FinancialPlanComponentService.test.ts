@@ -4,6 +4,7 @@ import type { Account } from "@/modules/accounts/types";
 import type { Category } from "@/modules/categories/types";
 import type { Investment } from "@/modules/investments/types";
 import type { Loan } from "@/modules/loans/types";
+import type { Transaction } from "@/modules/transactions/types";
 
 import type {
     CreateFinancialPlanComponentRequest,
@@ -96,6 +97,7 @@ function investment(
         averageCost: 100,
         currentPrice: 120,
         currentValue: 1200,
+        priceUpdatedAt: null,
         purchaseDate: null,
         status: "ACTIVE" as Investment["status"],
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -130,12 +132,48 @@ function loan(overrides: Partial<Loan> = {}): Loan {
     };
 }
 
+function transaction(
+    overrides: Partial<Transaction> = {}
+): Transaction {
+    return {
+        id: "txn-1",
+        accountId: "acc-1",
+        categoryId: "cat-1",
+        subcategoryId: null,
+        payee: "Payee",
+        counterparty: null,
+        branch: null,
+        type: "income",
+        amount: 1000,
+        transactionDate: "2026-09-01",
+        referenceNumber: null,
+        notes: null,
+        tags: null,
+        status: "CLEARED",
+        paymentMethod: null,
+        upiReference: null,
+        bankTransactionReference: null,
+        cardReference: null,
+        transactionType: null,
+        reconciled: false,
+        reconciledAt: null,
+        isImported: false,
+        sourceStatement: null,
+        externalTransactionId: null,
+        originalNarration: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        ...overrides,
+    };
+}
+
 interface SetupOptions {
     plans?: FinancialPlan[];
     accounts?: Account[];
     categories?: Category[];
     investments?: Investment[];
     loans?: Loan[];
+    transactions?: Transaction[];
     components?: FinancialPlanComponent[];
 }
 
@@ -268,6 +306,11 @@ function createService(options: SetupOptions = {}) {
                         accountsById.get(id) ?? null
                     );
                 },
+                async getAll() {
+                    return Array.from(
+                        accountsById.values()
+                    );
+                },
             },
         }
     );
@@ -309,8 +352,21 @@ function createService(options: SetupOptions = {}) {
             },
         }
     );
+    Object.defineProperty(
+        service,
+        "transactionRepository",
+        {
+            value: {
+                async getAll() {
+                    return (
+                        options.transactions ?? []
+                    );
+                },
+            },
+        }
+    );
 
-    return { service, store };
+    return { service, store, accountsById };
 }
 
 function baseCreate(
@@ -416,7 +472,7 @@ describe("FinancialPlanComponentService.create - integrity", () => {
         );
     });
 
-    it("rejects a TRANSFER category and a role that does not match category_type", async () => {
+    it("rejects a TRANSFER category, and a category with no matching transactions in a mismatched role", async () => {
         const { service } = createService({
             plans: [
                 plan({
@@ -455,7 +511,83 @@ describe("FinancialPlanComponentService.create - integrity", () => {
                     sourceId: "cat-expense",
                 })
             )
-        ).rejects.toThrow(/expense category/i);
+        ).rejects.toThrow(/no income transactions/i);
+    });
+
+    it("accepts a category whose categoryType doesn't match the role when it has a real matching transaction (soft category typing)", async () => {
+        // Reproduces the reported bug: a category named/used as income
+        // ("Salary") whose stored categoryType is EXPENSE (categoryType
+        // is a soft suggestion, not authoritative - see
+        // resolveCategoryTransactionType) must still be usable as a
+        // CATEGORY/CONTRIBUTION component when it has a real income
+        // transaction in the plan's currency.
+        const { service, store } = createService({
+            categories: [
+                category({
+                    id: "cat-salary",
+                    categoryType: "EXPENSE",
+                }),
+            ],
+            transactions: [
+                transaction({
+                    id: "txn-salary",
+                    accountId: "acc-1",
+                    categoryId: "cat-salary",
+                    type: "income",
+                }),
+            ],
+        });
+
+        const id = await service.create(
+            baseCreate({
+                componentType: "CATEGORY",
+                role: "CONTRIBUTION",
+                sourceId: "cat-salary",
+            })
+        );
+
+        expect(store).toHaveLength(1);
+        expect(store[0]).toMatchObject({
+            id,
+            componentType: "CATEGORY",
+            role: "CONTRIBUTION",
+            categoryId: "cat-salary",
+        });
+    });
+
+    it("rejects a currency mismatch even when a category has a matching-direction transaction", async () => {
+        const { service } = createService({
+            categories: [
+                category({
+                    id: "cat-salary",
+                    categoryType: "EXPENSE",
+                }),
+            ],
+            accounts: [
+                account({
+                    id: "acc-usd",
+                    currencyId: "USD",
+                }),
+            ],
+            transactions: [
+                transaction({
+                    id: "txn-salary",
+                    accountId: "acc-usd",
+                    categoryId: "cat-salary",
+                    type: "income",
+                }),
+            ],
+        });
+
+        await expect(
+            service.create(
+                baseCreate({
+                    componentType: "CATEGORY",
+                    role: "CONTRIBUTION",
+                    sourceId: "cat-salary",
+                })
+            )
+        ).rejects.toThrow(/no income transactions/i);
     });
 
     it("rejects a non-active investment / loan source", async () => {
@@ -750,6 +882,25 @@ describe("FinancialPlanComponentService.reorder / setActive / delete", () => {
         await service.delete(id);
 
         expect(store).toHaveLength(0);
+    });
+
+    it("delete never touches the underlying source (account/category/investment/loan)", async () => {
+        // Regression guard for the production bug where deleting a plan
+        // component had no confirmation step. The fix must still only
+        // ever call the component repository's softDelete - it must never
+        // reach into AccountRepository/CategoryRepository/etc.
+        const { service, store, accountsById } =
+            createService();
+        const id = await service.create(baseCreate());
+
+        expect(accountsById.get("acc-1")).toBeDefined();
+
+        await service.delete(id);
+
+        expect(store).toHaveLength(0);
+        expect(accountsById.get("acc-1")).toEqual(
+            account()
+        );
     });
 });
 

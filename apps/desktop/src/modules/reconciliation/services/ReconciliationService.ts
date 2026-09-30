@@ -1,4 +1,5 @@
 ﻿import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
+import { balanceSide } from "@/core/accounting/transferClassification";
 import { TransactionRepository } from "@/modules/transactions/repositories/TransactionRepository";
 
 import {
@@ -190,13 +191,16 @@ async getAll(): Promise<Reconciliation[]> {
             account.openingBalance;
 
         for (const transaction of accountTransactions) {
+            // Income (+), expense (-), and a transfer by its direction
+            // (OUT -, IN +) - see balanceSide.
+            const side = balanceSide(transaction);
 
-            if (transaction.type === "income") {
+            if (side === "income") {
                 balance += transaction.amount;
                 continue;
             }
 
-            if (transaction.type === "expense") {
+            if (side === "expense") {
                 balance -= transaction.amount;
                 continue;
             }

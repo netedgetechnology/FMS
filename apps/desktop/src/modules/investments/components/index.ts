@@ -2,6 +2,7 @@ export * from "./InvestmentForm";
 export * from "./AddInvestmentDialog";
 export * from "./EditInvestmentDialog";
 export * from "./DeleteInvestmentDialog";
+export * from "./UpdateInvestmentPriceDialog";
 export * from "./InvestmentTransactionForm";
 export * from "./AddInvestmentTransactionDialog";
 export * from "./EditInvestmentTransactionDialog";

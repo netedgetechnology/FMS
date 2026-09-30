@@ -1,5 +1,7 @@
 import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentScheduleRepository";
 import type { Loan, LoanPaymentSchedule } from "../types";
+import { paidInterestPortion } from "./loanPaymentAllocation";
+import { isScheduleOverdue } from "./loanScheduleOverdue";
 
 export interface LoanDashboardSummary {
     totalOutstandingInterest: number;
@@ -34,8 +36,10 @@ export class LoanDashboardService {
             item => item.status !== "PAID"
         );
 
-        const overdue = schedules.filter(
-            item => item.status === "OVERDUE"
+        // OVERDUE is never persisted (Loans Phase 5) - derived here
+        // from dueDate vs. today, excluding PAID rows unconditionally.
+        const overdue = schedules.filter(item =>
+            isScheduleOverdue(item)
         );
 
         const upcoming = schedules
@@ -51,9 +55,22 @@ export class LoanDashboardService {
             );
 
         return {
+            // Remaining interest still owed on each unpaid/partial row -
+            // its scheduled interestAmount minus whatever interest has
+            // already been paid against it (Loans Phase 4). For a row
+            // with no payment yet (paidAmount null) this is unchanged:
+            // the full scheduled interestAmount.
             totalOutstandingInterest: unpaid.reduce(
                 (total, item) =>
-                    total + Number(item.interestAmount ?? 0),
+                    total +
+                    Math.max(
+                        0,
+                        Number(item.interestAmount ?? 0) -
+                            paidInterestPortion(
+                                item,
+                                item.paidAmount
+                            )
+                    ),
                 0
             ),
 

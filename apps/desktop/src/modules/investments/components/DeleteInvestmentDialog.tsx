@@ -14,6 +14,8 @@ import {
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+import { getErrorMessage } from "@/core/errors";
+
 import { InvestmentService } from "../services";
 import type { Investment } from "../types";
 
@@ -38,6 +40,10 @@ export function DeleteInvestmentDialog({
     const [loading, setLoading] = useState(false);
 
     async function handleDelete() {
+        if (loading) {
+            return;
+        }
+
         try {
             setLoading(true);
 
@@ -54,9 +60,10 @@ export function DeleteInvestmentDialog({
             );
 
             toast.error(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to delete investment. Please try again."
+                getErrorMessage(
+                    error,
+                    "Failed to delete investment. Please try again."
+                )
             );
         } finally {
             setLoading(false);

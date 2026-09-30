@@ -1,0 +1,5 @@
+TEST PAYMENTS BANK
+Date Description Debit Credit
+01/06/2026 Electricity Bill 1,450.00 -
+02/06/2026 Client Payment - 7,500.00
+03/06/2026 ATM Withdrawal 2,000.00 -

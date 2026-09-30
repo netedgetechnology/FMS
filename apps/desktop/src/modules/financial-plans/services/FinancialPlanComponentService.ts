@@ -2,6 +2,7 @@ import { AccountRepository } from "@/modules/accounts/repositories/AccountReposi
 import { CategoryRepository } from "@/modules/categories/repositories";
 import { InvestmentRepository } from "@/modules/investments/repositories";
 import { LoanRepository } from "@/modules/loans/repositories/LoanRepository";
+import { TransactionRepository } from "@/modules/transactions/repositories";
 
 import {
     FinancialPlanComponentRepository,
@@ -71,6 +72,9 @@ export class FinancialPlanComponentService {
     private readonly loanRepository =
         new LoanRepository();
 
+    private readonly transactionRepository =
+        new TransactionRepository();
+
     // ------------------------------------------------------------------
     // Reads
     // ------------------------------------------------------------------
@@ -116,7 +120,8 @@ export class FinancialPlanComponentService {
             resolved = await this.resolveSource(
                 component.componentType,
                 this.sourceIdOf(component),
-                component.role
+                component.role,
+                plan.currencyId
             );
         } catch {
             resolved = {
@@ -309,16 +314,33 @@ export class FinancialPlanComponentService {
             }
         }
 
-        // A CATEGORY component's role stays bound to category_type.
-        if (existing.componentType === "CATEGORY") {
+        // A CATEGORY component's role change must still land on an
+        // eligible role for that category (see validateCategorySource) -
+        // only re-checked when the role is actually changing, so drift in
+        // the category's transaction history never blocks an unrelated
+        // edit (label / target / isActive / notes) to an already-valid
+        // component.
+        if (
+            existing.componentType === "CATEGORY" &&
+            role !== existing.role
+        ) {
             const category =
                 await this.categoryRepository.getById(
                     existing.categoryId ?? ""
                 );
 
+            const hasMatchingTransaction = category
+                ? await this.categoryHasMatchingTransaction(
+                      existing.categoryId ?? "",
+                      role,
+                      plan.currencyId
+                  )
+                : false;
+
             const check = validateCategorySource(
                 role,
-                category
+                category,
+                hasMatchingTransaction
             );
 
             if (!check.ok && category) {
@@ -415,6 +437,50 @@ export class FinancialPlanComponentService {
     // Internals
     // ------------------------------------------------------------------
 
+    /**
+     * Whether `categoryId` has at least one real transaction in the
+     * direction `role` implies, in an account whose currency matches the
+     * plan. Categories carry no currency of their own (Phase 2 design) -
+     * this is how CATEGORY component eligibility is actually grounded.
+     * See validateCategorySource for how this combines with the
+     * category's own (soft) categoryType.
+     */
+    private async categoryHasMatchingTransaction(
+        categoryId: string,
+        role: FinancialPlanComponent["role"],
+        planCurrencyId: string
+    ): Promise<boolean> {
+        const wantedType =
+            role === "CONTRIBUTION"
+                ? "income"
+                : role === "SPENDING"
+                  ? "expense"
+                  : null;
+
+        if (!wantedType) {
+            return false;
+        }
+
+        const [transactions, accounts] =
+            await Promise.all([
+                this.transactionRepository.getAll(),
+                this.accountRepository.getAll(),
+            ]);
+
+        const accountCurrencyById = new Map(
+            accounts.map(a => [a.id, a.currencyId])
+        );
+
+        return transactions.some(
+            t =>
+                t.categoryId === categoryId &&
+                t.type === wantedType &&
+                accountCurrencyById.get(
+                    t.accountId
+                ) === planCurrencyId
+        );
+    }
+
     private sourceIdOf(
         component: FinancialPlanComponent
     ): string {
@@ -488,7 +554,8 @@ export class FinancialPlanComponentService {
         const resolved = await this.resolveSource(
             input.componentType,
             input.sourceId,
-            input.role
+            input.role,
+            plan.currencyId
         );
 
         if (!resolved.check.ok) {
@@ -565,7 +632,8 @@ export class FinancialPlanComponentService {
     private async resolveSource(
         componentType: PlanComponentType,
         sourceId: string,
-        role: FinancialPlanComponent["role"]
+        role: FinancialPlanComponent["role"],
+        planCurrencyId: string
     ): Promise<ResolvedSource> {
         if (componentType === "ACCOUNT") {
             const account =
@@ -590,12 +658,21 @@ export class FinancialPlanComponentService {
                     sourceId
                 );
 
+            const hasMatchingTransaction = category
+                ? await this.categoryHasMatchingTransaction(
+                      sourceId,
+                      role,
+                      planCurrencyId
+                  )
+                : false;
+
             return {
                 name: category?.name ?? null,
                 currencyId: null,
                 check: validateCategorySource(
                     role,
-                    category
+                    category,
+                    hasMatchingTransaction
                 ),
             };
         }

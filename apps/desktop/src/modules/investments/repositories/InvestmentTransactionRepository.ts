@@ -7,6 +7,34 @@ import {
 export class InvestmentTransactionRepository
     extends Repository
 {
+    /**
+     * Every investment's ledger in one query - for callers that need
+     * all of them at once (e.g. the Dashboard's historical Net Worth),
+     * instead of one getAllByInvestmentId query per investment.
+     */
+    async getAll(): Promise<InvestmentTransaction[]> {
+        return await this.select<InvestmentTransaction>(
+            `
+            SELECT
+                id,
+                investment_id AS investmentId,
+                transaction_type AS transactionType,
+                transaction_date AS transactionDate,
+                quantity,
+                price,
+                amount,
+                fees,
+                taxes,
+                reference_number AS referenceNumber,
+                notes,
+                created_at AS createdAt,
+                updated_at AS updatedAt
+            FROM investment_transactions
+            ORDER BY transaction_date DESC, created_at DESC
+            `
+        );
+    }
+
     async getAllByInvestmentId(
         investmentId: string
     ): Promise<InvestmentTransaction[]> {
@@ -146,6 +174,19 @@ export class InvestmentTransactionRepository
             WHERE id = ?
             `,
             [id]
+        );
+    }
+
+    /** Used by InvestmentService.delete to avoid leaving orphaned rows behind. */
+    async deleteByInvestmentId(
+        investmentId: string
+    ): Promise<void> {
+        await this.execute(
+            `
+            DELETE FROM investment_transactions
+            WHERE investment_id = ?
+            `,
+            [investmentId]
         );
     }
 }

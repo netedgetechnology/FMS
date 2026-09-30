@@ -148,8 +148,8 @@ export function filterBudgetReportRows(
     );
 }
 
-// A whole-number percent string, or "—" when there is no budget to
-// measure against (avoids a misleading "0%").
+// A percent string to 1 decimal place, or "—" when there is no budget
+// to measure against (avoids a misleading "0%").
 export function formatPercentUsed(
     percentageUsed: number,
     budgetAmount: number
@@ -161,7 +161,7 @@ export function formatPercentUsed(
         return "—";
     }
 
-    return `${Math.round(percentageUsed)}%`;
+    return `${percentageUsed.toFixed(1)}%`;
 }
 
 export interface CurrencyScopeOption {
@@ -175,13 +175,34 @@ export interface CurrencyScopeOption {
 // currency first, then alphabetical by code). When nothing applies,
 // falls back to the single default currency so a spending-only view
 // still has a scope to report in. Never merges currencies.
+//
+// `appDefaultCurrencyCode` (optional) is the app's actual configured
+// default currency - see useDisplaySettings' defaultCurrency, sourced
+// from app_settings (general.default_currency), which is what every
+// other module already treats as "the" default. It is preferred over
+// each currency's own `isDefault` column whenever provided: that
+// column lives on the currencies table and can drift out of sync with
+// the real app-wide setting (a real production case - is_default was
+// left set on USD from initial seeding while general.default_currency
+// had since been changed to INR), which is exactly what made the
+// zero-budget fallback pick "$" while every other page correctly
+// showed "₹". Omitting it (existing callers) preserves the previous,
+// isDefault-only behavior exactly.
 export function resolveBudgetCurrencyScopes(
     applicableBudgets: readonly Pick<Budget, "currencyId">[],
-    currencies: readonly CurrencyScopeOption[]
+    currencies: readonly CurrencyScopeOption[],
+    appDefaultCurrencyCode?: string
 ): string[] {
     const byId = new Map(
         currencies.map(currency => [currency.id, currency])
     );
+
+    const isAppDefault = (
+        currency: CurrencyScopeOption | undefined
+    ): boolean =>
+        appDefaultCurrencyCode
+            ? currency?.code === appDefaultCurrencyCode
+            : Boolean(currency?.isDefault);
 
     const distinct = Array.from(
         new Set(
@@ -193,9 +214,13 @@ export function resolveBudgetCurrencyScopes(
 
     if (distinct.length === 0) {
         const fallback =
+            currencies.find(currency =>
+                isAppDefault(currency)
+            ) ??
             currencies.find(
                 currency => currency.isDefault
-            ) ?? currencies[0];
+            ) ??
+            currencies[0];
 
         return fallback ? [fallback.id] : [];
     }
@@ -204,11 +229,14 @@ export function resolveBudgetCurrencyScopes(
         const left = byId.get(a);
         const right = byId.get(b);
 
-        if (left?.isDefault && !right?.isDefault) {
+        const leftIsDefault = isAppDefault(left);
+        const rightIsDefault = isAppDefault(right);
+
+        if (leftIsDefault && !rightIsDefault) {
             return -1;
         }
 
-        if (right?.isDefault && !left?.isDefault) {
+        if (rightIsDefault && !leftIsDefault) {
             return 1;
         }
 

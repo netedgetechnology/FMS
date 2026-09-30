@@ -3,28 +3,27 @@ import AppHeader from "./AppHeader";
 import AppSidebar from "./AppSidebar";
 
 export default function AppLayout() {
-  return (
-    <div className="flex h-screen overflow-hidden bg-[#F6F8FC]">
+    return (
+        <div className="flex h-screen overflow-hidden bg-[var(--finance-bg)] text-[var(--finance-text)]">
 
-      <AppSidebar />
+            <AppSidebar />
 
-      <section className="flex min-w-0 flex-1 flex-col">
+            <section className="flex min-w-0 flex-1 flex-col">
 
-        <AppHeader />
+                <AppHeader />
 
-        <main className="flex-1 overflow-y-auto">
+                <main className="flex-1 overflow-y-auto bg-[var(--finance-bg)]">
 
-          <div className="w-full px-4 pt-4 pb-6">
+                    <div className="w-full px-4 pt-4 pb-6">
 
-            <Outlet />
+                        <Outlet />
 
-          </div>
+                    </div>
 
-        </main>
+                </main>
 
-      </section>
+            </section>
 
-    </div>
-  );
+        </div>
+    );
 }
-

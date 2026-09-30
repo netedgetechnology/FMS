@@ -1,5 +1,13 @@
 import { PDFParse } from "pdf-parse";
 import type { CsvDocument } from "../types";
+import {
+    isEmptyMoney,
+    parseBalance,
+    parseMoney,
+    signedBalance,
+    type MoneyMarker,
+    type ParsedMoney,
+} from "../normalizer/moneyNormalizer";
 
 let workerConfigured = false;
 
@@ -47,38 +55,69 @@ type Transaction = {
     balance: string;
 };
 
-// A transaction's trailing financial fields take one of three structural
-// shapes across real-world statements (most specific first):
-//   1. amount + DR/CR marker + running balance (e.g. Axis Bank)
-//   2. amount + running balance, direction unmarked (e.g. YES Bank) -
-//      direction is inferred later from the balance delta between
-//      chronologically adjacent transactions.
-//   3. amount only - direction left undetermined.
-// No bank name or header vocabulary is used to pick between these; the
-// shape is detected purely from which tokens at the end of a transaction
-// block look like currency amounts vs a CR/DR marker.
+// A transaction's trailing financial cells take one of these structural
+// shapes. The shape is detected purely from which tokens at the end of a
+// transaction block are money values, DR/CR markers or empty-cell
+// placeholders - never from a bank name or statement vocabulary:
+//   debit-credit-balance: [debit, credit, balance] where exactly one of
+//       the first two is empty ("-" or an unmarked 0.00) - a statement
+//       that prints its unused Debit/Credit column instead of leaving it
+//       blank.
+//   debit-credit: [debit, credit] with one side an explicit placeholder
+//       and no balance.
+//   amount-balance: [amount, balance] - covers "Amount DR/CR Balance",
+//       a signed amount, and a Debit/Credit layout whose unused column
+//       is blank (blank cells vanish from PDF text, leaving two numbers).
+//   amount-only: [amount] - optionally signed or DR/CR/C/D-marked.
 type TailShape =
-    | "amount-type-balance"
+    | "debit-credit-balance"
+    | "debit-credit"
     | "amount-balance"
     | "amount-only";
 
+type TailCell = {
+    money: ParsedMoney;
+    // Index (into the block's tokens) of the cell's first token.
+    pos: number;
+};
+
 type TailMatch = {
     shape: TailShape;
-    amountPos: number;
-    typePos?: number;
-    balancePos?: number;
+    // Token index where the tail starts - everything before it is
+    // description text.
+    startPos: number;
+    amount: ParsedMoney;
+    // For the debit-credit shapes: which of the two positional
+    // Debit/Credit columns held the value (0 = first, 1 = second).
+    columnIndex: 0 | 1 | null;
+    balance: ParsedMoney | null;
+};
+
+// Column facts read from the statement's own table header line, when
+// one can be found. Every field is optional - absence just means the
+// weaker structural defaults apply.
+type HeaderLayout = {
+    // true: a Debit/Withdrawal column precedes the Credit/Deposit one.
+    debitFirst: boolean | null;
+    // Where a dedicated reference/cheque column sits relative to the
+    // description column.
+    referenceSide: "before" | "after" | null;
 };
 
 type RawTransaction = {
     date: string;
     dateSortKey: number | null;
     description: string;
-    amount: string;
-    type: string;
     reference: string;
-    balance: string;
+    amountDigits: string;
+    amountValue: number;
+    // Direction stated by the row itself (DR/CR marker or sign).
+    explicit: MoneyMarker | null;
+    // Direction implied by which Debit/Credit column held the value.
+    column: MoneyMarker | null;
+    balanceText: string;
     balanceValue: number | null;
-    shape: TailShape;
+    type: MoneyMarker | null;
 };
 
 // Date fragments (not full-line patterns) so a date can be matched at the
@@ -125,13 +164,51 @@ const MONTH_NAMES: Record<string, number> = {
 // numbers, cheque numbers and account numbers are frequently long bare
 // integers; requiring the decimal point is what keeps those from being
 // mistaken for a transaction amount.
-const STRICT_AMOUNT_RE =
-    /^[-+]?(?:₹|\$|€|£)?\s*\d[\d,]*\.\d{1,2}$/;
 
-const CR_DR_RE = /^(CR|DR)$/i;
+// Standalone DR/CR marker tokens ("DR", "Cr.", "(CR)").
+const MARKER_TOKEN_RE = /^\(?(dr|cr)\.?\)?$/i;
+
+// A single-letter C/D marker is only trusted as the very last token of a
+// transaction row, directly after its amount (e.g. "50,000.00 C") -
+// anywhere else a lone letter is far more likely to be narration.
+const SINGLE_LETTER_MARKER_RE = /^[CD]$/;
+
+// An explicitly empty Debit/Credit cell.
+const PLACEHOLDER_TOKEN_RE = /^(?:-{1,3}|–|—)$/;
+
+// A currency symbol/code printed as its own token before an amount.
+const CURRENCY_TOKEN_RE =
+    /^(?:₹|\$|€|£|Rs\.?|INR|USD|EUR|GBP)$/i;
 
 const OPENING_BALANCE_RE =
-    /opening\s+balance\D{0,10}?([\d,]+\.\d{1,2})/i;
+    /opening\s+balance[^\d-]{0,10}?(-?[\d,]+\.\d{1,2}(?:\s*(?:dr|cr)\b)?)/i;
+
+// In-table carry-forward rows ("B/F", "Balance Brought Forward",
+// "Opening Balance", and their closing counterparts). They restate a
+// balance, they are never a money movement - a universal bookkeeping
+// convention, not a bank-specific one.
+const OPENING_ROW_RE =
+    /^(?:b\/f|b\/fwd|brought\s+forward|balance\s+(?:b\/f|b\/fwd|brought\s+forward|forward)|opening\s+balance)\b/i;
+
+const CLOSING_ROW_RE =
+    /^(?:c\/f|c\/fwd|carried\s+forward|balance\s+(?:c\/f|c\/fwd|carried\s+forward)|closing\s+balance)\b/i;
+
+const HEADER_DATE_RE = /\bdate\b/i;
+
+const HEADER_MONEY_RE =
+    /\b(?:balance|amount|debits?|credits?|withdrawals?|deposits?)\b/i;
+
+const HEADER_DEBIT_RE =
+    /\b(?:debits?|withdrawals?|paid\s+out|money\s+out|dr)\b/i;
+
+const HEADER_CREDIT_RE =
+    /\b(?:credits?|deposits?|paid\s+in|money\s+in|cr)\b/i;
+
+const HEADER_DESCRIPTION_RE =
+    /\b(?:description|narration|particulars|details|remarks)\b/i;
+
+const HEADER_REFERENCE_RE =
+    /\b(?:ref(?:erence)?|chq|cheque|utr)\b/i;
 
 const MAX_BLOCK_LINES = 12;
 
@@ -147,41 +224,60 @@ function normalizeLines(text: string): RawLine[] {
         .filter((line) => line.text.length > 0);
 }
 
-function isAmount(value: string): boolean {
-    const trimmed = value.trim();
-
-    const hasOpenParen = trimmed.startsWith("(");
-    const hasCloseParen = trimmed.endsWith(")");
-
-    // Parentheses only ever denote a self-contained accounting-style
-    // negative amount on THIS token, e.g. "(500.00)" - both the opening
-    // and closing paren must be present on the same token. A token with
-    // only one of the two - "0.00)" closing a parenthetical annotation
-    // opened several tokens earlier (e.g. "(EXCL TAX 0.00)"), or
-    // "(500.00" opening one - is never an amount. Accepting either half
-    // in isolation is what let a tax/annotation figure inside a
-    // "(EXCL TAX 0.00)" aside be mistaken by findTail() for the real
-    // trailing transaction amount.
-    if (hasOpenParen !== hasCloseParen) {
-        return false;
+// A single PDF text token that is a money value. Requires an explicit
+// decimal part (\d.\d{1,2}): statements always print amounts with
+// decimals, while reference, cheque and account numbers are frequently
+// long bare integers - requiring the decimal point is what keeps those
+// from being mistaken for a transaction amount. Parentheses must wrap
+// the whole token ("(500.00)"); a half-paren token such as "0.00)"
+// closing an "(EXCL TAX 0.00)" aside is never an amount.
+function parseMoneyToken(
+    token: string | undefined,
+): ParsedMoney | null {
+    if (!token) {
+        return null;
     }
 
-    const unwrapped =
-        hasOpenParen && hasCloseParen
-            ? trimmed.slice(1, -1)
-            : trimmed;
+    const money = parseMoney(token, {
+        requireDecimal: true,
+    });
 
-    const cleaned = unwrapped.replace(/,$/, "");
-
-    return STRICT_AMOUNT_RE.test(cleaned);
+    return money.kind === "value"
+        ? money
+        : null;
 }
 
-function cleanAmount(value: string): string {
-    return value
-        .replace(/[₹$€£]/g, "")
-        .replace(/,/g, "")
-        .replace(/[()]/g, "")
-        .trim();
+function markerFromToken(
+    token: string | undefined,
+    isLastToken: boolean,
+): MoneyMarker | null {
+    if (!token) {
+        return null;
+    }
+
+    const match = token.match(MARKER_TOKEN_RE);
+
+    if (match?.[1]) {
+        return match[1].toUpperCase() === "DR"
+            ? "DR"
+            : "CR";
+    }
+
+    if (
+        isLastToken &&
+        SINGLE_LETTER_MARKER_RE.test(token)
+    ) {
+        return token === "D" ? "DR" : "CR";
+    }
+
+    return null;
+}
+
+function formatSigned(
+    value: number,
+    digits: string,
+): string {
+    return value < 0 ? `-${digits}` : digits;
 }
 
 function tokenize(line: string): string[] {
@@ -296,53 +392,248 @@ function tokensForBlock(
     return tokens;
 }
 
-// Scans backward from the end of the block's tokens for the most
-// specific qualifying tail shape. Scanning backward (rather than
-// requiring a match at the very last token) tolerates trailing free text
-// after the balance, such as a branch name.
+// Collects the trailing money cells of a block (scanning backward from
+// the last money token, which tolerates trailing free text after the
+// balance such as a branch name), then classifies them into a TailShape.
 function findTail(
     tokens: string[],
+    layout: HeaderLayout,
 ): TailMatch | null {
+    let last = -1;
+
     for (
         let i = tokens.length - 1;
         i >= 0;
         i -= 1
     ) {
-        if (!isAmount(tokens[i] ?? "")) {
-            continue;
+        if (parseMoneyToken(tokens[i])) {
+            last = i;
+            break;
+        }
+    }
+
+    if (last < 0) {
+        return null;
+    }
+
+    const lastIndex = tokens.length - 1;
+
+    // A marker, or an empty-cell placeholder ending the row, directly
+    // after the last amount still belongs to the tail.
+    const next = tokens[last + 1];
+
+    let k =
+        markerFromToken(
+            next,
+            last + 1 === lastIndex,
+        ) !== null ||
+        (last + 1 === lastIndex &&
+            PLACEHOLDER_TOKEN_RE.test(next ?? ""))
+            ? last + 1
+            : last;
+
+    const cells: TailCell[] = [];
+
+    while (k >= 0 && cells.length < 3) {
+        const token = tokens[k];
+        const marker = markerFromToken(
+            token,
+            k === lastIndex,
+        );
+
+        let cell: TailCell | null = null;
+
+        if (marker) {
+            const money = parseMoneyToken(
+                tokens[k - 1],
+            );
+
+            if (!money) {
+                break;
+            }
+
+            cell = {
+                money: {
+                    ...money,
+                    marker: money.marker ?? marker,
+                },
+                pos: k - 1,
+            };
+        } else {
+            const money = parseMoneyToken(token);
+
+            if (money) {
+                cell = { money, pos: k };
+            } else if (
+                token !== undefined &&
+                PLACEHOLDER_TOKEN_RE.test(token) &&
+                (cells.length > 0 || k > last)
+            ) {
+                cell = {
+                    money: parseMoney(token),
+                    pos: k,
+                };
+            }
         }
 
+        if (!cell) {
+            break;
+        }
+
+        let pos = cell.pos;
+
         if (
-            i >= 2 &&
-            CR_DR_RE.test(tokens[i - 1] ?? "") &&
-            isAmount(tokens[i - 2] ?? "")
+            CURRENCY_TOKEN_RE.test(
+                tokens[pos - 1] ?? "",
+            )
+        ) {
+            pos -= 1;
+        }
+
+        cells.unshift({ ...cell, pos });
+        k = pos - 1;
+    }
+
+    return classifyTail(
+        cells,
+        layout.debitFirst !== null,
+    );
+}
+
+// hasDebitCreditColumns: the statement's own header names separate
+// Debit and Credit columns, so a leading "-" before a lone amount is that
+// row's empty Debit cell rather than a dash ending the narration.
+function classifyTail(
+    cells: TailCell[],
+    hasDebitCreditColumns: boolean,
+): TailMatch | null {
+    if (cells.length === 0) {
+        return null;
+    }
+
+    const isValue = (cell: TailCell) =>
+        cell.money.kind === "value";
+
+    if (cells.length === 3) {
+        const [first, second, balance] = cells as [
+            TailCell,
+            TailCell,
+            TailCell,
+        ];
+
+        const firstEmpty = isEmptyMoney(first.money);
+        const secondEmpty = isEmptyMoney(
+            second.money,
+        );
+
+        if (
+            isValue(balance) &&
+            firstEmpty !== secondEmpty
         ) {
             return {
-                shape: "amount-type-balance",
-                amountPos: i - 2,
-                typePos: i - 1,
-                balancePos: i,
+                shape: "debit-credit-balance",
+                startPos: first.pos,
+                amount: firstEmpty
+                    ? second.money
+                    : first.money,
+                columnIndex: firstEmpty ? 1 : 0,
+                balance: balance.money,
+            };
+        }
+
+        if (firstEmpty && secondEmpty) {
+            // Both Debit and Credit empty: surface the row with a zero
+            // amount so validation flags it, never guess one.
+            return {
+                shape: "debit-credit-balance",
+                startPos: first.pos,
+                amount: first.money,
+                columnIndex: null,
+                balance: balance.money,
+            };
+        }
+
+        // Neither side empty: the first "cell" is really a number at
+        // the end of the narration - classify the last two alone.
+        return classifyTail(
+            cells.slice(1),
+            hasDebitCreditColumns,
+        );
+    }
+
+    if (cells.length === 2) {
+        const [first, second] = cells as [
+            TailCell,
+            TailCell,
+        ];
+
+        if (first.money.kind === "placeholder") {
+            if (
+                hasDebitCreditColumns &&
+                !isEmptyMoney(second.money)
+            ) {
+                return {
+                    shape: "debit-credit",
+                    startPos: first.pos,
+                    amount: second.money,
+                    columnIndex: 1,
+                    balance: null,
+                };
+            }
+
+            return classifyTail(
+                cells.slice(1),
+                hasDebitCreditColumns,
+            );
+        }
+
+        if (second.money.kind === "placeholder") {
+            return {
+                shape: "debit-credit",
+                startPos: first.pos,
+                amount: first.money,
+                columnIndex: 0,
+                balance: null,
             };
         }
 
         if (
-            i >= 1 &&
-            isAmount(tokens[i - 1] ?? "")
+            isEmptyMoney(first.money) &&
+            !isEmptyMoney(second.money)
         ) {
+            // An unmarked 0.00 is never a real transaction amount, so
+            // "0.00 500.00" is an unused Debit cell beside a Credit.
             return {
-                shape: "amount-balance",
-                amountPos: i - 1,
-                balancePos: i,
+                shape: "debit-credit",
+                startPos: first.pos,
+                amount: second.money,
+                columnIndex: 1,
+                balance: null,
             };
         }
 
         return {
-            shape: "amount-only",
-            amountPos: i,
+            shape: "amount-balance",
+            startPos: first.pos,
+            amount: first.money,
+            columnIndex: null,
+            balance: second.money,
         };
     }
 
-    return null;
+    const [only] = cells as [TailCell];
+
+    if (!isValue(only)) {
+        return null;
+    }
+
+    return {
+        shape: "amount-only",
+        startPos: only.pos,
+        amount: only.money,
+        columnIndex: null,
+        balance: null,
+    };
 }
 
 function extractReference(
@@ -459,9 +750,8 @@ function parseDateSortKey(
 }
 
 // Structural, not bank-specific: "opening balance" is a near-universal
-// accounting term (present verbatim in both real fixtures, in different
-// positions in the document), used only to seed the running-balance
-// anchor for direction inference below - never to identify a bank.
+// accounting term, used only to seed the running-balance anchor for
+// direction inference below - never to identify a bank.
 function findOpeningBalanceAnchor(
     lines: RawLine[],
 ): number | null {
@@ -471,11 +761,9 @@ function findOpeningBalanceAnchor(
         );
 
         if (match?.[1]) {
-            const value = Number(
-                cleanAmount(match[1]),
-            );
+            const value = parseBalance(match[1]);
 
-            if (!Number.isNaN(value)) {
+            if (value !== null) {
                 return value;
             }
         }
@@ -484,10 +772,157 @@ function findOpeningBalanceAnchor(
     return null;
 }
 
+function keywordIndex(
+    text: string,
+    pattern: RegExp,
+): number {
+    const match = pattern.exec(text);
+
+    return match ? match.index : -1;
+}
+
+// Reads column order from the statement's own table header line: the
+// first non-transaction line with no money values that names a date
+// column and at least one money column. Repeated per-page headers are
+// identical, so the first one is enough.
+function detectHeaderLayout(
+    lines: RawLine[],
+): HeaderLayout {
+    for (const line of lines) {
+        const text = line.text;
+
+        if (
+            !HEADER_DATE_RE.test(text) ||
+            !HEADER_MONEY_RE.test(text) ||
+            isTransactionStartLine(text) ||
+            tokenize(text).some(
+                (token) =>
+                    parseMoneyToken(token) !== null,
+            )
+        ) {
+            continue;
+        }
+
+        // A combined "DR/CR" marker column says nothing about the order
+        // of separate Debit/Credit columns.
+        const withoutMarkerColumn = text.replace(
+            /\b(?:dr|cr)\s*\/\s*(?:dr|cr)\b/gi,
+            " ",
+        );
+
+        const debitAt = keywordIndex(
+            withoutMarkerColumn,
+            HEADER_DEBIT_RE,
+        );
+
+        const creditAt = keywordIndex(
+            withoutMarkerColumn,
+            HEADER_CREDIT_RE,
+        );
+
+        const descriptionAt = keywordIndex(
+            text,
+            HEADER_DESCRIPTION_RE,
+        );
+
+        const referenceAt = keywordIndex(
+            text,
+            HEADER_REFERENCE_RE,
+        );
+
+        return {
+            debitFirst:
+                debitAt >= 0 && creditAt >= 0
+                    ? debitAt < creditAt
+                    : null,
+            referenceSide:
+                descriptionAt >= 0 &&
+                referenceAt >= 0
+                    ? referenceAt < descriptionAt
+                        ? "before"
+                        : "after"
+                    : null,
+        };
+    }
+
+    return {
+        debitFirst: null,
+        referenceSide: null,
+    };
+}
+
+// A token that can be a reference/cheque/UTR value on its own: a single
+// alphanumeric run of 8+ characters containing a digit, and either all
+// digits or upper-case letters and digits only (so ordinary narration
+// words are not mistaken for one).
+function looksLikeReference(
+    token: string | undefined,
+): boolean {
+    if (!token) {
+        return false;
+    }
+
+    return (
+        /^[A-Za-z0-9]{8,}$/.test(token) &&
+        /\d/.test(token) &&
+        /^[A-Z0-9]+$/.test(token)
+    );
+}
+
+// Splits a dedicated reference-column value off the narration, using the
+// header's own column order: when the header puts a reference column
+// before the description, it is the first narration token; when after,
+// the last one. Falls back to pattern-matching the narration otherwise.
+function splitReference(
+    descriptionTokens: string[],
+    layout: HeaderLayout,
+): { description: string; reference: string } {
+    let tokens = descriptionTokens;
+    let reference = "";
+
+    if (tokens.length > 1) {
+        if (
+            layout.referenceSide === "before" &&
+            looksLikeReference(tokens[0])
+        ) {
+            reference = tokens[0] ?? "";
+            tokens = tokens.slice(1);
+        } else if (
+            layout.referenceSide === "after" &&
+            looksLikeReference(
+                tokens[tokens.length - 1],
+            )
+        ) {
+            reference =
+                tokens[tokens.length - 1] ?? "";
+            tokens = tokens.slice(0, -1);
+        }
+    }
+
+    const description = tokens.join(" ").trim();
+
+    return {
+        description,
+        reference:
+            reference ||
+            extractReference(description),
+    };
+}
+
+type BuiltRow =
+    | { kind: "transaction"; transaction: RawTransaction }
+    | {
+          kind: "opening";
+          dateSortKey: number | null;
+          balance: number | null;
+      }
+    | { kind: "closing" };
+
 function buildRawTransaction(
     block: RawLine[],
     tail: TailMatch,
-): RawTransaction | null {
+    layout: HeaderLayout,
+): BuiltRow | null {
     const firstLine = block[0];
 
     if (!firstLine) {
@@ -507,106 +942,143 @@ function buildRawTransaction(
 
     const tokens = tokensForBlock(block);
 
-    const description = tokens
-        .slice(0, tail.amountPos)
-        .join(" ")
-        .trim();
+    const { description, reference } =
+        splitReference(
+            tokens.slice(0, tail.startPos),
+            layout,
+        );
 
-    const amount = cleanAmount(
-        tokens[tail.amountPos] ?? "",
-    );
+    const dateSortKey = parseDateSortKey(date);
 
-    const type =
-        tail.shape === "amount-type-balance"
-            ? (
-                  tokens[tail.typePos ?? -1] ?? ""
-              ).toUpperCase()
-            : "";
+    const balanceValue = tail.balance
+        ? signedBalance(tail.balance)
+        : null;
 
-    const balance =
-        tail.shape !== "amount-only"
-            ? cleanAmount(
-                  tokens[tail.balancePos ?? -1] ??
-                      "",
-              )
-            : "";
+    if (OPENING_ROW_RE.test(description)) {
+        // A carry-forward row may print its balance as its only figure.
+        return {
+            kind: "opening",
+            dateSortKey,
+            balance:
+                balanceValue ??
+                signedBalance(tail.amount),
+        };
+    }
+
+    if (CLOSING_ROW_RE.test(description)) {
+        return { kind: "closing" };
+    }
+
+    const amount = tail.amount;
+
+    const explicit: MoneyMarker | null =
+        amount.marker ??
+        (tail.columnIndex === null &&
+        amount.negative
+            ? "DR"
+            : null);
+
+    let column: MoneyMarker | null = null;
+
+    if (tail.columnIndex !== null) {
+        const debitFirst =
+            layout.debitFirst ?? true;
+
+        const isDebitColumn =
+            tail.columnIndex === 0
+                ? debitFirst
+                : !debitFirst;
+
+        column = isDebitColumn ? "DR" : "CR";
+    }
 
     return {
-        date,
-        dateSortKey: parseDateSortKey(date),
-        description,
-        amount,
-        type,
-        reference: extractReference(description),
-        balance,
-        balanceValue:
-            balance === "" ? null : Number(balance),
-        shape: tail.shape,
+        kind: "transaction",
+        transaction: {
+            date,
+            dateSortKey,
+            description,
+            reference,
+            amountDigits: amount.digits ?? "",
+            amountValue: amount.magnitude ?? 0,
+            explicit,
+            column,
+            balanceText:
+                balanceValue === null
+                    ? ""
+                    : formatSigned(
+                          balanceValue,
+                          tail.balance?.digits ??
+                              "",
+                      ),
+            balanceValue,
+            type: null,
+        },
     };
 }
 
-// For transactions with no DR/CR marker (the "amount-balance" shape),
-// infers the direction from the change in running balance between
-// chronologically adjacent transactions - increasing balance is a
-// credit, decreasing balance is a debit. Works regardless of whether the
-// statement itself lists transactions oldest-first or newest-first,
-// since it sorts by the transactions' own parsed dates rather than
-// relying on document order.
-function inferDirections(
+// Resolves each transaction's direction, strongest evidence first:
+//   1. an explicit DR/CR marker or sign printed on the row;
+//   2. the running balance moving by exactly the row's amount - the
+//      statement's own arithmetic, independent of layout;
+//   3. which Debit/Credit column the value sat in;
+//   4. the running balance's direction of movement alone.
+// Chronological order comes from the rows' own dates, so this works
+// whether the statement lists oldest- or newest-first.
+function resolveDirections(
     transactions: RawTransaction[],
     openingBalance: number | null,
 ): void {
-    const withBalance = transactions
+    for (const transaction of transactions) {
+        transaction.type =
+            transaction.explicit ??
+            transaction.column;
+    }
+
+    const dated = transactions
         .map((transaction, idx) => ({
             transaction,
             idx,
         }))
         .filter(
             (entry) =>
-                entry.transaction.balanceValue !==
-                    null &&
                 entry.transaction.dateSortKey !==
-                    null,
+                null,
         );
 
-    if (withBalance.length === 0) {
+    if (dated.length === 0) {
         return;
     }
 
     const firstKey =
-        withBalance[0]?.transaction.dateSortKey ??
-        0;
+        dated[0]?.transaction.dateSortKey ?? 0;
 
     const lastKey =
-        withBalance[withBalance.length - 1]
-            ?.transaction.dateSortKey ?? 0;
+        dated[dated.length - 1]?.transaction
+            .dateSortKey ?? 0;
 
-    const documentIsDescending = firstKey > lastKey;
+    const documentIsDescending =
+        firstKey > lastKey;
 
-    const sorted = [...withBalance].sort(
-        (a, b) => {
-            const keyDiff =
-                (a.transaction.dateSortKey ?? 0) -
-                (b.transaction.dateSortKey ?? 0);
+    const sorted = [...dated].sort((a, b) => {
+        const keyDiff =
+            (a.transaction.dateSortKey ?? 0) -
+            (b.transaction.dateSortKey ?? 0);
 
-            if (keyDiff !== 0) {
-                return keyDiff;
-            }
+        if (keyDiff !== 0) {
+            return keyDiff;
+        }
 
-            return documentIsDescending
-                ? b.idx - a.idx
-                : a.idx - b.idx;
-        },
-    );
+        return documentIsDescending
+            ? b.idx - a.idx
+            : a.idx - b.idx;
+    });
 
     let previousBalance = openingBalance;
 
-    for (const entry of sorted) {
-        const transaction = entry.transaction;
-
+    for (const { transaction } of sorted) {
         if (
-            transaction.shape ===
-                "amount-balance" &&
+            transaction.explicit === null &&
             previousBalance !== null &&
             transaction.balanceValue !== null
         ) {
@@ -614,8 +1086,19 @@ function inferDirections(
                 transaction.balanceValue -
                 previousBalance;
 
-            transaction.type =
+            const deltaDirection: MoneyMarker =
                 delta >= 0 ? "CR" : "DR";
+
+            const exact =
+                Math.abs(
+                    Math.abs(delta) -
+                        transaction.amountValue,
+                ) < 0.005;
+
+            transaction.type = exact
+                ? deltaDirection
+                : (transaction.column ??
+                  deltaDirection);
         }
 
         previousBalance =
@@ -627,10 +1110,14 @@ function inferDirections(
 function extractBankTransactions(
     lines: RawLine[],
 ): Transaction[] {
-    const openingBalance =
-        findOpeningBalanceAnchor(lines);
+    const layout = detectHeaderLayout(lines);
 
     const raw: RawTransaction[] = [];
+
+    let openingRow: {
+        dateSortKey: number | null;
+        balance: number;
+    } | null = null;
 
     let i = 0;
 
@@ -667,12 +1154,13 @@ function extractBankTransactions(
 
             const candidate = findTail(
                 tokensForBlock(block),
+                layout,
             );
 
             j += 1;
 
             // A tail with no description tokens before it
-            // (amountPos === 0) is never accepted as a real
+            // (startPos === 0) is never accepted as a real
             // transaction - a bare summary/total line (a date
             // immediately followed by amount/balance numbers, with
             // nothing describing what they're for, e.g. a statement's
@@ -685,7 +1173,7 @@ function extractBankTransactions(
             // description before the real tail appears.
             if (
                 candidate &&
-                candidate.amountPos > 0
+                candidate.startPos > 0
             ) {
                 tail = candidate;
                 break;
@@ -697,13 +1185,25 @@ function extractBankTransactions(
         }
 
         if (tail) {
-            const transaction = buildRawTransaction(
+            const built = buildRawTransaction(
                 block,
                 tail,
+                layout,
             );
 
-            if (transaction) {
-                raw.push(transaction);
+            if (built?.kind === "transaction") {
+                raw.push(built.transaction);
+            } else if (
+                built?.kind === "opening" &&
+                built.balance !== null &&
+                (openingRow === null ||
+                    (built.dateSortKey ?? 0) <
+                        (openingRow.dateSortKey ?? 0))
+            ) {
+                openingRow = {
+                    dateSortKey: built.dateSortKey,
+                    balance: built.balance,
+                };
             }
 
             i = j;
@@ -712,23 +1212,27 @@ function extractBankTransactions(
         }
     }
 
-    inferDirections(raw, openingBalance);
+    resolveDirections(
+        raw,
+        openingRow?.balance ??
+            findOpeningBalanceAnchor(lines),
+    );
 
     return raw.map((transaction) => ({
         date: transaction.date,
         description: transaction.description,
-        amount: transaction.amount,
-        type: transaction.type,
+        amount: transaction.amountDigits,
+        type: transaction.type ?? "",
         reference: transaction.reference,
         debit:
             transaction.type === "DR"
-                ? transaction.amount
+                ? transaction.amountDigits
                 : "",
         credit:
             transaction.type === "CR"
-                ? transaction.amount
+                ? transaction.amountDigits
                 : "",
-        balance: transaction.balance,
+        balance: transaction.balanceText,
     }));
 }
 
@@ -831,9 +1335,36 @@ function genericDocument(
     };
 }
 
-export async function parsePdf(
+// The pure text-to-document half of parsePdf: everything after pdf-parse
+// has produced the page text. Exported so extraction can be exercised
+// directly on captured statement text (see tests/pdfCompatibility), with
+// no PDF binary or pdf.js worker involved.
+export function parsePdfText(
+    text: string,
+): PdfParseResult {
+    const lines = normalizeLines(text);
+
+    const transactions =
+        extractBankTransactions(lines);
+
+    if (transactions.length > 0) {
+        return {
+            document: buildBankDocument(
+                transactions,
+            ),
+            structured: true,
+        };
+    }
+
+    return {
+        document: genericDocument(lines),
+        structured: false,
+    };
+}
+
+export async function extractPdfText(
     content: ArrayBuffer,
-): Promise<PdfParseResult> {
+): Promise<string> {
     configurePdfWorker();
 
     const parser = new PDFParse({
@@ -846,26 +1377,16 @@ export async function parsePdf(
         const result =
             await parser.getText();
 
-        const lines =
-            normalizeLines(result.text);
-
-        const transactions =
-            extractBankTransactions(lines);
-
-        if (transactions.length > 0) {
-            return {
-                document: buildBankDocument(
-                    transactions,
-                ),
-                structured: true,
-            };
-        }
-
-        return {
-            document: genericDocument(lines),
-            structured: false,
-        };
+        return result.text;
     } finally {
         await parser.destroy();
     }
+}
+
+export async function parsePdf(
+    content: ArrayBuffer,
+): Promise<PdfParseResult> {
+    return parsePdfText(
+        await extractPdfText(content),
+    );
 }

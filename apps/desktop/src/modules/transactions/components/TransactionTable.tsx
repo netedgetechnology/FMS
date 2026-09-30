@@ -1,3 +1,4 @@
+import { balanceSide } from "@/core/accounting/transferClassification";
 import {
     signedTransactionAmount,
     useDateFormatter,
@@ -29,6 +30,21 @@ function formatType(type: string): string {
         .replace(/\b\w/g, char => char.toUpperCase());
 }
 
+const STATUS_LABELS: Record<Transaction["status"], string> = {
+    PENDING: "Pending",
+    CLEARED: "Cleared",
+};
+
+export function getStatusLabel(status: Transaction["status"]): string {
+    return STATUS_LABELS[status] ?? status;
+}
+
+function statusBadgeClasses(status: Transaction["status"]): string {
+    return status === "CLEARED"
+        ? "inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700"
+        : "inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700";
+}
+
 
 function formatAmount(amount: number): string {
     return new Intl.NumberFormat("en-IN", {
@@ -58,12 +74,13 @@ export function TransactionTable({
             <table className="w-full table-fixed text-left">
                 <colgroup>
                     <col className="w-[5%]" />
-                    <col className="w-[9%]" />
-                    <col className="w-[24%]" />
-                    <col className="w-[13%]" />
-                    <col className="w-[13%]" />
                     <col className="w-[8%]" />
-                    <col className="w-[13%]" />
+                    <col className="w-[20%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[12%]" />
                     <col className="w-[15%]" />
                 </colgroup>
 
@@ -97,6 +114,10 @@ export function TransactionTable({
 
                         <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
                             Type
+                        </th>
+
+                        <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                            Status
                         </th>
 
                         <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
@@ -182,13 +203,34 @@ export function TransactionTable({
 
                             <td className="px-4 py-3 text-sm whitespace-nowrap text-slate-600">
                                 {formatType(transaction.type)}
+                                {transaction.type === "transfer" &&
+                                    transaction.transferDirection && (
+                                        <span className="text-slate-400">
+                                            {transaction.transferDirection === "OUT"
+                                                ? " · Out"
+                                                : " · In"}
+                                        </span>
+                                    )}
+                            </td>
+
+                            <td className="px-4 py-3 whitespace-nowrap">
+                                <span
+                                    className={statusBadgeClasses(
+                                        transaction.status
+                                    )}
+                                >
+                                    {getStatusLabel(transaction.status)}
+                                </span>
                             </td>
 
                             <td className="px-4 py-3 text-right text-sm font-medium whitespace-nowrap text-slate-800">
                                 {formatAmount(
+                                    // A transfer is signed by its
+                                    // direction (Out -, In +).
                                     signedTransactionAmount(
                                         transaction.amount,
-                                        transaction.type
+                                        balanceSide(transaction) ??
+                                            transaction.type
                                     )
                                 )}
                             </td>

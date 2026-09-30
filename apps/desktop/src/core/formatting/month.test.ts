@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import {
+    afterEach,
+    beforeEach,
+    describe,
+    expect,
+    it,
+    vi,
+} from "vitest";
 
 import {
     addMonths,
@@ -144,6 +151,96 @@ describe("month helpers", () => {
                     new Date(2026, 8, 1),
                 ),
             ).toBe(false);
+        });
+    });
+
+    // Regression coverage for the Financial Plan form's Start Date
+    // default (reported: form showed 19-09-2026 while the app's current
+    // date was 20-09-2026). The form was built with
+    // `new Date().toISOString().slice(0, 10)`, which reads the UTC
+    // calendar date - a day behind local midnight for any positive UTC
+    // offset. The fix routes the default through `toISODateString(new
+    // Date())` instead, the same local-field technique TransactionForm's
+    // `todayLocalDate` already uses. These tests exercise that exact
+    // call shape (`toISODateString(new Date())`) under fake system
+    // clocks / timezones.
+    describe("toISODateString(new Date()) - local calendar date, not UTC", () => {
+        const originalTz = process.env.TZ;
+
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            process.env.TZ = originalTz;
+        });
+
+        it("Asia/Kolkata: reads the local date, not the UTC date it has already passed (the reported boundary bug)", () => {
+            process.env.TZ = "Asia/Kolkata";
+
+            // 2026-09-19 20:00 UTC is already 2026-09-20 01:30 IST
+            // (UTC+5:30) - the old `toISOString().slice(0, 10)`
+            // implementation would read this as "2026-09-19".
+            vi.setSystemTime(
+                new Date("2026-09-19T20:00:00.000Z"),
+            );
+
+            expect(toISODateString(new Date())).toBe(
+                "2026-09-20",
+            );
+        });
+
+        it("UTC: matches when local and UTC calendar days agree", () => {
+            process.env.TZ = "UTC";
+
+            vi.setSystemTime(
+                new Date("2026-09-20T12:00:00.000Z"),
+            );
+
+            expect(toISODateString(new Date())).toBe(
+                "2026-09-20",
+            );
+        });
+
+        it("America/Los_Angeles: a negative UTC offset doesn't roll the date forward either", () => {
+            process.env.TZ = "America/Los_Angeles";
+
+            // 2026-09-20 02:00 UTC is still 2026-09-19 19:00 PDT
+            // (UTC-7).
+            vi.setSystemTime(
+                new Date("2026-09-20T02:00:00.000Z"),
+            );
+
+            expect(toISODateString(new Date())).toBe(
+                "2026-09-19",
+            );
+        });
+
+        it("timezone boundary: local date differs from UTC date on both sides of midnight UTC", () => {
+            process.env.TZ = "Asia/Kolkata";
+
+            // Just before UTC midnight, already past local midnight in
+            // IST - UTC and local calendar dates disagree.
+            vi.setSystemTime(
+                new Date("2026-09-19T23:00:00.000Z"),
+            );
+
+            expect(toISODateString(new Date())).toBe(
+                "2026-09-20",
+            );
+        });
+
+        it("always returns YYYY-MM-DD, zero-padded", () => {
+            process.env.TZ = "UTC";
+
+            vi.setSystemTime(
+                new Date("2026-01-05T00:00:00.000Z"),
+            );
+
+            expect(toISODateString(new Date())).toBe(
+                "2026-01-05",
+            );
         });
     });
 

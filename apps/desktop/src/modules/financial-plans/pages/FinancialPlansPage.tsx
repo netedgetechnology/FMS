@@ -3,9 +3,10 @@ import {
     useMemo,
     useState,
 } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 
 import { EmptyState, PageHeader } from "@/components/common";
+import { useMoneyFormatter } from "@/core/formatting";
 
 import { useCurrencies } from "@/modules/currencies/hooks/useCurrencies";
 import { useFinancialGoals } from "@/modules/financial-goals/hooks";
@@ -29,9 +30,6 @@ import {
     checkPlanGoalIntegrity,
     countPlansByStatus,
     countPlansNeedingAttention,
-    filterPlansByStatus,
-    PLAN_STATUS_FILTERS,
-    type PlanStatusFilter,
 } from "../services";
 
 import type { FinancialPlan } from "../types";
@@ -129,9 +127,7 @@ export default function FinancialPlansPage() {
     }, [plans, resultsByPlanId, goalDriftPlanIds]);
 
     const [search, setSearch] = useState("");
-
-    const [statusFilter, setStatusFilter] =
-        useState<PlanStatusFilter>("ALL");
+    const [isSearchOpen, setIsSearchOpen] = useState(false);
 
     const [adding, setAdding] = useState(false);
 
@@ -167,18 +163,13 @@ export default function FinancialPlansPage() {
     );
 
     const filteredPlans = useMemo(() => {
-        const byStatus = filterPlansByStatus(
-            plans,
-            statusFilter
-        );
-
         const query = search.trim().toLowerCase();
 
         if (!query) {
-            return byStatus;
+            return plans;
         }
 
-        return byStatus.filter(plan =>
+        return plans.filter(plan =>
             [
                 plan.name,
                 plan.planType,
@@ -191,7 +182,100 @@ export default function FinancialPlansPage() {
                 .toLowerCase()
                 .includes(query)
         );
-    }, [plans, statusFilter, search, currencyMap]);
+    }, [plans, search, currencyMap]);
+
+    const formatMoneyValue = useMoneyFormatter();
+
+    // Amount cards are shown in a single currency scope - mirrors the
+    // established multi-currency pattern used by the dashboard's budget
+    // overview (resolveBudgetCurrencyScopes): the default currency when
+    // plans exist in it, otherwise the first currency (alphabetically,
+    // default-first) that plans actually use. Amounts are never summed
+    // or converted across currencies.
+    const primaryCurrencyId = useMemo(() => {
+        const distinctIds = Array.from(
+            new Set(plans.map(plan => plan.currencyId))
+        );
+
+        if (distinctIds.length === 0) {
+            const fallback =
+                currencies.find(
+                    currency => currency.isDefault
+                ) ?? currencies[0];
+            return fallback?.id ?? null;
+        }
+
+        return distinctIds.sort((a, b) => {
+            const left = currencyMap.get(a);
+            const right = currencyMap.get(b);
+
+            if (left?.isDefault && !right?.isDefault) {
+                return -1;
+            }
+            if (right?.isDefault && !left?.isDefault) {
+                return 1;
+            }
+            return (left?.code ?? a).localeCompare(
+                right?.code ?? b
+            );
+        })[0];
+    }, [plans, currencies, currencyMap]);
+
+    const primaryCurrency = primaryCurrencyId
+        ? currencyMap.get(primaryCurrencyId)
+        : undefined;
+
+    const currencyScopePlans = useMemo(
+        () =>
+            primaryCurrencyId
+                ? plans.filter(
+                      plan =>
+                          plan.currencyId ===
+                          primaryCurrencyId
+                  )
+                : [],
+        [plans, primaryCurrencyId]
+    );
+
+    const hasOtherCurrencies =
+        currencyScopePlans.length < plans.length;
+
+    /** Target-amount totals for the summary cards' secondary values,
+     *  scoped to primaryCurrencyId only - never summed across
+     *  currencies. */
+    const amountSummary = useMemo(() => {
+        let totalTarget = 0;
+        let activeTarget = 0;
+        let completedTarget = 0;
+        let attentionTarget = 0;
+
+        for (const plan of currencyScopePlans) {
+            const target = plan.targetAmount ?? 0;
+            totalTarget += target;
+
+            if (plan.status === "ACTIVE") {
+                activeTarget += target;
+            }
+            if (plan.status === "COMPLETED") {
+                completedTarget += target;
+            }
+            if (attentionPlanIds.has(plan.id)) {
+                attentionTarget += target;
+            }
+        }
+
+        return {
+            totalTarget,
+            activeTarget,
+            completedTarget,
+            attentionTarget,
+        };
+    }, [currencyScopePlans, attentionPlanIds]);
+
+    const formatCardAmount = (amount: number) =>
+        primaryCurrency
+            ? formatMoneyValue(amount, primaryCurrency.code)
+            : "—";
 
     return (
         <div className="min-h-full bg-white">
@@ -212,41 +296,54 @@ export default function FinancialPlansPage() {
                     }
                 />
 
+                <div className="mt-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    <PlanSummaryCard
+                        title="Total Plans"
+                        count={statusCounts.ALL}
+                        amount={formatCardAmount(
+                            amountSummary.totalTarget
+                        )}
+                    />
+
+                    <PlanSummaryCard
+                        title="Active Plans"
+                        count={statusCounts.ACTIVE}
+                        amount={formatCardAmount(
+                            amountSummary.activeTarget
+                        )}
+                    />
+
+                    <PlanSummaryCard
+                        title="Needs Attention"
+                        count={attentionCount}
+                        amount={formatCardAmount(
+                            amountSummary.attentionTarget
+                        )}
+                        emphasis={attentionCount > 0}
+                    />
+
+                    <PlanSummaryCard
+                        title="Completed Plans"
+                        count={statusCounts.COMPLETED}
+                        amount={formatCardAmount(
+                            amountSummary.completedTarget
+                        )}
+                    />
+                </div>
+
+                {hasOtherCurrencies && (
+                    <p className="mt-2 text-xs text-slate-400">
+                        Showing totals in{" "}
+                        {primaryCurrency?.code ??
+                            "the default currency"}{" "}
+                        only — plans in other currencies
+                        are not included.
+                    </p>
+                )}
+
                 <section className="mt-8 rounded-2xl border border-slate-100 bg-white">
 
                     <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 px-5 py-4">
-                        <div className="flex items-center gap-1">
-                            {PLAN_STATUS_FILTERS.map(
-                                option => (
-                                    <button
-                                        key={option.value}
-                                        type="button"
-                                        onClick={() =>
-                                            setStatusFilter(
-                                                option.value
-                                            )
-                                        }
-                                        className={`h-8 rounded-lg px-3 text-xs font-medium transition-colors ${
-                                            statusFilter ===
-                                            option.value
-                                                ? "bg-slate-900 text-white"
-                                                : "text-slate-500 hover:bg-slate-100"
-                                        }`}
-                                    >
-                                        {option.label}
-                                        <span className="ml-1.5 text-[11px] opacity-70">
-                                            {
-                                                statusCounts[
-                                                    option
-                                                        .value
-                                                ]
-                                            }
-                                        </span>
-                                    </button>
-                                )
-                            )}
-                        </div>
-
                         <div className="flex items-center gap-3">
                             {attentionCount > 0 && (
                                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
@@ -258,22 +355,67 @@ export default function FinancialPlansPage() {
                                     attention
                                 </span>
                             )}
+                        </div>
 
-                            <div className="w-[280px]">
-                                <input
-                                    type="search"
-                                    value={search}
-                                    onChange={event =>
-                                        setSearch(
-                                            event
-                                                .target
-                                                .value
-                                        )
-                                    }
-                                    placeholder="Search financial plans..."
-                                    className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-slate-500"
-                                />
-                            </div>
+                        <div className="flex flex-wrap items-start justify-end gap-3">
+                            {isSearchOpen && (
+                                <div
+                                    className="
+                                        flex
+                                        h-11
+                                        w-[315px]
+                                        items-center
+                                        rounded-2xl
+                                        border
+                                        border-slate-200
+                                        bg-slate-50
+                                        px-4
+                                        transition-all
+                                        duration-200
+                                        focus-within:border-slate-300
+                                        focus-within:bg-white
+                                        focus-within:shadow-sm
+                                    "
+                                >
+                                    <input
+                                        type="search"
+                                        autoFocus
+                                        value={search}
+                                        onChange={event =>
+                                            setSearch(
+                                                event
+                                                    .target
+                                                    .value
+                                            )
+                                        }
+                                        placeholder="Search financial plans..."
+                                        className="
+                                            w-full
+                                            bg-transparent
+                                            text-sm
+                                            text-slate-700
+                                            outline-none
+                                            placeholder:text-slate-400
+                                        "
+                                    />
+                                </div>
+                            )}
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setIsSearchOpen(
+                                        open => !open
+                                    )
+                                }
+                                aria-label="Search financial plans"
+                                aria-expanded={
+                                    isSearchOpen
+                                }
+                                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 transition-all duration-200 hover:border-slate-300 hover:bg-white hover:text-slate-700"
+                            >
+                                <Search size={18} />
+                            </button>
                         </div>
                     </div>
 
@@ -310,12 +452,7 @@ export default function FinancialPlansPage() {
                         filteredPlans.length === 0 && (
                             <div className="flex min-h-[180px] items-center justify-center">
                                 <p className="text-sm text-slate-400">
-                                    {search.trim()
-                                        ? "No financial plans match your search."
-                                        : statusFilter ===
-                                            "ARCHIVED"
-                                          ? "No archived plans."
-                                          : `No ${statusFilter.toLowerCase()} plans — switch the filter to see the others.`}
+                                    No financial plans match your search.
                                 </p>
                             </div>
                         )}
@@ -434,6 +571,46 @@ export default function FinancialPlansPage() {
                     onSuccess={refreshAll}
                 />
 
+            </div>
+        </div>
+    );
+}
+
+/**
+ * Plan-count card with a smaller, secondary target-amount line
+ * underneath. StatCard (@/components/common) only supports one value,
+ * so this local variant covers the count + amount pairing without
+ * changing the shared component.
+ */
+function PlanSummaryCard({
+    title,
+    count,
+    amount,
+    emphasis = false,
+}: {
+    title: string;
+    count: number;
+    amount: string;
+    emphasis?: boolean;
+}) {
+    return (
+        <div className="rounded-xl border-transparent bg-white p-5 shadow-sm">
+            <div className="text-sm text-slate-500">
+                {title}
+            </div>
+
+            <div
+                className={`mt-3 text-3xl font-bold ${
+                    emphasis
+                        ? "text-amber-600"
+                        : "text-slate-900"
+                }`}
+            >
+                {count}
+            </div>
+
+            <div className="mt-1 text-sm font-normal text-slate-400">
+                {amount}
             </div>
         </div>
     );

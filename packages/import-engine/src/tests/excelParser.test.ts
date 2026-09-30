@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
 
 import {
+    classifyExcelReadError,
+    ExcelPasswordError,
     getExcelSheetNames,
     parseExcel,
 } from "../parser/excelParser";
@@ -397,5 +399,156 @@ describe("Excel header-row detection (metadata preamble before the real header)"
             "Row",
         ]);
         expect(document.rows).toHaveLength(0);
+    });
+});
+
+// Password-protected Excel support (see excelParser.ts's readWorkbook/
+// classifyExcelReadError for the full rationale). The installed
+// xlsx@0.18.5 (SheetJS Community Edition) build can only genuinely
+// DECRYPT the legacy BIFF (.xls) XOR-obfuscation scheme - confirmed by
+// reading its source (crypto_MakeXorDecryptor/
+// crypto_CreatePasswordVerifier_Method1 are fully implemented) - and
+// this same installed build's own XLSX.write() cannot produce such a
+// file either (verified: writing with bookType "biff8" and a password
+// silently produces an unencrypted file - there is no encoder,
+// consistent with there being no decrypt_agile/decrypt_std76 for the
+// modern .xlsx path). A byte-correct encrypted fixture can only be
+// hand-crafted by replicating that internal crypto algorithm outside
+// the library, which is disproportionate effort for a format no
+// current tool produces - so "correct password successfully decrypts"
+// is not exercised end-to-end here. What IS tested below, against the
+// real library:
+//   1. classifyExcelReadError's three-way classification, using the
+//      exact Error messages verified (by direct source inspection) to
+//      be the library's real, fixed error contract for a protected
+//      file.
+//   2. parseExcel/getExcelSheetNames continue to work completely
+//      unchanged for ordinary unprotected files, whether or not a
+//      password happens to be supplied (never required, never
+//      persisted anywhere in the returned data).
+describe("classifyExcelReadError", () => {
+    it('classifies "File is password-protected" with no password as "required"', () => {
+        const result = classifyExcelReadError(
+            new Error("File is password-protected"),
+            false
+        );
+
+        expect(result).toBeInstanceOf(
+            ExcelPasswordError
+        );
+        expect(result?.reason).toBe("required");
+    });
+
+    it('classifies "File is password-protected" recurring WITH a password as "unsupported" (never as a wrong password)', () => {
+        const result = classifyExcelReadError(
+            new Error("File is password-protected"),
+            true
+        );
+
+        expect(result?.reason).toBe("unsupported");
+    });
+
+    it('classifies "Password is incorrect" as "incorrect"', () => {
+        const result = classifyExcelReadError(
+            new Error("Password is incorrect"),
+            true
+        );
+
+        expect(result?.reason).toBe("incorrect");
+    });
+
+    it('classifies "Encryption scheme unsupported" as "unsupported"', () => {
+        const result = classifyExcelReadError(
+            new Error("Encryption scheme unsupported"),
+            true
+        );
+
+        expect(result?.reason).toBe("unsupported");
+    });
+
+    it("returns null for an unrelated error, leaving it to the caller to re-throw unchanged", () => {
+        const result = classifyExcelReadError(
+            new Error("Corrupted zip: missing central directory"),
+            false
+        );
+
+        expect(result).toBeNull();
+    });
+
+    it("never includes the password itself in the resulting error message", () => {
+        const result = classifyExcelReadError(
+            new Error("Password is incorrect"),
+            true
+        );
+
+        expect(result?.message).not.toContain(
+            "hunter2-super-secret"
+        );
+    });
+});
+
+describe("Excel password support - unprotected files are completely unaffected", () => {
+    it("parses an ordinary unprotected workbook exactly the same whether or not a password is supplied", () => {
+        const content = createWorkbook();
+
+        const withoutPassword = parseExcel(content, {
+            sheetName: "Bank Statement",
+        });
+
+        const withPassword = parseExcel(content, {
+            sheetName: "Bank Statement",
+            password: "never-needed",
+        });
+
+        expect(withPassword).toEqual(
+            withoutPassword
+        );
+    });
+
+    it("never leaks a supplied password into the parsed document", () => {
+        const content = createWorkbook();
+
+        const document = parseExcel(content, {
+            sheetName: "Bank Statement",
+            password: "hunter2-super-secret",
+        });
+
+        expect(
+            JSON.stringify(document)
+        ).not.toContain("hunter2-super-secret");
+    });
+
+    it("getExcelSheetNames is unaffected by an (unneeded) password on an unprotected workbook", () => {
+        const content = createWorkbook();
+
+        expect(
+            getExcelSheetNames(content, "never-needed")
+        ).toEqual(
+            getExcelSheetNames(content)
+        );
+    });
+
+    it("processExcel threads a password through without affecting an unprotected file's result", () => {
+        const content = createWorkbook();
+
+        const withoutPassword = processExcel(
+            content,
+            "Bank Statement",
+            "BANK_CSV"
+        );
+
+        const withPassword = processExcel(
+            content,
+            "Bank Statement",
+            "BANK_CSV",
+            "never-needed"
+        );
+
+        expect(withPassword.candidates).toEqual(
+            withoutPassword.candidates
+        );
+        expect(
+            JSON.stringify(withPassword)
+        ).not.toContain("never-needed");
     });
 });

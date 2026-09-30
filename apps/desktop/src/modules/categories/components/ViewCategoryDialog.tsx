@@ -1,3 +1,4 @@
+import { useDateFormatter } from "@/core/formatting";
 import {
     Dialog,
     DialogContent,
@@ -7,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 
 import { Category } from "../types";
+import { financeScopeLabel } from "../utils";
 
 interface ViewCategoryDialogProps {
     category: Category | null;
@@ -48,6 +50,7 @@ export function ViewCategoryDialog({
     open,
     onOpenChange,
 }: ViewCategoryDialogProps) {
+    const formatDate = useDateFormatter();
     if (!category) {
         return null;
     }
@@ -103,9 +106,7 @@ export function ViewCategoryDialog({
                             </div>
 
                             <div className="mt-2 text-sm font-semibold text-slate-900">
-                                {category.financeScope === "PERSONAL"
-                                    ? "Personal"
-                                    : "Business"}
+                                {financeScopeLabel(category.financeScope)}
                             </div>
                         </div>
 
@@ -144,12 +145,12 @@ export function ViewCategoryDialog({
 
                             <Detail
                                 label="Created"
-                                value={category.createdAt}
+                                value={formatDate(category.createdAt)}
                             />
 
                             <Detail
                                 label="Updated"
-                                value={category.updatedAt}
+                                value={formatDate(category.updatedAt)}
                             />
                         </div>
                     </div>
@@ -170,3 +171,4 @@ export function ViewCategoryDialog({
         </Dialog>
     );
 }
+

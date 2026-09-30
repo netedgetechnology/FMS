@@ -12,7 +12,7 @@ import TransactionsPage from "@/modules/transactions/pages/TransactionsPage";
 import { FinancialPlansPage } from "@/modules/financial-plans/pages";
 import { FinancialGoalsPage } from "@/modules/financial-goals/pages";
 import { BudgetsPage } from "@/modules/budgets/pages";
-import { ImportsPage } from "@/modules/imports/pages";
+import { ImportRulesPage, ImportsPage } from "@/modules/imports/pages";
 import ReconciliationPage from "@/modules/reconciliation/pages";
 import { DocumentsPage } from "@/modules/documents/pages/DocumentsPage";
 import SettingsPage from "@/modules/settings/pages/SettingsPage";
@@ -64,6 +64,11 @@ export default function AppRoutes() {
         <Route
           path="/imports"
           element={<ImportsPage />}
+        />
+
+        <Route
+          path="/imports/rules"
+          element={<ImportRulesPage />}
         />
 
         <Route

@@ -9,6 +9,11 @@ import {
     normalizeTransactionChannel,
 } from "./transactionChannelDetector";
 
+import {
+    parseBalance,
+    resolveCanonicalAmount,
+} from "./moneyNormalizer";
+
 function cleanText(value: unknown): string {
     if (
         value === null ||
@@ -102,115 +107,6 @@ function normalizeDate(
     ].join("-");
 }
 
-function normalizeAmount(
-    value: unknown
-): number | null {
-    const raw = cleanText(value);
-
-    if (!raw) {
-        return null;
-    }
-
-    let normalized = raw
-        .replace(/[₹$€£]/g, "")
-        .replace(/\s/g, "")
-        .trim();
-
-    const isParenthesized =
-        normalized.startsWith("(") &&
-        normalized.endsWith(")");
-
-    if (isParenthesized) {
-        normalized = normalized.slice(
-            1,
-            -1
-        );
-    }
-
-    normalized = normalized
-        .replace(/,/g, "");
-
-    if (!normalized) {
-        return null;
-    }
-
-    const amount =
-        Number(normalized);
-
-    if (!Number.isFinite(amount)) {
-        return null;
-    }
-
-    return isParenthesized
-        ? -Math.abs(amount)
-        : amount;
-}
-
-function normalizeType(
-    value: unknown
-): "income" | "expense" | "transfer" | null {
-    const raw = cleanText(value)
-        .toLowerCase();
-
-    if (!raw) {
-        return null;
-    }
-
-    if (
-        [
-            "income",
-            "credit",
-            "cr",
-            "deposit",
-            "received",
-            "receipt",
-        ].includes(raw)
-    ) {
-        return "income";
-    }
-
-    if (
-        [
-            "expense",
-            "debit",
-            "dr",
-            "withdrawal",
-            "payment",
-            "paid",
-        ].includes(raw)
-    ) {
-        return "expense";
-    }
-
-    if (
-        [
-            "transfer",
-            "trf",
-            "fund transfer",
-            "funds transfer",
-        ].includes(raw)
-    ) {
-        return "transfer";
-    }
-
-    return null;
-}
-
-function normalizeTypeFromAmount(
-    amount: number | null
-): "income" | "expense" | null {
-    if (
-        amount === null ||
-        amount === 0
-    ) {
-        return null;
-    }
-
-    return amount > 0
-        ? "income"
-        : "expense";
-}
-
 function createHeaderIndex(
     headers: string[]
 ): Map<string, number> {
@@ -277,19 +173,14 @@ function buildRawData(
     return rawData;
 }
 
-// BANK_EXCEL/BANK_PDF identify an Excel- or PDF-sourced bank statement -
-// each is otherwise treated exactly like BANK_CSV by every heuristic
-// below (resolveAmountAndType only ever special-cases the three
-// CREDIT_CARD_* values; a bank statement's shape doesn't depend on
-// which file format carried it), so no new branch is needed anywhere in
-// this normalizer for either. CREDIT_CARD_PDF/CREDIT_CARD_EXCEL are the
-// PDF and Excel counterparts of CREDIT_CARD_CSV for the same reason -
-// the credit-card sign convention is a property of the data, not the
-// file format, so they take the exact same branch as CREDIT_CARD_CSV
-// below rather than a parallel one. This package has no PDF- or
-// Excel-specific (let alone bank/provider-specific) parsing logic for
-// any of these values - they all flow through the same universal,
-// bank-agnostic extraction (see parser/pdfParser.ts, parser/excelParser.ts).
+// Identifies the source format and account kind. It never changes how a
+// row's amount/direction is resolved - that is a property of the data
+// (DR/CR markers, signs, which column a value sits in), handled for every
+// value below by the shared normalizer/moneyNormalizer.ts layer. This
+// package has no PDF- or Excel-specific (let alone bank/provider-specific)
+// parsing logic for any of these values - they all flow through the same
+// universal, bank-agnostic extraction (see parser/pdfParser.ts,
+// parser/excelParser.ts).
 export type CsvImportType =
     | "BANK_CSV"
     | "BANK_EXCEL"
@@ -298,11 +189,16 @@ export type CsvImportType =
     | "CREDIT_CARD_PDF"
     | "CREDIT_CARD_EXCEL";
 
+// Every Amount / Debit+Credit / Withdrawal+Deposit / DR-CR / signed
+// representation is resolved by the one shared normalization layer
+// (normalizer/moneyNormalizer.ts), so CSV, Excel and PDF imports can never
+// disagree about what a given cell means. The import type does not change
+// the sign convention: a DR/CR marker, an explicit sign, or the column a
+// value sits in is what decides direction.
 function resolveAmountAndType(
     row: CsvRow,
     mapping: CsvColumnMapping,
-    headerIndex: Map<string, number>,
-    importType: CsvImportType
+    headerIndex: Map<string, number>
 ): {
     amount: number | null;
     type:
@@ -311,99 +207,42 @@ function resolveAmountAndType(
         | "transfer"
         | null;
 } {
-    const explicitAmount =
-        normalizeAmount(
-            getValue(
+    const resolved =
+        resolveCanonicalAmount({
+            amount: getValue(
                 row,
                 mapping,
                 "amount",
                 headerIndex
-            )
-        );
-
-    const debit =
-        normalizeAmount(
-            getValue(
+            ),
+            debit: getValue(
                 row,
                 mapping,
                 "debit",
                 headerIndex
-            )
-        );
-
-    const credit =
-        normalizeAmount(
-            getValue(
+            ),
+            credit: getValue(
                 row,
                 mapping,
                 "credit",
                 headerIndex
-            )
-        );
-
-    const explicitType =
-        normalizeType(
-            getValue(
+            ),
+            typeText: getValue(
                 row,
                 mapping,
                 "type",
                 headerIndex
-            )
-        );
-
-    // When separate Debit/Credit columns are available, they are the
-    // authoritative transaction amounts. Do NOT prefer a generic
-    // "Amount" column because bank statements often use it for the
-    // running balance.
-    if (
-        debit !== null &&
-        debit !== 0
-    ) {
-        return {
-            amount: Math.abs(debit),
-            type: explicitType ?? "expense",
-        };
-    }
-
-    if (
-        credit !== null &&
-        credit !== 0
-    ) {
-        return {
-            amount: Math.abs(credit),
-            type: explicitType ?? "income",
-        };
-    }
-
-    // Fall back to Amount only when no Debit/Credit value exists.
-    if (explicitAmount !== null) {
-        return {
-            amount: Math.abs(
-                explicitAmount
             ),
-            type:
-                explicitType ??
-                (
-                    importType === "CREDIT_CARD_CSV" ||
-                    importType === "CREDIT_CARD_PDF" ||
-                    importType === "CREDIT_CARD_EXCEL"
-                        ? (
-                            explicitAmount < 0
-                                ? "expense"
-                                : explicitAmount > 0
-                                    ? "income"
-                                    : null
-                        )
-                        : normalizeTypeFromAmount(
-                            explicitAmount
-                        )
+            hasDebitCreditColumns:
+                Boolean(
+                    mapping.debit &&
+                        mapping.credit
                 ),
-        };
-    }
+        });
 
     return {
-        amount: null,
-        type: explicitType,
+        amount: resolved.amount,
+        type: resolved.type,
     };
 }
 
@@ -411,7 +250,8 @@ export function normalizeCsvRows(
     rows: CsvRow[],
     mapping: CsvColumnMapping,
     headers: string[],
-    importType: CsvImportType = "BANK_CSV"
+    // Kept for API stability; see CsvImportType.
+    _importType: CsvImportType = "BANK_CSV"
 ): NormalizedTransactionCandidate[] {
     const headerIndex =
         createHeaderIndex(headers);
@@ -453,12 +293,11 @@ export function normalizeCsvRows(
             resolveAmountAndType(
                 row,
                 mapping,
-                headerIndex,
-                importType
+                headerIndex
             );
 
         const balance =
-            normalizeAmount(
+            parseBalance(
                 getValue(
                     row,
                     mapping,

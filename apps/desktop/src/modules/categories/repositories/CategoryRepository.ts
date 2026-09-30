@@ -1,7 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
+
 import { Repository } from "@/core/database/engine/Repository";
 
 import {
     Category,
+    FinanceScope,
     UpdateCategoryRequest,
 } from "../types";
 
@@ -164,6 +167,39 @@ export class CategoryRepository extends Repository {
         );
     }
 
+    // Inserts many new categories inside ONE database transaction (a
+    // dedicated Rust command - see src-tauri/src/category_import.rs for
+    // why: execute()/select() each check out their own pooled connection,
+    // so a TypeScript BEGIN/COMMIT can't guarantee atomicity). Any
+    // failure rolls back every insert. Never updates or deletes an
+    // existing category: a name that already exists (case-insensitive,
+    // whitespace-normalized) is skipped and counted instead.
+    async createManyAtomic(
+        categories: readonly Category[]
+    ): Promise<{ inserted: number; skippedDuplicates: number }> {
+        return await invoke<{
+            inserted: number;
+            skippedDuplicates: number;
+        }>("create_categories_atomic", {
+            request: {
+                categories: categories.map(category => ({
+                    id: category.id,
+                    parentId: category.parentId,
+                    name: category.name,
+                    categoryType: category.categoryType,
+                    financeScope: category.financeScope,
+                    businessEntityId: category.businessEntityId,
+                    description: category.description,
+                    isActive: category.isActive,
+                    createdAt: category.createdAt,
+                    updatedAt: category.updatedAt,
+                })),
+            },
+        });
+    }
+
+    // Category details only - finance_scope is managed solely from the
+    // Scopes screen (updateScopes), so Edit never changes it.
     async update(
         request: UpdateCategoryRequest
     ): Promise<void> {
@@ -175,7 +211,6 @@ export class CategoryRepository extends Repository {
                 parent_id = ?,
                 name = ?,
                 category_type = ?,
-                finance_scope = ?,
                 business_entity_id = ?,
                 description = ?,
                 is_active = ?,
@@ -187,12 +222,41 @@ export class CategoryRepository extends Repository {
                 request.parentId ?? null,
                 request.name,
                 request.categoryType,
-                request.financeScope,
                 request.businessEntityId ?? null,
                 request.description ?? null,
                 request.isActive ? 1 : 0,
                 request.id,
             ]
+        );
+    }
+
+    // Scopes screen "Save Changes": sets each given category's own
+    // finance_scope (and updated_at) in ONE statement - SQLite applies a
+    // single UPDATE atomically, so either every change lands or none does.
+    // The changes travel as one JSON array bind (json_each), so there's no
+    // bound-parameter limit however many categories changed. No other
+    // column is touched; deleted categories are never updated.
+    async updateScopes(
+        changes: readonly { id: string; financeScope: FinanceScope }[]
+    ): Promise<void> {
+
+        await this.execute(
+            `
+            UPDATE categories
+            SET
+                finance_scope = (
+                    SELECT json_extract(change.value, '$.financeScope')
+                    FROM json_each(?1) AS change
+                    WHERE json_extract(change.value, '$.id') = categories.id
+                ),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (
+                SELECT json_extract(change.value, '$.id')
+                FROM json_each(?1) AS change
+            )
+              AND deleted_at IS NULL
+            `,
+            [JSON.stringify(changes)]
         );
     }
 

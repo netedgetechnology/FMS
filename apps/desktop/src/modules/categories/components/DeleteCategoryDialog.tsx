@@ -12,6 +12,8 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+import { getErrorMessage } from "@/core/errors";
+
 import { CategoryService } from "../services";
 import { Category } from "../types";
 
@@ -37,7 +39,7 @@ export function DeleteCategoryDialog({
     async function handleDelete() {
         const categoryId = category?.id;
 
-        if (!categoryId) {
+        if (!categoryId || loading) {
             return;
         }
 
@@ -55,9 +57,10 @@ export function DeleteCategoryDialog({
             console.error("Failed to delete category:", error);
 
             toast.error(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to delete category. Please try again."
+                getErrorMessage(
+                    error,
+                    "Failed to delete category. Please try again."
+                )
             );
         } finally {
             setLoading(false);

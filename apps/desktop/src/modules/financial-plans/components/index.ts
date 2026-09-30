@@ -7,3 +7,4 @@ export * from "./ArchiveFinancialPlanDialog";
 export * from "./ViewFinancialPlanDialog";
 export * from "./PlanComponentForm";
 export * from "./ManagePlanComponentsDialog";
+export * from "./DeletePlanComponentDialog";

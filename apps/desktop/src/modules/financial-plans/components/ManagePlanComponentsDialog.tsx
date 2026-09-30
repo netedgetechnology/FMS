@@ -6,7 +6,6 @@ import {
     ChevronUp,
     Pencil,
     Plus,
-    Trash2,
 } from "lucide-react";
 
 import {
@@ -32,6 +31,10 @@ import type {
     PlanComponentRole,
 } from "../types";
 
+import {
+    DeletePlanComponentDialog,
+    getPlanComponentDisplayTitle,
+} from "./DeletePlanComponentDialog";
 import { PlanComponentForm } from "./PlanComponentForm";
 
 export interface ManagePlanComponentsDialogProps {
@@ -139,88 +142,6 @@ export function ManagePlanComponentsDialog({
                 </DialogHeader>
 
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto border-t border-slate-100 px-7 py-5">
-                    {loading && (
-                        <p className="text-sm text-slate-400">
-                            Loading components...
-                        </p>
-                    )}
-
-                    {!loading &&
-                        components.length === 0 &&
-                        !adding && (
-                            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-5 py-8 text-center">
-                                <p className="text-sm text-slate-500">
-                                    No components yet.
-                                </p>
-                            </div>
-                        )}
-
-                    {!loading &&
-                        components.length > 0 && (
-                            <ul className="space-y-2">
-                                {components.map(
-                                    (
-                                        component,
-                                        index
-                                    ) => (
-                                        <ComponentRow
-                                            key={
-                                                component.id
-                                            }
-                                            plan={plan}
-                                            component={
-                                                component
-                                            }
-                                            index={
-                                                index
-                                            }
-                                            total={
-                                                components.length
-                                            }
-                                            busy={busy}
-                                            editing={
-                                                editingId ===
-                                                component.id
-                                            }
-                                            onEdit={() =>
-                                                setEditingId(
-                                                    prev =>
-                                                        prev ===
-                                                        component.id
-                                                            ? null
-                                                            : component.id
-                                                )
-                                            }
-                                            onMove={move}
-                                            onSaved={async () => {
-                                                setEditingId(
-                                                    null
-                                                );
-                                                await refresh();
-                                            }}
-                                            onToggleActive={() =>
-                                                withBusy(
-                                                    () =>
-                                                        service.setActive(
-                                                            component.id,
-                                                            !component.isActive
-                                                        )
-                                                )
-                                            }
-                                            onDelete={() =>
-                                                withBusy(
-                                                    () =>
-                                                        service.delete(
-                                                            component.id
-                                                        )
-                                                )
-                                            }
-                                        />
-                                    )
-                                )}
-                            </ul>
-                        )}
-
                     {adding ? (
                         <PlanComponentForm
                             plan={plan}
@@ -245,10 +166,118 @@ export function ManagePlanComponentsDialog({
                             Add Component
                         </button>
                     )}
+
+                    <div className="space-y-3 border-t border-slate-100 pt-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400">
+                            Existing Components
+                        </p>
+
+                        {loading && (
+                            <p className="text-sm text-slate-400">
+                                Loading components...
+                            </p>
+                        )}
+
+                        {!loading &&
+                            components.length === 0 &&
+                            !adding && (
+                                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-5 py-8 text-center">
+                                    <p className="text-sm text-slate-500">
+                                        No components yet.
+                                    </p>
+                                </div>
+                            )}
+
+                        {!loading &&
+                            components.length > 0 && (
+                                <ul className="space-y-2">
+                                    {components.map(
+                                        (
+                                            component,
+                                            index
+                                        ) => (
+                                            <ComponentRow
+                                                key={
+                                                    component.id
+                                                }
+                                                plan={plan}
+                                                component={
+                                                    component
+                                                }
+                                                index={
+                                                    index
+                                                }
+                                                total={
+                                                    components.length
+                                                }
+                                                busy={busy}
+                                                editing={
+                                                    editingId ===
+                                                    component.id
+                                                }
+                                                onEdit={() =>
+                                                    setEditingId(
+                                                        prev =>
+                                                            prev ===
+                                                            component.id
+                                                                ? null
+                                                                : component.id
+                                                    )
+                                                }
+                                                onMove={move}
+                                                onSaved={async () => {
+                                                    setEditingId(
+                                                        null
+                                                    );
+                                                    await refresh();
+                                                }}
+                                                onToggleActive={() =>
+                                                    withBusy(
+                                                        () =>
+                                                            service.setActive(
+                                                                component.id,
+                                                                !component.isActive
+                                                            )
+                                                    )
+                                                }
+                                                onDeleted={
+                                                    refresh
+                                                }
+                                            />
+                                        )
+                                    )}
+                                </ul>
+                            )}
+                    </div>
                 </div>
             </DialogContent>
         </Dialog>
     );
+}
+
+/**
+ * Resolves what to persist for a component's label when the edit form is
+ * saved. When the field was only pre-filled from the source-name fallback
+ * (no explicit label was stored) and the user left it untouched, this keeps
+ * persisting `null` instead of writing the source name back as a redundant
+ * explicit label. Exported so this is unit testable without rendering the
+ * form (see DeletePlanComponentDialog.test.ts for the same convention).
+ */
+export function resolveEditedComponentLabel(params: {
+    enteredLabel: string;
+    initialLabel: string;
+    hasExplicitLabel: boolean;
+}): string | null {
+    const trimmed = params.enteredLabel.trim();
+
+    if (
+        !params.hasExplicitLabel &&
+        trimmed === params.initialLabel.trim()
+    ) {
+        return null;
+    }
+
+    return trimmed || null;
 }
 
 interface ComponentRowProps {
@@ -265,7 +294,7 @@ interface ComponentRowProps {
     ) => void;
     onSaved: () => Promise<void> | void;
     onToggleActive: () => void;
-    onDelete: () => void;
+    onDeleted: () => Promise<void> | void;
 }
 
 function ComponentRow({
@@ -279,12 +308,9 @@ function ComponentRow({
     onMove,
     onSaved,
     onToggleActive,
-    onDelete,
+    onDeleted,
 }: ComponentRowProps) {
-    const title =
-        component.label ||
-        component.sourceName ||
-        "Unknown source";
+    const title = getPlanComponentDisplayTitle(component);
 
     return (
         <li className="rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -385,15 +411,11 @@ function ComponentRow({
                         <Pencil size={13} />
                     </button>
 
-                    <button
-                        type="button"
-                        onClick={onDelete}
+                    <DeletePlanComponentDialog
+                        component={component}
                         disabled={busy}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                        aria-label="Delete component"
-                    >
-                        <Trash2 size={13} />
-                    </button>
+                        onSuccess={onDeleted}
+                    />
                 </div>
             </div>
 
@@ -427,9 +449,17 @@ function EditComponentRow({
     const [role, setRole] = useState<PlanComponentRole>(
         component.role
     );
-    const [label, setLabel] = useState(
-        component.label ?? ""
-    );
+
+    // When the component has no explicit label, the list falls
+    // back to displaying the source name (getPlanComponentDisplayTitle).
+    // Pre-fill the field with that same effective value so the
+    // form isn't confusingly blank, but track whether it's just
+    // a fallback so an unchanged save doesn't turn it into a
+    // persisted, redundant label.
+    const initialLabel = getPlanComponentDisplayTitle(component);
+    const hasExplicitLabel = Boolean(component.label);
+
+    const [label, setLabel] = useState(initialLabel);
     const [targetAmount, setTargetAmount] = useState(
         component.targetAmount !== null
             ? String(component.targetAmount)
@@ -448,11 +478,17 @@ function EditComponentRow({
         setSaving(true);
 
         try {
+            const nextLabel = resolveEditedComponentLabel({
+                enteredLabel: label,
+                initialLabel,
+                hasExplicitLabel,
+            });
+
             await new FinancialPlanComponentService().update(
                 {
                     id: component.id,
                     role,
-                    label: label.trim() || null,
+                    label: nextLabel,
                     targetAmount:
                         targetsAllowed &&
                         targetAmount.trim() !== ""

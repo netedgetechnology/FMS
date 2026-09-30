@@ -18,6 +18,10 @@ interface EMI {
     amount: number;
     dueDate: string;
     dueIn: number;
+    /** Derived at read time, never persisted - a PAID EMI never appears here overdue. */
+    isOverdue?: boolean;
+    /** Whole calendar days past due; 0/undefined when not overdue. */
+    daysOverdue?: number;
     progress: number;
 }
 
@@ -70,7 +74,13 @@ function EMIRow({
 }) {
     const formatDate = useDateFormatter();
     const Icon = getIcon(emi.type);
-    const badge = getBadge(emi.dueIn);
+    // An overdue EMI is always the most urgent state, regardless of
+    // how many days late - same red treatment getBadge already uses
+    // for "due very soon", just with an honest label instead of the
+    // old "Due in 0d" (which silently hid lateness - Loans Phase 5).
+    const badge = emi.isOverdue
+        ? { bg: "bg-red-50", text: "text-red-600" }
+        : getBadge(emi.dueIn);
 
     return (
         <div className="border-b border-slate-100 py-3 last:border-b-0">
@@ -102,7 +112,9 @@ function EMIRow({
                     <span
                         className={`rounded-full px-3 py-1 text-small font-medium ${badge.bg} ${badge.text}`}
                     >
-                        Due in {emi.dueIn}d
+                        {emi.isOverdue
+                            ? `Overdue by ${emi.daysOverdue ?? 0}d`
+                            : `Due in ${emi.dueIn}d`}
                     </span>
 
                     <span className="mt-2 text-small text-slate-500">
@@ -125,7 +137,9 @@ function EMIRow({
                 </div>
 
                 <div className="mt-2 flex justify-end text-small text-slate-400">
-                    {30 - emi.dueIn} / 30 Days
+                    {emi.isOverdue
+                        ? "Payment overdue"
+                        : `${30 - emi.dueIn} / 30 Days`}
                 </div>
             </div>
         </div>

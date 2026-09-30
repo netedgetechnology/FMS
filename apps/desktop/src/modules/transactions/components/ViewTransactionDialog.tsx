@@ -1,3 +1,4 @@
+import { balanceSide } from "@/core/accounting/transferClassification";
 import {
     signedTransactionAmount,
     useDateFormatter,
@@ -103,7 +104,8 @@ export function ViewTransactionDialog({
                             value={formatAmount(
                                 signedTransactionAmount(
                                     transaction.amount,
-                                    transaction.type
+                                    balanceSide(transaction) ??
+                                        transaction.type
                                 )
                             )}
                         />
@@ -124,7 +126,15 @@ export function ViewTransactionDialog({
 
                         <Detail
                             label="Transaction Type"
-                            value={formatType(transaction.type)}
+                            value={
+                                formatType(transaction.type) +
+                                (transaction.type === "transfer" &&
+                                transaction.transferDirection
+                                    ? transaction.transferDirection === "OUT"
+                                        ? " (Out)"
+                                        : " (In)"
+                                    : "")
+                            }
                         />
 
                         <Detail

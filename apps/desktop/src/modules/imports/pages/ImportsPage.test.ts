@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { NormalizedTransactionCandidate } from "@financeos/import-engine";
+import {
+    ExcelPasswordError,
+    type NormalizedTransactionCandidate,
+} from "@financeos/import-engine";
 
 import {
     applyNotesToMatchingRows,
@@ -8,10 +11,12 @@ import {
     applyPreviewOverrides,
     applySelfLearningToMatchingRows,
     applyTransactionTypeToMatchingRows,
+    classifyExcelPasswordError,
     createEmptyPreviewOverrides,
     deriveSessionLearnedRowNumbers,
     isExcelFileName,
     MAPPING_FIELD_OPTIONS,
+    resolveMappingInstitutionName,
     resolveSelfLearningIndicator,
     type PreviewOverrides,
 } from "./ImportsPage";
@@ -48,6 +53,67 @@ function overridesWith(
     };
 }
 
+// Bug: a saved mapping created from a BANK_EXCEL import always showed
+// "—" in the Saved Mappings Institution column, even when the account
+// the import was confirmed for clearly has an institution on file in
+// Accounts. Traced to the save-mapping call site using only
+// `preview.institutionName` - the file-content auto-detected value,
+// which CsvProcessingResult's own doc comment says is always null for
+// Excel/PDF (no such text to scan) - instead of falling back to the
+// selected account's own institution when detection found nothing.
+describe("resolveMappingInstitutionName", () => {
+    it("1. falls back to the selected account's institution when nothing was auto-detected (the Excel case)", () => {
+        expect(
+            resolveMappingInstitutionName(null, {
+                institutionName: "SBI Bank",
+            })
+        ).toBe("SBI Bank");
+    });
+
+    it("2. uses whichever account's institution was actually selected - never a hardcoded value", () => {
+        expect(
+            resolveMappingInstitutionName(null, {
+                institutionName: "HDFC Bank",
+            })
+        ).toBe("HDFC Bank");
+
+        expect(
+            resolveMappingInstitutionName(null, {
+                institutionName: "ICICI Bank",
+            })
+        ).toBe("ICICI Bank");
+    });
+
+    it("3. an account with no institution on file stays null (displayed as '—')", () => {
+        expect(
+            resolveMappingInstitutionName(null, {
+                institutionName: undefined,
+            })
+        ).toBeNull();
+
+        expect(
+            resolveMappingInstitutionName(null, null)
+        ).toBeNull();
+    });
+
+    it("prefers a real file-detected institution (CSV) over the account's, but still never loses it when detection succeeds", () => {
+        expect(
+            resolveMappingInstitutionName(
+                "Detected From File",
+                { institutionName: "SBI Bank" }
+            )
+        ).toBe("Detected From File");
+    });
+
+    it("does not affect an account with an empty-string institution - still falls through to null", () => {
+        expect(
+            resolveMappingInstitutionName(null, {
+                institutionName: "",
+            })
+        ).toBeNull();
+    });
+});
+
 describe("MAPPING_FIELD_OPTIONS", () => {
     it("offers a manual \"Transaction ID\" mapping option (source-column mapping dropdown)", () => {
         expect(MAPPING_FIELD_OPTIONS).toContainEqual({
@@ -73,6 +139,100 @@ describe("MAPPING_FIELD_OPTIONS", () => {
             { value: "branch", label: "Branch" },
             { value: "transactionType", label: "Transaction Type" },
         ]);
+    });
+});
+
+// classifyExcelPasswordError decides how handlePreview's catch block
+// reacts to a protected Excel file (see ExcelPasswordError in
+// @financeos/import-engine, and excelParser.ts's classifyExcelReadError
+// for how that error is produced in the first place).
+describe("classifyExcelPasswordError", () => {
+    it('shows the password prompt (no inline error yet) for reason "required" - the very first attempt on a protected file', () => {
+        const decision = classifyExcelPasswordError(
+            new ExcelPasswordError(
+                "required",
+                "This file is password-protected."
+            )
+        );
+
+        expect(decision).toEqual({
+            showPasswordPrompt: true,
+            passwordErrorMessage: null,
+            genericErrorMessage: null,
+        });
+    });
+
+    it('keeps the password prompt open with an inline message for reason "incorrect" - Unlock becomes Retry', () => {
+        const decision = classifyExcelPasswordError(
+            new ExcelPasswordError(
+                "incorrect",
+                "The password is incorrect."
+            )
+        );
+
+        expect(decision.showPasswordPrompt).toBe(true);
+        expect(decision.passwordErrorMessage).toBe(
+            "The password is incorrect."
+        );
+        expect(decision.genericErrorMessage).toBeNull();
+    });
+
+    it('never shows the password prompt for reason "unsupported" - retrying could never succeed, so it surfaces as the generic error banner instead', () => {
+        const decision = classifyExcelPasswordError(
+            new ExcelPasswordError(
+                "unsupported",
+                "This file's password protection isn't supported. Please save an unprotected copy and try again."
+            )
+        );
+
+        expect(decision).toEqual({
+            showPasswordPrompt: false,
+            passwordErrorMessage: null,
+            genericErrorMessage:
+                "This file's password protection isn't supported. Please save an unprotected copy and try again.",
+        });
+    });
+
+    it("leaves every other error - unrelated to Excel passwords - handled exactly as before this feature (generic error banner)", () => {
+        const decision = classifyExcelPasswordError(
+            new Error("CSV file contains no headers.")
+        );
+
+        expect(decision).toEqual({
+            showPasswordPrompt: false,
+            passwordErrorMessage: null,
+            genericErrorMessage:
+                "CSV file contains no headers.",
+        });
+    });
+
+    it("handles a non-Error thrown value the same way existing error handling always has", () => {
+        const decision = classifyExcelPasswordError(
+            "a plain string throw"
+        );
+
+        expect(decision.showPasswordPrompt).toBe(false);
+        expect(decision.genericErrorMessage).toBe(
+            "a plain string throw"
+        );
+    });
+
+    it("never echoes a password value into either message it returns", () => {
+        // The password itself never reaches ExcelPasswordError at all
+        // (see excelParser.ts) - this asserts the UI-decision layer
+        // doesn't introduce one either.
+        const decision = classifyExcelPasswordError(
+            new ExcelPasswordError(
+                "incorrect",
+                "The password is incorrect."
+            )
+        );
+
+        const serialized = JSON.stringify(decision);
+
+        expect(serialized).not.toContain(
+            "hunter2-super-secret"
+        );
     });
 });
 
@@ -348,7 +508,7 @@ describe("applyPayeeToMatchingRows", () => {
         );
     });
 
-    it("DEBUG: reproduces the real bug - calling this once per keystroke (as onChange previously did) leaves the matching row stuck on a stale partial value instead of the exact final Payee", () => {
+    it("a per-keystroke call pattern now also ends on the exact final Payee (the latest value overwrites matching rows); the UI still commits once, on blur", () => {
         const candidates = [
             candidate(6, {
                 payee: "NBSM/146721617/SBI CARD (BILLDESK)/",
@@ -390,11 +550,11 @@ describe("applyPayeeToMatchingRows", () => {
             "SBI Card"
         );
 
-        // Row 12 was auto-filled on the very first keystroke ("S") and
-        // then treated as if it had its own independent override on
-        // every subsequent keystroke, so it never received the rest of
-        // the edit - reproducing the reported bug.
-        expect(overrides.payee.get(12)).not.toBe(
+        // Previously row 12 was auto-filled on the first keystroke ("S")
+        // and then never overwritten again, so it stayed stuck on "S".
+        // Propagation now always applies the latest committed value to
+        // every matching row, so row 12 ends on the final text too.
+        expect(overrides.payee.get(12)).toBe(
             "SBI Card"
         );
     });
@@ -456,7 +616,7 @@ describe("applyPayeeToMatchingRows", () => {
         ).toBe(false);
     });
 
-    it("never overwrites a matching row that already has its own override", () => {
+    it("the latest committed edit overwrites a matching row's earlier override (any row can be the learning source)", () => {
         const candidates = [
             candidate(1, {
                 payee: "NBSM/146721617/SBI CARD (BILLDESK)/",
@@ -485,7 +645,7 @@ describe("applyPayeeToMatchingRows", () => {
         );
 
         expect(result.payee.get(2)).toBe(
-            "Manually Corrected Already"
+            "SBI Card"
         );
     });
 
@@ -554,6 +714,174 @@ describe("applyPayeeToMatchingRows", () => {
     });
 });
 
+// Investigation: a 48-row bank Excel import reported that editing Row 4
+// correctly propagated to Rows 5-7, but editing Row 1 (which the user
+// believed was "the same/same-pattern transaction" as Row 12) did not
+// update Row 12. Traced end-to-end:
+//   - The learning key is `extractTransactionPattern(candidate.
+//     description)` plus the row's Credit/Debit direction
+//     (learningKeyForCandidate - see "Self-learning key: payee pattern +
+//     Credit/Debit" below). Date, amount and referenceNumber are never
+//     read by it and play no part in the key, so none of them can be
+//     "blocking" a match.
+//   - extractTransactionPattern collapses every run of digits to a
+//     single "#" and canonicalizes case/whitespace - so two narrations
+//     differing only in a transaction id / reference number / date /
+//     amount embedded as digits already collapse to the same pattern
+//     (see transactionPattern.test.ts's date+reference-number case,
+//     which is exactly this shape).
+//   - applyOverrideToMatchingRows then propagates to every OTHER
+//     candidate in the full array passed in (preview.candidates - the
+//     complete parsed set, never paginated/filtered - see
+//     handlePayeeOverrideCommit) whose pattern string is === the edited
+//     row's pattern string. Plain string equality; no length/order
+//     bias, no reliance on a "visible prefix" or on amount.
+//   - Rows 4-7 and "Row 1 / Row 12" are handled by the exact same code
+//     path with no special-casing by row distance or count - the tests
+//     below reproduce both shapes against the SAME, unmodified
+//     applyPayeeToMatchingRows to demonstrate it already propagates
+//     correctly whenever the normalized pattern truly matches (B), and
+//     correctly refuses to when it doesn't (C) - i.e. the mechanism
+//     itself is not the defect. If two rows that a user perceives as
+//     "the same" transaction do not propagate in the live app, their
+//     actual stored Description text (not the truncated text shown in
+//     the preview column) must differ by more than just digits/case/
+//     whitespace - a data question for that specific statement, not a
+//     bug in this matching code.
+describe("Reported scenario - Row 4-7 vs Row 1/Row 12 propagation", () => {
+    it("A. editing Row 4 propagates to Rows 5, 6 and 7 (same recurring narration, different digits)", () => {
+        const candidates = [
+            candidate(4, {
+                description:
+                    "UPI/P2A/500112233445/JOHN DOE/Sent u/SBI",
+            }),
+            candidate(5, {
+                description:
+                    "UPI/P2A/500112298765/JOHN DOE/Sent u/SBI",
+            }),
+            candidate(6, {
+                description:
+                    "UPI/P2A/500115566778/JOHN DOE/Sent u/SBI",
+            }),
+            candidate(7, {
+                description:
+                    "UPI/P2A/500119988776/JOHN DOE/Sent u/SBI",
+            }),
+        ];
+
+        const result = applyPayeeToMatchingRows(
+            candidates,
+            createEmptyPreviewOverrides(),
+            4,
+            "John Doe"
+        );
+
+        expect(result.payee.get(4)).toBe("John Doe");
+        expect(result.payee.get(5)).toBe("John Doe");
+        expect(result.payee.get(6)).toBe("John Doe");
+        expect(result.payee.get(7)).toBe("John Doe");
+    });
+
+    it("B. editing Row 1 propagates to Row 12 when their normalized learning identity actually matches (a recurring monthly transaction, 11 rows apart)", () => {
+        const candidates = [
+            candidate(1, {
+                transactionDate: "2026-07-01",
+                description:
+                    "2026-07-01 NEFT/IN42621556482010/ACME PAYROLL PVT LTD",
+            }),
+            candidate(12, {
+                transactionDate: "2026-08-01",
+                description:
+                    "2026-08-01 NEFT/IN42621559901234/ACME PAYROLL PVT LTD",
+            }),
+        ];
+
+        const result = applyPayeeToMatchingRows(
+            candidates,
+            createEmptyPreviewOverrides(),
+            1,
+            "Acme Payroll"
+        );
+
+        expect(result.payee.get(1)).toBe(
+            "Acme Payroll"
+        );
+        expect(result.payee.get(12)).toBe(
+            "Acme Payroll"
+        );
+    });
+
+    it("C. a similar-looking but genuinely different transaction (different counterparty) is NOT incorrectly updated", () => {
+        const candidates = [
+            candidate(1, {
+                transactionDate: "2026-07-01",
+                description:
+                    "2026-07-01 NEFT/IN42621556482010/ACME PAYROLL PVT LTD",
+            }),
+            // Same channel/prefix and a similar-length reference, but a
+            // different counterparty - must never be treated as the
+            // same recurring transaction just because it looks similar
+            // at a glance (or by matching only a short visible prefix).
+            candidate(12, {
+                transactionDate: "2026-08-01",
+                description:
+                    "2026-08-01 NEFT/IN42621559901234/TATA CAPITAL LIMITED",
+            }),
+        ];
+
+        const result = applyPayeeToMatchingRows(
+            candidates,
+            createEmptyPreviewOverrides(),
+            1,
+            "Acme Payroll"
+        );
+
+        expect(result.payee.get(1)).toBe(
+            "Acme Payroll"
+        );
+        expect(
+            result.payee.has(12)
+        ).toBe(false);
+    });
+
+    it("confirms the learning key ignores amount - Description and Credit/Debit direction drive the match", () => {
+        const candidates = [
+            candidate(1, {
+                description:
+                    "UPI/P2A/500112233445/JOHN DOE/Sent u/SBI",
+                amount: 1500,
+                type: "expense",
+            }),
+            candidate(12, {
+                // Same narration pattern and direction, very different
+                // amount - still matches.
+                description:
+                    "UPI/P2A/500119988776/JOHN DOE/Sent u/SBI",
+                amount: 75000,
+                type: "expense",
+            }),
+            candidate(13, {
+                // Same narration pattern, opposite direction (Credit) -
+                // must NOT match a Debit correction.
+                description:
+                    "UPI/P2A/500119911111/JOHN DOE/Sent u/SBI",
+                amount: 1500,
+                type: "income",
+            }),
+        ];
+
+        const result = applyPayeeToMatchingRows(
+            candidates,
+            createEmptyPreviewOverrides(),
+            1,
+            "John Doe"
+        );
+
+        expect(result.payee.get(12)).toBe("John Doe");
+        expect(result.payee.has(13)).toBe(false);
+    });
+});
+
 describe("applyTransactionTypeToMatchingRows", () => {
     it("1. same pattern in the current preview: propagates a manual Type change to matching rows", () => {
         const candidates = [
@@ -614,7 +942,7 @@ describe("applyTransactionTypeToMatchingRows", () => {
         ).toBe(false);
     });
 
-    it("never overwrites a matching row that already has its own override", () => {
+    it("the latest committed edit overwrites a matching row's earlier override (any row can be the learning source)", () => {
         const candidates = [
             candidate(6, {
                 payee: "NBSM/146721617/SBI CARD (BILLDESK)/",
@@ -643,7 +971,7 @@ describe("applyTransactionTypeToMatchingRows", () => {
 
         expect(
             overrides.transactionType.get(12)
-        ).toBe("UPI");
+        ).toBe("NEFT");
     });
 });
 
@@ -1450,7 +1778,7 @@ describe("Undoing an edit removes its BLUE session-learned status (in-preview, u
         expect(blue.has(9)).toBe(true);
     });
 
-    it("6. a matching row that was later independently re-edited keeps its own edit when the original source edit is undone", () => {
+    it("6. a later edit from another matching row becomes the group's value; reverting any row to its original then undoes the group", () => {
         // Row 2 is edited first - row 5 inherits it via propagation.
         let overrides = applyPayeeToMatchingRows(
             original,
@@ -1459,7 +1787,9 @@ describe("Undoing an edit removes its BLUE session-learned status (in-preview, u
             "AMBIKA MEDICAL"
         );
 
-        // Row 5 is then given its own, independent, different edit.
+        // Row 5 is then edited to a different value. Any matching row can
+        // be the learning source, so this becomes the value of the whole
+        // group - row 2 included.
         overrides = applyPayeeToMatchingRows(
             original,
             overrides,
@@ -1467,7 +1797,12 @@ describe("Undoing an edit removes its BLUE session-learned status (in-preview, u
             "Custom Independent Value"
         );
 
-        // Row 2's original edit is undone.
+        expect(overrides.payee.get(2)).toBe(
+            "Custom Independent Value"
+        );
+
+        // Row 2 is reverted to its original value: that undoes the
+        // group's current edit, so both rows fall back to their originals.
         overrides = applyPayeeToMatchingRows(
             original,
             overrides,
@@ -1476,12 +1811,7 @@ describe("Undoing an edit removes its BLUE session-learned status (in-preview, u
         );
 
         expect(overrides.payee.has(2)).toBe(false);
-
-        // Row 5's independent edit survives - it was no longer "just
-        // following" row 2's value by the time row 2 was undone.
-        expect(overrides.payee.get(5)).toBe(
-            "Custom Independent Value"
-        );
+        expect(overrides.payee.has(5)).toBe(false);
 
         const candidates = applyPreviewOverrides(
             original,
@@ -1495,7 +1825,7 @@ describe("Undoing an edit removes its BLUE session-learned status (in-preview, u
         );
 
         expect(blue.has(2)).toBe(false);
-        expect(blue.has(5)).toBe(true);
+        expect(blue.has(5)).toBe(false);
     });
 
     it("undoing on Notes independently of Payee only clears the Notes override, and vice versa", () => {

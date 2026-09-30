@@ -11,9 +11,10 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 
+import { getErrorMessage } from "@/core/errors";
+
 import { LoanForm } from "./LoanForm";
 import { LoanService } from "../services";
-import { EMIScheduleService } from "../services/EMIScheduleService";
 import type { LoanFormValues } from "../validation";
 
 export interface AddLoanDialogProps {
@@ -22,13 +23,55 @@ export interface AddLoanDialogProps {
     trigger?: ReactElement;
 }
 
+export type SubmitLoanCreateResult =
+    | { success: true; loanId: string }
+    | { success: false; message: string };
+
+/**
+ * The create-and-report-outcome logic behind the dialog's Save button,
+ * pulled out of the component so it is unit testable without a jsdom /
+ * component-render setup (this repo has none - see
+ * DeletePlanComponentDialog.test.ts for the same convention). Always
+ * *resolves* - on both success and failure - so a caller's own
+ * try/finally (here, the dialog's `setLoading(false)`) is guaranteed
+ * to run and the "Saving..." state can never hang indefinitely on this
+ * function's account.
+ *
+ * A Tauri invoke() rejection (every SQL/Rust command, including the
+ * loan-create transaction) is a plain string, never an Error instance
+ * - see getErrorMessage's own doc comment. Routing through it here is
+ * what surfaces the real cause (e.g. an actual foreign-key or
+ * database-locked failure) instead of a generic message.
+ */
+export async function submitLoanCreate(
+    service: Pick<LoanService, "create">,
+    values: LoanFormValues,
+    onSuccess: (() => Promise<void> | void) | undefined
+): Promise<SubmitLoanCreateResult> {
+    try {
+        const loanId = await service.create(values);
+        await onSuccess?.();
+
+        return { success: true, loanId };
+    } catch (error) {
+        console.error("Failed to create loan:", error);
+
+        return {
+            success: false,
+            message: getErrorMessage(
+                error,
+                "Failed to create loan. Please try again."
+            ),
+        };
+    }
+}
+
 export function AddLoanDialog({
     onSuccess,
     defaultValues,
     trigger,
 }: AddLoanDialogProps) {
     const service = new LoanService();
-    const emiScheduleService = new EMIScheduleService();
 
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -43,30 +86,23 @@ export function AddLoanDialog({
     }
 
     async function handleSubmit(values: LoanFormValues) {
+        setLoading(true);
+        setError(null);
+
         try {
-            setLoading(true);
-            setError(null);
-
-            const loanId = await service.create(values);
-            await emiScheduleService.generateSchedule(loanId);
-            await onSuccess?.();
-
-            toast.success("Loan created successfully.");
-
-            setOpen(false);
-        } catch (error) {
-            console.error(
-                "Failed to create loan:",
-                error
+            const result = await submitLoanCreate(
+                service,
+                values,
+                onSuccess
             );
 
-            const message =
-                error instanceof Error
-                    ? error.message
-                    : "Failed to create loan. Please try again.";
-
-            setError(message);
-            toast.error(message);
+            if (result.success) {
+                toast.success("Loan created successfully.");
+                setOpen(false);
+            } else {
+                setError(result.message);
+                toast.error(result.message);
+            }
         } finally {
             setLoading(false);
         }

@@ -23,6 +23,7 @@ function fields(
         endDate: null,
         currencyId: "currency-inr",
         targetAmount: 5000000,
+        status: "ACTIVE",
         ...overrides,
     };
 }
@@ -151,6 +152,25 @@ describe("validateFinancialPlanFields", () => {
         ).toMatch(/zero or more/i);
     });
 
+    it("rejects a non-numeric target amount", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({
+                    targetAmount:
+                        "abc" as unknown as number,
+                })
+            )
+        ).toMatch(/zero or more/i);
+    });
+
+    it("accepts a target amount of exactly zero", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({ targetAmount: 0 })
+            )
+        ).toBeNull();
+    });
+
     it("allows a null target for ACCUMULATION / PORTFOLIO_GROWTH", () => {
         expect(
             validateFinancialPlanFields(
@@ -218,6 +238,95 @@ describe("validateFinancialPlanFields", () => {
                 fields({ currencyId: "" })
             )
         ).toMatch(/currency is required/i);
+    });
+
+    it("requires a valid status", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({ status: "" })
+            )
+        ).toMatch(/valid plan status/i);
+
+        expect(
+            validateFinancialPlanFields(
+                fields({ status: "DELETED" })
+            )
+        ).toMatch(/valid plan status/i);
+    });
+
+    it("accepts every valid status", () => {
+        for (const status of [
+            "ACTIVE",
+            "COMPLETED",
+            "ARCHIVED",
+        ]) {
+            expect(
+                validateFinancialPlanFields(
+                    fields({ status })
+                )
+            ).toBeNull();
+        }
+    });
+
+    it("rejects a malformed start date", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({ startDate: "not-a-date" })
+            )
+        ).toMatch(/valid start date/i);
+    });
+
+    it("requires a start date", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({ startDate: "" })
+            )
+        ).toMatch(/valid start date/i);
+    });
+
+    it("rejects a malformed end date", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({ endDate: "not-a-date" })
+            )
+        ).toMatch(/not a valid date/i);
+    });
+
+    it("accepts a valid end date on/after the start date", () => {
+        expect(
+            validateFinancialPlanFields(
+                fields({
+                    startDate: "2026-09-01",
+                    endDate: "2026-09-01",
+                })
+            )
+        ).toBeNull();
+
+        expect(
+            validateFinancialPlanFields(
+                fields({
+                    startDate: "2026-09-01",
+                    endDate: "2027-01-01",
+                })
+            )
+        ).toBeNull();
+    });
+
+    it("all required fields missing at once reports the first problem, not a crash", () => {
+        expect(
+            validateFinancialPlanFields({
+                name: "",
+                planType: "",
+                planCategory: "",
+                planSubcategory: "",
+                periodType: "",
+                startDate: "",
+                endDate: null,
+                currencyId: "",
+                targetAmount: null,
+                status: "",
+            })
+        ).toEqual(expect.any(String));
     });
 });
 

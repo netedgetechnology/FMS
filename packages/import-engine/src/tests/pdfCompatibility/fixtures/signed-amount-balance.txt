@@ -1,0 +1,7 @@
+TEST DIGITAL BANK
+Date Description Amount Balance
+Opening balance 500.00
+01/02/2026 Coffee Shop -4.50 495.50
+02/02/2026 Payroll Deposit +2,500.00 2,995.50
+03/02/2026 Utility Bill (120.00) 2,875.50
+04/02/2026 Transfer from Savings 1,000.00 3,875.50

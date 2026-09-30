@@ -1,4 +1,8 @@
-import type { PlanType, PlanPeriodType } from "../types/FinancialPlan";
+import type {
+    PlanType,
+    PlanPeriodType,
+    FinancialPlanStatus,
+} from "../types/FinancialPlan";
 
 // ---------------------------------------------------------------------
 // Financial Plans - Phase 1
@@ -25,6 +29,12 @@ export const PLAN_PERIOD_TYPES = [
     "YEARLY",
     "ONE_TIME",
 ] as const satisfies readonly PlanPeriodType[];
+
+export const FINANCIAL_PLAN_STATUSES = [
+    "ACTIVE",
+    "COMPLETED",
+    "ARCHIVED",
+] as const satisfies readonly FinancialPlanStatus[];
 
 export const PLAN_TYPE_LABELS: Record<PlanType, string> = {
     ACCUMULATION: "Accumulation",

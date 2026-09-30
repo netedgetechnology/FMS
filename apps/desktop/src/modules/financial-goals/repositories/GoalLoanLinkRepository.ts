@@ -117,4 +117,26 @@ export class GoalLoanLinkRepository extends Repository {
             [goalId]
         );
     }
+
+    /**
+     * Removes every goal's link to one loan - used by LoanService.
+     * delete() (Delete Loan) so a goal doesn't keep pointing at a
+     * loan_id that no longer resolves. Only this loan's own links are
+     * touched; the goal itself and its links to any other loan are
+     * untouched.
+     */
+    async softDeleteByLoan(
+        loanId: string
+    ): Promise<void> {
+        await this.execute(
+            `
+            UPDATE goal_loan_links
+            SET
+                deleted_at = CURRENT_TIMESTAMP
+            WHERE loan_id = ?
+              AND deleted_at IS NULL
+            `,
+            [loanId]
+        );
+    }
 }

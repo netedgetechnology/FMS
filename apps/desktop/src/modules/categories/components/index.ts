@@ -4,3 +4,6 @@ export * from "./AddCategoryDialog";
 export * from "./EditCategoryDialog";
 export * from "./ViewCategoryDialog";
 export * from "./DeleteCategoryDialog";
+export * from "./BulkDeleteCategoriesDialog";
+export * from "./ImportCategoriesCsvDialog";
+export * from "./CategoryScopesDialog";

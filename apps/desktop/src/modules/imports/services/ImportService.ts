@@ -1,5 +1,6 @@
 import {
     CounterpartyRuleRepository,
+    CustomImportRuleRepository,
     ImportBatchRepository,
     ImportMappingRepository,
     ImportRowRepository,
@@ -13,19 +14,39 @@ import {
     TransactionService,
 } from "@/modules/transactions/services";
 
+import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
+import { CategoryContextMappingRepository } from "@/modules/categories/repositories";
+
 import {
     processCsv,
     processExcel,
     processPdf,
     processDocumentWithMapping,
     getExcelSheetNames,
+    resolveExcelWorkbookContent,
     computeHeaderSignature,
-    extractTransactionPattern,
     type CsvImportType,
     type CsvPreviewResult,
     type ExcelProcessingResult,
     validateCandidates,
+    reconcileBalanceChain,
+    describeBalanceMismatch,
 } from "@financeos/import-engine";
+import {
+    isRawNarrationPayee,
+    learnRuleFromCorrection,
+    learningKeyForCandidate,
+    ruleAppliesLearnedValues,
+    type LearnableValues,
+} from "./learningKey";
+import {
+    applyCustomImportRules,
+    categoryDirectionLocksFor,
+    customRuleFieldsForDescription,
+    normalizeRuleText,
+    type CategoryDirectionLocks,
+    type CustomRuleApplication,
+} from "./customImportRules";
 
 import type {
     CsvColumnMapping,
@@ -35,6 +56,8 @@ import type {
 } from "@financeos/import-engine";
 
 import type {
+    CreateCustomImportRuleInput,
+    CustomImportRule,
     ImportBatch,
     ImportMapping,
     ImportRow,
@@ -54,6 +77,7 @@ export interface ExcelPreviewResult
     duplicates: Map<number, string>;
     sheetNames: string[];
     matchedLearnedRuleRowNumbers: Set<number>;
+    customRuleState?: CustomRulePreviewState;
 }
 
 // CsvPreviewResult (from @financeos/import-engine) doesn't know about
@@ -64,6 +88,65 @@ export interface ExcelPreviewResult
 export interface CsvPreviewResultWithLearning
     extends CsvPreviewResult {
     matchedLearnedRuleRowNumbers: Set<number>;
+    customRuleState?: CustomRulePreviewState;
+}
+
+// Custom Import Rule state carried with a preview so the page can re-apply
+// rules instantly after one is created/deleted, without re-reading the
+// file (see withCustomImportRules).
+export interface CustomRulePreviewState {
+    // The candidates after Self-Learning, BEFORE any custom rule.
+    candidatesBeforeCustomRules: NormalizedTransactionCandidate[];
+    // Rows an automatic self-learned rule applied to (Self-Learning's own
+    // result, unchanged).
+    learnedRuleRowNumbers: Set<number>;
+    // rowNumber -> the custom rule(s) applied to that row.
+    applications: Map<number, CustomRuleApplication>;
+    // The destination account's category direction locks, resolved when
+    // the preview was built, so a re-application after a rule is created
+    // or edited applies the same Credit/Debit protection (see
+    // applyCustomImportRules). Absent on drafts saved before it existed.
+    categoryDirectionLocks?: CategoryDirectionLocks;
+}
+
+// Custom rules on top of Self-Learning: Custom Rule > Self-Learning >
+// imported, per specified field (see applyCustomImportRules). A row a
+// custom rule applied to counts as having a permanent learned rule
+// applied (matchedLearnedRuleRowNumbers - the Self-Learning indicator's
+// GREEN), alongside the automatically learned ones.
+export function withCustomImportRules(
+    learned: EnrichedCandidatesResult,
+    rules: readonly CustomImportRule[],
+    categoryDirectionLocks?: CategoryDirectionLocks
+): {
+    candidates: NormalizedTransactionCandidate[];
+    matchedRowNumbers: Set<number>;
+    customRuleState: CustomRulePreviewState;
+} {
+    const applied = applyCustomImportRules(
+        learned.candidates,
+        rules,
+        categoryDirectionLocks
+    );
+
+    const matchedRowNumbers = new Set(learned.matchedRowNumbers);
+
+    for (const rowNumber of applied.applications.keys()) {
+        matchedRowNumbers.add(rowNumber);
+    }
+
+    return {
+        candidates: applied.candidates,
+        matchedRowNumbers,
+        customRuleState: {
+            candidatesBeforeCustomRules: learned.candidates,
+            learnedRuleRowNumbers: learned.matchedRowNumbers,
+            applications: applied.applications,
+            ...(categoryDirectionLocks
+                ? { categoryDirectionLocks }
+                : {}),
+        },
+    };
 }
 
 // A single account-scoped learned association: Payee, Transaction Type,
@@ -76,6 +159,8 @@ export interface LearnedTransactionPatternRule {
     counterparty: string;
     type: string | null;
     notes: string | null;
+    // Learned Category id (migration 039); absent/null = none learned.
+    categoryId?: string | null;
 }
 
 // The account-scoped "pattern -> learned values" store this reuses (see
@@ -98,25 +183,47 @@ export interface TransactionPatternRuleStore {
         pattern: string,
         payee: string,
         type: string | null,
-        notes: string | null
+        notes: string | null,
+        categoryId?: string | null
     ): Promise<unknown>;
 }
 
-// A row's learning key - see extractTransactionPattern. Deliberately
-// derived from Description alone, never Payee: Payee is user-editable
-// (and gets overwritten by a learned rule right below), so basing the
-// pattern on it would make the learning key itself shift out from under
-// an edit/enrichment instead of staying a stable identity for the
-// transaction. A candidate with no Description at all simply has no
-// learning pattern (null) rather than falling back to the unstable
-// field.
-function learningPatternForCandidate(
-    candidate: NormalizedTransactionCandidate
-): string | null {
-    return extractTransactionPattern(
-        candidate.description
-    );
+// A row's learning key: normalized Description pattern + Credit/Debit
+// direction - see learningKeyForCandidate (shared with the Import
+// Preview's in-session propagation, so both always agree).
+const learningPatternForCandidate = learningKeyForCandidate;
+
+export interface ImportCandidatesOptions {
+    // Rows the user chose to leave out of this import (Import Preview
+    // "Skip row"). They are removed before anything is written.
+    skippedRowNumbers?: ReadonlySet<number>;
+    // PDF statements: refuse the import while any row still disagrees
+    // with the statement's running balance (see reconcileBalanceChain).
+    // The check runs on the FULL candidate list - a skipped row's printed
+    // balance is still the next row's previous balance - and a skipped
+    // row counts as resolved.
+    requireBalanceReconciliation?: boolean;
 }
+
+export class BalanceMismatchImportError extends Error {
+    constructor(readonly rowNumbers: number[], firstMessage: string) {
+        super(
+            `${rowNumbers.length} row${
+                rowNumbers.length === 1 ? " does" : "s do"
+            } not match the statement's running balance (row ${rowNumbers.join(", ")}). ${firstMessage}`
+        );
+        this.name = "BalanceMismatchImportError";
+    }
+}
+
+// A row's values as the Import Preview showed them before any user edit
+// (already enriched by an existing learned rule) - what
+// learnRuleFromCandidate compares the final values against to decide
+// whether the row was genuinely corrected.
+export type LearningBaseline = Pick<
+    NormalizedTransactionCandidate,
+    "payee" | "transactionType" | "notes" | "categoryId"
+>;
 
 export interface EnrichedCandidatesResult {
     candidates: NormalizedTransactionCandidate[];
@@ -130,7 +237,7 @@ export interface EnrichedCandidatesResult {
 
 // Populates each candidate's Payee, Transaction Type, and Notes from a
 // previously-learned "account + transaction-pattern -> ..." association
-// (see extractTransactionPattern), scoped to the destination account so
+// (see learningKeyForCandidate), scoped to the destination account so
 // a rule learned for one account never leaks into a different account.
 // Unlike a first-time suggestion, a matching rule's Payee/Type always
 // win over the raw parsed/detected value, since the rule represents a
@@ -172,23 +279,141 @@ export async function enrichCandidatesWithLearnedRulesDetailed(
             continue;
         }
 
-        matchedRowNumbers.add(
-            candidate.rowNumber
-        );
+        // Only a rule that actually applies a learned value to this row
+        // (a real Payee, Notes, a Category, or a Type different from the
+        // row's detected one - see ruleAppliesLearnedValues) counts as
+        // "an existing learned rule" for the Self-Learning indicator. A
+        // rule Payee that is only a narration of this kind (e.g. a
+        // sibling row's narration with a different reference number) is
+        // never applied - the row keeps its own narration.
+        if (
+            ruleAppliesLearnedValues(
+                {
+                    payee: rule.counterparty,
+                    transactionType: rule.type,
+                    notes: rule.notes,
+                    categoryId: rule.categoryId,
+                },
+                candidate
+            )
+        ) {
+            matchedRowNumbers.add(
+                candidate.rowNumber
+            );
+        }
 
         enriched.push({
             ...candidate,
-            payee: rule.counterparty,
+            payee: isRawNarrationPayee(
+                rule.counterparty,
+                candidate.description
+            )
+                ? candidate.payee
+                : rule.counterparty,
             transactionType:
                 (rule.type as TransactionChannel | null) ??
                 candidate.transactionType,
             notes:
                 rule.notes ??
                 candidate.notes,
+            categoryId:
+                rule.categoryId ??
+                candidate.categoryId ??
+                null,
         });
     }
 
     return { candidates: enriched, matchedRowNumbers };
+}
+
+// Re-applies the account's (updated) custom rules to an open preview -
+// from the Self-Learning-only candidates it carries, so a newly created
+// rule applies immediately and a deleted rule's values disappear, without
+// re-reading the file. Per-row overrides live separately in the page and
+// still win. A preview without custom-rule state is returned unchanged.
+export function reapplyCustomImportRules<
+    T extends {
+        candidates: NormalizedTransactionCandidate[];
+        matchedLearnedRuleRowNumbers: Set<number>;
+        customRuleState?: CustomRulePreviewState;
+    },
+>(preview: T, rules: readonly CustomImportRule[]): T {
+    const state = preview.customRuleState;
+
+    if (!state) {
+        return preview;
+    }
+
+    const next = withCustomImportRules(
+        {
+            candidates: state.candidatesBeforeCustomRules,
+            matchedRowNumbers: state.learnedRuleRowNumbers,
+        },
+        rules,
+        state.categoryDirectionLocks
+    );
+
+    return {
+        ...preview,
+        candidates: next.candidates,
+        matchedLearnedRuleRowNumbers: next.matchedRowNumbers,
+        customRuleState: next.customRuleState,
+    };
+}
+
+// reapplyCustomImportRules, but returns the very same preview when the
+// current rules produce exactly what it already shows - e.g. a resumed
+// draft whose rules weren't edited meanwhile, so nothing is re-saved.
+export function reapplyCustomImportRulesIfChanged<
+    T extends {
+        candidates: NormalizedTransactionCandidate[];
+        matchedLearnedRuleRowNumbers: Set<number>;
+        customRuleState?: CustomRulePreviewState;
+    },
+>(preview: T, rules: readonly CustomImportRule[]): T {
+    const next = reapplyCustomImportRules(preview, rules);
+
+    if (next === preview || !preview.customRuleState || !next.customRuleState) {
+        return next;
+    }
+
+    const sameCandidates =
+        next.candidates.length === preview.candidates.length &&
+        next.candidates.every((candidate, index) => {
+            const current = preview.candidates[index]!;
+
+            return (
+                candidate === current ||
+                (candidate.rowNumber === current.rowNumber &&
+                    candidate.payee === current.payee &&
+                    candidate.notes === current.notes &&
+                    (candidate.categoryId ?? null) ===
+                        (current.categoryId ?? null) &&
+                    (candidate.transactionType ?? null) ===
+                        (current.transactionType ?? null))
+            );
+        });
+
+    const sameRowNumbers =
+        next.matchedLearnedRuleRowNumbers.size ===
+            preview.matchedLearnedRuleRowNumbers.size &&
+        [...next.matchedLearnedRuleRowNumbers].every(rowNumber =>
+            preview.matchedLearnedRuleRowNumbers.has(rowNumber)
+        );
+
+    const before = preview.customRuleState.applications;
+    const after = next.customRuleState.applications;
+    const sameApplications =
+        before.size === after.size &&
+        [...after].every(
+            ([rowNumber, application]) =>
+                JSON.stringify(before.get(rowNumber)) ===
+                JSON.stringify(application)
+        );
+
+    return sameCandidates && sameRowNumbers && sameApplications
+        ? preview
+        : next;
 }
 
 // Thin, backward-compatible wrapper over enrichCandidatesWithLearnedRulesDetailed
@@ -208,35 +433,79 @@ export async function enrichCandidatesWithLearnedRules(
     return result.candidates;
 }
 
-// Learns (or refreshes) an "account + pattern -> Payee/Type/Notes"
-// association from a single candidate's final values (auto-suggested
-// and accepted, or manually entered/corrected) - confirmed accurate the
-// moment it's actually imported. No-ops entirely when the Payee is
-// blank or the narration is too short/generic to safely learn from (see
-// extractTransactionPattern). A blank Type/Notes on this candidate never
-// erases a previously-learned value for the pattern - see
-// CounterpartyRuleRepository.upsert.
+// Learns (or refreshes) an "account + pattern -> Payee/Type/Notes/Category"
+// association from a single candidate - but ONLY when its final values
+// are a genuine correction (see learnRuleFromCorrection). `baseline` is
+// the row as the preview showed it before any user edit (already
+// enriched by an existing rule); without one, the existing rule (or the
+// untouched narration) is the baseline. A row nobody corrected never
+// creates or updates a rule, and a raw-narration Payee never overwrites
+// a learned one. No-ops when the narration is too short/generic to
+// learn from (see learningKeyForCandidate).
 export async function learnRuleFromCandidate(
     accountId: string,
     candidate: NormalizedTransactionCandidate,
-    rules: TransactionPatternRuleStore
+    rules: TransactionPatternRuleStore,
+    baseline?: LearningBaseline,
+    // Fields a Custom Import Rule owns for this row - never learned (see
+    // learnRuleFromCorrection).
+    customRuleFields?: ReadonlySet<keyof LearnableValues>
 ): Promise<void> {
-    if (!candidate.payee) {
-        return;
-    }
-
     const pattern =
         learningPatternForCandidate(candidate);
 
-    if (pattern) {
-        await rules.upsert(
-            accountId,
-            pattern,
-            candidate.payee,
-            candidate.transactionType,
-            candidate.notes
+    if (!pattern) {
+        return;
+    }
+
+    await learnRuleFromCorrection(
+        rules,
+        accountId,
+        pattern,
+        candidate,
+        baseline,
+        customRuleFields
+    );
+}
+
+// Validates and normalizes a custom rule's fields (create and edit):
+// keyword whitespace collapsed, blank values stored as null, and at
+// least one field to set.
+function cleanCustomRuleInput(
+    input: CreateCustomImportRuleInput
+): Omit<CustomImportRule, "id" | "createdAt" | "updatedAt"> {
+    const clean = (value: string | null | undefined) =>
+        value?.trim() ? value.trim() : null;
+
+    const keyword = input.keyword.trim().replace(/\s+/g, " ");
+
+    if (!input.accountId) {
+        throw new Error("Select an account before adding a custom rule.");
+    }
+
+    if (!normalizeRuleText(keyword)) {
+        throw new Error("Enter a keyword for the custom rule.");
+    }
+
+    const payee = clean(input.payee);
+    const notes = clean(input.notes);
+    const categoryId = clean(input.categoryId);
+    const transactionType = clean(input.transactionType);
+
+    if (!payee && !notes && !categoryId && !transactionType) {
+        throw new Error(
+            "Set at least one of Payee, Notes, Category or Type."
         );
     }
+
+    return {
+        accountId: input.accountId,
+        keyword,
+        payee,
+        notes,
+        categoryId,
+        transactionType,
+    };
 }
 
 export class ImportService {
@@ -252,11 +521,22 @@ export class ImportService {
     private readonly counterpartyRuleRepository =
         new CounterpartyRuleRepository();
 
+    private readonly customRuleRepository =
+        new CustomImportRuleRepository();
+
     private readonly transactionRepository =
         new TransactionRepository();
 
     private readonly transactionService =
         new TransactionService();
+
+    // Only for the destination account's category direction locks - see
+    // loadCategoryDirectionLocks.
+    private readonly accountRepository =
+        new AccountRepository();
+
+    private readonly categoryContextMappingRepository =
+        new CategoryContextMappingRepository();
 
     async getBatches(): Promise<ImportBatch[]> {
         return await this.batchRepository.getAll();
@@ -462,6 +742,7 @@ export class ImportService {
         const {
             candidates,
             matchedRowNumbers: matchedLearnedRuleRowNumbers,
+            customRuleState,
         } =
             await this.enrichLearnedRules(
                 accountId,
@@ -479,6 +760,7 @@ export class ImportService {
             candidates,
             duplicates,
             matchedLearnedRuleRowNumbers,
+            customRuleState,
         };
     }
 
@@ -501,6 +783,7 @@ export class ImportService {
         const {
             candidates,
             matchedRowNumbers: matchedLearnedRuleRowNumbers,
+            customRuleState,
         } =
             await this.enrichLearnedRules(
                 accountId,
@@ -518,6 +801,7 @@ export class ImportService {
             candidates,
             duplicates,
             matchedLearnedRuleRowNumbers,
+            customRuleState,
         };
     }
 
@@ -525,13 +809,33 @@ export class ImportService {
         accountId: string,
         content: ArrayBuffer,
         sheetName?: string,
-        importType: CsvImportType = "BANK_CSV"
+        importType: CsvImportType = "BANK_CSV",
+        // Memory-only for this call - never stored on the batch/row/
+        // preview result, never logged (see ExcelPasswordError in
+        // @financeos/import-engine for how a protected file surfaces
+        // here instead of a normal parse result).
+        password?: string
     ): Promise<ExcelPreviewResult> {
+        // Agile-Encryption-protected .xlsx (the common, modern "Encrypt
+        // with Password" case) is decrypted for real here, up front -
+        // everything below then runs completely unchanged against the
+        // resulting plain workbook bytes, exactly as for a file that
+        // was never protected. Any other file (unprotected, legacy
+        // XOR/RC4 .xls, Standard Encryption, corrupt) passes through
+        // untouched, deferring to processExcel/getExcelSheetNames's own
+        // existing password handling below.
+        const resolvedContent =
+            await resolveExcelWorkbookContent(
+                content,
+                password
+            );
+
         const result =
             processExcel(
-                content,
+                resolvedContent,
                 sheetName,
-                importType
+                importType,
+                password
             );
 
         if (
@@ -553,6 +857,7 @@ export class ImportService {
         const {
             candidates,
             matchedRowNumbers: matchedLearnedRuleRowNumbers,
+            customRuleState,
         } =
             await this.enrichLearnedRules(
                 accountId,
@@ -570,8 +875,12 @@ export class ImportService {
             candidates,
             duplicates,
             matchedLearnedRuleRowNumbers,
+            customRuleState,
             sheetNames:
-                getExcelSheetNames(content),
+                getExcelSheetNames(
+                    resolvedContent,
+                    password
+                ),
         };
     }
 
@@ -597,6 +906,7 @@ export class ImportService {
         const {
             candidates,
             matchedRowNumbers: matchedLearnedRuleRowNumbers,
+            customRuleState,
         } =
             await this.enrichLearnedRules(
                 accountId,
@@ -612,6 +922,7 @@ export class ImportService {
                     candidates
                 ),
             matchedLearnedRuleRowNumbers,
+            customRuleState,
         };
     }
     // Executes the import using an already-previewed document + the
@@ -657,8 +968,34 @@ export class ImportService {
         importType: CsvImportType,
         candidates: NormalizedTransactionCandidate[],
         mappingName?: string | null,
-        selfLearningDisabledRowNumbers?: ReadonlySet<number>
+        selfLearningDisabledRowNumbers?: ReadonlySet<number>,
+        learningBaselines?: ReadonlyMap<number, LearningBaseline>,
+        options: ImportCandidatesOptions = {}
     ): Promise<ImportBatch> {
+        const skipped =
+            options.skippedRowNumbers ?? new Set<number>();
+
+        if (options.requireBalanceReconciliation) {
+            const unresolved =
+                reconcileBalanceChain(candidates).mismatches.filter(
+                    mismatch => !skipped.has(mismatch.rowNumber)
+                );
+
+            if (unresolved.length > 0) {
+                // Nothing is written - no batch, no rows.
+                throw new BalanceMismatchImportError(
+                    unresolved.map(mismatch => mismatch.rowNumber),
+                    describeBalanceMismatch(unresolved[0]!)
+                );
+            }
+        }
+
+        if (skipped.size > 0) {
+            candidates = candidates.filter(
+                candidate => !skipped.has(candidate.rowNumber)
+            );
+        }
+
         const validation =
             validateCandidates(candidates);
 
@@ -686,7 +1023,8 @@ export class ImportService {
             batch.id,
             candidates,
             mappingName,
-            selfLearningDisabledRowNumbers
+            selfLearningDisabledRowNumbers,
+            learningBaselines
         );
     }
 
@@ -737,15 +1075,119 @@ export class ImportService {
         return duplicates;
     }
 
+    // Self-Learning first, then the account's Custom Import Rules on top
+    // (see withCustomImportRules).
     private async enrichLearnedRules(
         accountId: string,
         candidates: NormalizedTransactionCandidate[]
-    ): Promise<EnrichedCandidatesResult> {
-        return enrichCandidatesWithLearnedRulesDetailed(
-            accountId,
-            candidates,
-            this.counterpartyRuleRepository
+    ): Promise<
+        EnrichedCandidatesResult & {
+            customRuleState: CustomRulePreviewState;
+        }
+    > {
+        const learned =
+            await enrichCandidatesWithLearnedRulesDetailed(
+                accountId,
+                candidates,
+                this.counterpartyRuleRepository
+            );
+
+        return withCustomImportRules(
+            learned,
+            await this.loadCustomRules(accountId),
+            await this.loadCategoryDirectionLocks(accountId)
         );
+    }
+
+    // The account's category direction locks, so a custom rule never
+    // applies a category the row's Credit/Debit direction can't be saved
+    // with. Like loadCustomRules, a read failure is logged and treated as
+    // "no locks" rather than blocking the preview.
+    private async loadCategoryDirectionLocks(
+        accountId: string
+    ): Promise<CategoryDirectionLocks> {
+        try {
+            const [account, mappings] = await Promise.all([
+                this.accountRepository.getById(accountId),
+                this.categoryContextMappingRepository.getAll(),
+            ]);
+
+            return categoryDirectionLocksFor(
+                mappings,
+                account
+                    ? {
+                          id: account.id,
+                          businessEntityId:
+                              account.businessEntityId ?? null,
+                      }
+                    : null
+            );
+        } catch (error) {
+            console.error(
+                "Failed to load category mappings for custom rules:",
+                error
+            );
+
+            return {};
+        }
+    }
+
+    // Custom rules are a layer on top of the import; a failure to read
+    // them is logged and treated as "no custom rules" rather than
+    // blocking the preview or the import itself.
+    private async loadCustomRules(
+        accountId: string
+    ): Promise<CustomImportRule[]> {
+        try {
+            return await this.customRuleRepository.listByAccount(
+                accountId
+            );
+        } catch (error) {
+            console.error("Failed to load custom import rules:", error);
+            return [];
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Custom Import Rules (user-defined, permanent, per account).
+    // Creating or deleting a rule never touches any transaction or any
+    // automatic self-learned rule.
+    // -----------------------------------------------------------------
+
+    async listCustomRules(
+        accountId: string
+    ): Promise<CustomImportRule[]> {
+        return await this.customRuleRepository.listByAccount(accountId);
+    }
+
+    // Every account's rules, newest first (Import Rules page).
+    async listAllCustomRules(): Promise<CustomImportRule[]> {
+        return await this.customRuleRepository.listAll();
+    }
+
+    async createCustomRule(
+        input: CreateCustomImportRuleInput
+    ): Promise<CustomImportRule> {
+        return await this.customRuleRepository.create({
+            id: crypto.randomUUID(),
+            ...cleanCustomRuleInput(input),
+        });
+    }
+
+    // Updates the existing rule (never creates a second one). Like
+    // create/delete, it touches no transaction and no self-learned rule.
+    async updateCustomRule(
+        id: string,
+        input: CreateCustomImportRuleInput
+    ): Promise<CustomImportRule> {
+        return await this.customRuleRepository.update({
+            id,
+            ...cleanCustomRuleInput(input),
+        });
+    }
+
+    async deleteCustomRule(id: string): Promise<void> {
+        await this.customRuleRepository.delete(id);
     }
 
     private async createFailedBatch(
@@ -842,7 +1284,8 @@ export class ImportService {
         batchId: string,
         candidates: NormalizedTransactionCandidate[],
         mappingName?: string | null,
-        selfLearningDisabledRowNumbers?: ReadonlySet<number>
+        selfLearningDisabledRowNumbers?: ReadonlySet<number>,
+        learningBaselines?: ReadonlyMap<number, LearningBaseline>
     ): Promise<ImportBatch> {
         const batch =
             await this.getBatch(batchId);
@@ -877,6 +1320,23 @@ export class ImportService {
 
         const existingRows =
             await this.getRows(batch.id);
+
+        // Fields a Custom Import Rule owns on a row are never learned by
+        // automatic Self-Learning (see learnRuleFromCorrection).
+        const customRules =
+            await this.loadCustomRules(batch.accountId);
+
+        // Every transaction this run has created. Duplicate detection
+        // must only compare a row with transactions that existed BEFORE
+        // this import started - a statement can legitimately contain
+        // several rows identical in date/amount/direction/narration/
+        // reference (repeated transfers, reversal + re-send, cut-off
+        // references), and an earlier row of THIS import must never
+        // make a later one a "duplicate". Re-importing an already-
+        // imported statement is still caught, since those transactions
+        // pre-date this run and are never in this set.
+        const createdInThisImport =
+            new Set<string>();
 
         for (
             const candidate of candidates
@@ -934,11 +1394,11 @@ export class ImportService {
                 continue;
             }
 
-            // Learn from this row's final Payee/Type/Notes
-            // (auto-suggested and accepted, or manually
-            // entered/corrected) regardless of whether it turns out to
-            // be a duplicate - the association is still
-            // confirmed-accurate for this transaction pattern. A
+            // Learn from this row's final Payee/Type/Notes/Category -
+            // but only if they are a genuine correction of the row as
+            // previewed (`learningBaselines`, see
+            // learnRuleFromCandidate) - regardless of whether it turns
+            // out to be a duplicate. A
             // failure here (e.g. a transient DB error) is logged and
             // skipped, never allowed to abort this row's import - let
             // alone the rest of the batch - since learning is a
@@ -961,7 +1421,16 @@ export class ImportService {
                     await learnRuleFromCandidate(
                         batch.accountId,
                         candidate,
-                        this.counterpartyRuleRepository
+                        this.counterpartyRuleRepository,
+                        learningBaselines?.get(
+                            candidate.rowNumber
+                        ),
+                        customRules.length > 0
+                            ? customRuleFieldsForDescription(
+                                  candidate.description,
+                                  customRules
+                              )
+                            : undefined
                     );
                 }
             } catch (learnError) {
@@ -980,7 +1449,8 @@ export class ImportService {
                         candidate.amount!,
                         candidate.referenceNumber,
                         candidate.payee,
-                        candidate.description
+                        candidate.description,
+                        createdInThisImport
                     );
 
                 if (duplicate) {
@@ -1001,7 +1471,13 @@ export class ImportService {
                     await this.transactionService.create({
                         accountId:
                             batch.accountId,
-                        categoryId: null,
+                        // The Category chosen (or learned) in the Import
+                        // Preview - null for Uncategorized. The existing
+                        // transaction/category relationship and
+                        // TransactionService's Income/Expense mapping
+                        // check apply exactly as for a manual entry.
+                        categoryId:
+                            candidate.categoryId ?? null,
                         payee:
                             candidate.payee ||
                             candidate.description,
@@ -1048,6 +1524,8 @@ export class ImportService {
                             mappingName ??
                             undefined,
                     });
+
+                createdInThisImport.add(transactionId);
 
                 await this.updateRow({
                     id: row.id,
@@ -1126,6 +1604,46 @@ export class ImportService {
     // learning itself works.
     async clearAllLearnedRules(): Promise<void> {
         await this.counterpartyRuleRepository.deleteAll();
+    }
+
+    // Removes one Import History record from the list - its
+    // import_batches row and its import_rows - so an obsolete/no-longer-
+    // useful entry (e.g. one whose transactions were separately deleted)
+    // doesn't linger in the list forever. Deliberately never touches
+    // `transactions`: an import_row's transaction_id is only a
+    // reference, and this deletes nothing from that table, so every
+    // transaction created from this import - or from any other -
+    // remains exactly as it is, imported or not. See
+    // ImportBatchRepository.deleteAtomic for why both DELETEs run in one
+    // real database transaction.
+    async deleteBatch(id: string): Promise<void> {
+        const existing =
+            await this.batchRepository.getById(id);
+
+        if (!existing) {
+            throw new Error(
+                "Import batch not found."
+            );
+        }
+
+        await this.batchRepository.deleteAtomic(id);
+    }
+
+    // Removes one Saved Mapping. Never touches accounts, transactions,
+    // or any other import - see ImportMappingRepository.delete's own
+    // doc comment for why a plain single-row DELETE is already safe
+    // here (nothing else references this row).
+    async deleteMapping(id: string): Promise<void> {
+        const existing =
+            await this.mappingRepository.findById(id);
+
+        if (!existing) {
+            throw new Error(
+                "Import mapping not found."
+            );
+        }
+
+        await this.mappingRepository.delete(id);
     }
 }
 

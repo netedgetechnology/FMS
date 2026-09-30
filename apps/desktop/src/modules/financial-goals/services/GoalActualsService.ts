@@ -517,6 +517,7 @@ export class GoalActualsService {
                 accountId: t.accountId,
                 categoryId: t.categoryId,
                 type: t.type,
+                transferDirection: t.transferDirection ?? null,
                 amount: t.amount,
                 transactionDate: t.transactionDate,
             })),

@@ -1,11 +1,15 @@
+import { useDateFormatter } from "@/core/formatting";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Eye, List, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common";
 
 import {
     AddLoanDialog,
+    DeleteLoanDialog,
     EditLoanDialog,
     EMIScheduleDialog,
+    ViewLoanDialog,
 } from "../components";
 import {
     LoanDashboardService,
@@ -14,9 +18,11 @@ import {
 import { Loan } from "../types";
 
 export default function LoansPage() {
+    const formatDate = useDateFormatter();
     const [loans, setLoans] = useState<Loan[]>([]);
     const [loading, setLoading] = useState(true);
     const [scheduleLoan, setScheduleLoan] = useState<Loan | null>(null);
+    const [viewLoan, setViewLoan] = useState<Loan | null>(null);
     const [editLoan, setEditLoan] = useState<Loan | null>(null);
     const [dashboardSummary, setDashboardSummary] =
         useState<{
@@ -166,9 +172,15 @@ export default function LoansPage() {
                             type="button"
                             onClick={() => void loadLoans()}
                             disabled={loading}
-                            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Refresh loans"
+                            aria-label="Refresh loans"
+                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Refresh
+                            <RefreshCw
+                                className={`h-3.5 w-3.5 ${
+                                    loading ? "animate-spin" : ""
+                                }`}
+                            />
                         </button>
                     </div>
 
@@ -283,15 +295,29 @@ export default function LoansPage() {
                                             </td>
 
                                             <td className="px-4 py-4 text-right">
-                                                <div className="flex justify-end gap-2">
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setViewLoan(loan)
+                                                        }
+                                                        title="View loan"
+                                                        aria-label={`View ${loan.name}`}
+                                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                                                    >
+                                                        <Eye size={15} />
+                                                    </button>
+
                                                     <button
                                                         type="button"
                                                         onClick={() =>
                                                             setEditLoan(loan)
                                                         }
-                                                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                                                        title="Edit loan"
+                                                        aria-label={`Edit ${loan.name}`}
+                                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
                                                     >
-                                                        Edit
+                                                        <Pencil size={15} />
                                                     </button>
 
                                                     <button
@@ -299,10 +325,27 @@ export default function LoansPage() {
                                                         onClick={() =>
                                                             setScheduleLoan(loan)
                                                         }
-                                                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                                                        title="View EMI schedule"
+                                                        aria-label={`View EMI schedule for ${loan.name}`}
+                                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
                                                     >
-                                                        View EMI Schedule
+                                                        <List size={15} />
                                                     </button>
+
+                                                    <DeleteLoanDialog
+                                                        loan={loan}
+                                                        onSuccess={loadLoans}
+                                                        trigger={
+                                                            <button
+                                                                type="button"
+                                                                title="Delete loan"
+                                                                aria-label={`Delete ${loan.name}`}
+                                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                                                            >
+                                                                <Trash2 size={15} />
+                                                            </button>
+                                                        }
+                                                    />
                                                 </div>
                                             </td>
                                         </tr>
@@ -312,6 +355,16 @@ export default function LoansPage() {
                         </div>
                     )}
                 </div>
+
+                <ViewLoanDialog
+                    loan={viewLoan}
+                    open={viewLoan !== null}
+                    onOpenChange={open => {
+                        if (!open) {
+                            setViewLoan(null);
+                        }
+                    }}
+                />
 
                 <EditLoanDialog
                     loan={editLoan}
@@ -383,20 +436,5 @@ function formatAmount(value: number) {
     }).format(value);
 }
 
-function formatDate(value: string) {
-    if (!value) {
-        return "—";
-    }
 
-    const date = new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
-    return new Intl.DateTimeFormat("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-    }).format(date);
-}

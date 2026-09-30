@@ -1,8 +1,9 @@
 import {
     CategoryType,
-    FinanceScope,
 } from ".";
 
+// Category details only. A category's scope (finance_scope) is changed
+// solely from the Scopes screen - CategoryService.updateScopes.
 export interface UpdateCategoryRequest {
     id: string;
 
@@ -11,8 +12,6 @@ export interface UpdateCategoryRequest {
     name: string;
 
     categoryType: CategoryType;
-
-    financeScope: FinanceScope;
 
     businessEntityId?: string | null;
 

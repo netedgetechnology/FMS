@@ -1,0 +1,6 @@
+TEST CREDIT UNION
+Posting Date Description Deposits Withdrawals Balance
+2026-01-05 Salary ACME CORP 50,000.00 0.00 50,500.00
+2026-01-06 Rent Payment Landlord 0.00 15,000.00 35,500.00
+2026-01-09 Refund Online Store 1,200.50 0.00 36,700.50
+2026-01-10 Card Bill Autopay 0.00 9,999.99 26,700.51

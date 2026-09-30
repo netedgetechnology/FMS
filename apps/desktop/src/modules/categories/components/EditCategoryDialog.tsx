@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
     Dialog,
@@ -8,10 +8,11 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 
-import { CategoryForm } from "./CategoryForm";
-import { CategoryService } from "../services";
+import { CategoryForm, CategoryMappingRowInput } from "./CategoryForm";
+import { CategoryContextMappingService, CategoryService } from "../services";
 import { CategoryFormValues } from "../validation";
-import { Category } from "../types";
+import { Category, CategoryContextMapping } from "../types";
+import { planMappingWrites, validateMappingRowsForSave } from "../utils";
 
 interface EditCategoryDialogProps {
     category: Category | null;
@@ -30,12 +31,42 @@ export function EditCategoryDialog({
 }: EditCategoryDialogProps) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [mappings, setMappings] = useState<CategoryContextMapping[]>([]);
+
+    useEffect(() => {
+        if (!open || !category) {
+            return;
+        }
+
+        let cancelled = false;
+
+        new CategoryContextMappingService()
+            .getByCategoryId(category.id)
+            .then(data => {
+                if (!cancelled) {
+                    setMappings(data);
+                }
+            })
+            .catch(err => {
+                console.error(
+                    "Failed to load category context mappings:",
+                    err
+                );
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [open, category?.id]);
 
     if (!category) {
         return null;
     }
 
-    async function handleSubmit(values: CategoryFormValues) {
+    async function handleSubmit(
+        values: CategoryFormValues,
+        mappingRows: CategoryMappingRowInput[]
+    ) {
         const categoryId = category?.id;
 
         if (!categoryId) {
@@ -46,6 +77,8 @@ export function EditCategoryDialog({
             setLoading(true);
             setError(null);
 
+            validateMappingRowsForSave(mappingRows);
+
             const service = new CategoryService();
 
             await service.update({
@@ -53,11 +86,30 @@ export function EditCategoryDialog({
                 parentId: values.parentId || null,
                 name: values.name,
                 categoryType: values.categoryType,
-                financeScope: values.financeScope,
                 businessEntityId: values.businessEntityId || null,
                 description: values.description || null,
                 isActive: values.isActive,
             });
+
+            const mappingService = new CategoryContextMappingService();
+
+            const plan = planMappingWrites(
+                categoryId,
+                mappings,
+                mappingRows
+            );
+
+            for (const id of plan.toDeleteIds) {
+                await mappingService.delete(id);
+            }
+
+            for (const request of plan.toCreate) {
+                await mappingService.create(request);
+            }
+
+            for (const request of plan.toUpdate) {
+                await mappingService.update(request);
+            }
 
             await onSuccess?.();
 
@@ -116,11 +168,12 @@ export function EditCategoryDialog({
                         categories={categories.filter(
                             item => item.id !== category.id
                         )}
+                        mappings={mappings}
+                        financeScope={category.financeScope}
                         defaultValues={{
                             parentId: category.parentId ?? "",
                             name: category.name,
                             categoryType: category.categoryType,
-                            financeScope: category.financeScope,
                             businessEntityId:
                                 category.businessEntityId ?? "",
                             description: category.description ?? "",

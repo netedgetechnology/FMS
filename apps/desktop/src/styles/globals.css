@@ -1,8 +1,7 @@
 @import "tailwindcss";
+@import "./typography.css";
 
-/* =========================================================
-   FinanceOS Typography System
-   ========================================================= */
+@custom-variant dark (&:is(.dark *));
 
 @font-face {
     font-family: "Inter";
@@ -36,11 +35,81 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 
-    font-feature-settings:
-        "cv02",
-        "cv03",
-        "cv04",
-        "cv11";
+    color-scheme: light;
+
+    --finance-bg: #f6f8fc;
+    --finance-surface: #ffffff;
+    --finance-surface-soft: #f8fafc;
+    --finance-input: #ffffff;
+    --finance-border: #e2e8f0;
+
+    --finance-text: #0f172a;
+    --finance-text-secondary: #64748b;
+    --finance-text-muted: #94a3b8;
+
+    --toast-bg: var(--finance-surface);
+    --toast-border: var(--finance-border);
+    --toast-text: var(--finance-text);
+    --toast-body-text: var(--finance-text-secondary);
+
+    --toast-success-bg: #ecfdf5;
+    --toast-success-border: #a7f3d0;
+    --toast-success-heading: #065f46;
+    --toast-success-icon: #059669;
+
+    --toast-error-bg: #fef2f2;
+    --toast-error-border: #fecaca;
+    --toast-error-heading: #7f1d1d;
+    --toast-error-icon: #dc2626;
+
+    --toast-info-bg: #eff6ff;
+    --toast-info-border: #bfdbfe;
+    --toast-info-heading: #1e3a5f;
+    --toast-info-icon: #2563eb;
+
+    --toast-warning-bg: #fffbeb;
+    --toast-warning-border: #fde68a;
+    --toast-warning-heading: #78350f;
+    --toast-warning-icon: #d97706;
+}
+
+html.dark {
+    color-scheme: dark;
+
+    --finance-bg: #0b1220;
+    --finance-surface: #151f32;
+    --finance-surface-soft: #1b273b;
+    --finance-input: #111c2f;
+    --finance-border: #304057;
+
+    --finance-text: #f8fafc;
+    --finance-text-secondary: #cbd5e1;
+    --finance-text-muted: #94a3b8;
+
+    --toast-bg: var(--finance-surface);
+    --toast-border: var(--finance-border);
+    --toast-text: var(--finance-text);
+    --toast-body-text: var(--finance-text-secondary);
+
+    --toast-success-bg: #12352c;
+    --toast-success-border: #1f4b3a;
+    --toast-success-heading: #6ee7b7;
+    --toast-success-icon: #34d399;
+
+    --toast-error-bg: #3a1f28;
+    --toast-error-border: #6b3342;
+    --toast-error-heading: #fda4af;
+    --toast-error-icon: #f87171;
+
+    --toast-info-bg: #12233d;
+    --toast-info-border: #1e3a5f;
+    --toast-info-heading: #93c5fd;
+    --toast-info-icon: #60a5fa;
+
+    --toast-warning-bg: #332711;
+    --toast-warning-border: #513c14;
+    --toast-warning-heading: #fcd34d;
+    --toast-warning-icon: #fbbf24;
 }
 
 html,
@@ -50,7 +119,32 @@ body,
     height: 100%;
     margin: 0;
     padding: 0;
+}
 
+html,
+body {
+    background: var(--finance-bg);
+    color: var(--finance-text);
+
+    /* AppLayout's own wrapper (`flex h-screen overflow-hidden`) is meant
+       to be the ONLY thing standing between the single, intended
+       scroll container (<main class="overflow-y-auto">) and the OS
+       window - but a tall nested layout (e.g. Import Preview's grid/table
+       content) can make document.documentElement.scrollHeight exceed its
+       clientHeight even though main's own overflow-y:auto already clips
+       and scrolls that content correctly and completely, which makes the
+       browser/webview treat <html> itself as a second, real scroll
+       container (its computed overflow-y is "visible" by default, and a
+       "visible" root is exactly what lets the OS viewport scroll) -
+       producing a second, outer scrollbar alongside main's own. overflow:
+       hidden here is not about clipping visible content (nothing here is
+       ever meant to render outside main's own scroll region) - it just
+       guarantees the true document root can never itself become a
+       scroll container, regardless of what any nested layout does. */
+    overflow: hidden;
+}
+
+body {
     font-family:
         "Inter",
         -apple-system,
@@ -61,8 +155,9 @@ body,
         Arial,
         sans-serif;
 
-    background: #F6F8FC;
-    color: #0F172A;
+    transition:
+        background-color 150ms ease,
+        color 150ms ease;
 }
 
 *,
@@ -77,4 +172,385 @@ textarea,
 select {
     font: inherit;
 }
-@import "./typography.css";
+
+/* =========================================================
+   DARK MODE — GLOBAL SURFACES
+   ========================================================= */
+
+html.dark .bg-white {
+    background-color: var(--finance-surface) !important;
+}
+
+html.dark .bg-slate-50 {
+    background-color: var(--finance-surface-soft) !important;
+}
+
+html.dark .bg-slate-100 {
+    background-color: #253247 !important;
+}
+
+html.dark .bg-slate-200 {
+    background-color: #334155 !important;
+}
+
+html.dark .bg-slate-900 {
+    background-color: #0b1220 !important;
+}
+
+html.dark .bg-background {
+    background-color: var(--finance-bg) !important;
+}
+
+html.dark .bg-card {
+    background-color: var(--finance-surface) !important;
+}
+
+html.dark .bg-muted {
+    background-color: var(--finance-surface-soft) !important;
+}
+
+/* =========================================================
+   DARK MODE — TEXT
+   ========================================================= */
+
+html.dark .text-slate-950,
+html.dark .text-slate-900,
+html.dark .text-slate-800 {
+    color: #f8fafc !important;
+}
+
+html.dark .text-slate-700 {
+    color: #e2e8f0 !important;
+}
+
+html.dark .text-slate-600 {
+    color: #cbd5e1 !important;
+}
+
+html.dark .text-slate-500 {
+    color: #94a3b8 !important;
+}
+
+html.dark .text-slate-400 {
+    color: #94a3b8 !important;
+}
+
+html.dark .text-slate-300 {
+    color: #cbd5e1 !important;
+}
+
+html.dark .text-foreground,
+html.dark .text-card-foreground {
+    color: var(--finance-text) !important;
+}
+
+html.dark .text-muted-foreground {
+    color: var(--finance-text-secondary) !important;
+}
+
+/* =========================================================
+   DARK MODE — BORDERS
+   ========================================================= */
+
+html.dark .border-slate-50,
+html.dark .border-slate-100 {
+    border-color: #26344a !important;
+}
+
+html.dark .border-slate-200 {
+    border-color: var(--finance-border) !important;
+}
+
+html.dark .border-slate-300 {
+    border-color: #475569 !important;
+}
+
+html.dark .border-border {
+    border-color: var(--finance-border) !important;
+}
+
+/* =========================================================
+   DARK MODE — INPUTS / SELECTS
+   ========================================================= */
+
+html.dark input,
+html.dark textarea,
+html.dark select {
+    background-color: var(--finance-input) !important;
+    color: #f8fafc !important;
+    border-color: var(--finance-border) !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+    color: #7f8da3 !important;
+}
+
+html.dark option {
+    background-color: var(--finance-surface);
+    color: #f8fafc;
+}
+
+/* =========================================================
+   DARK MODE — COMMON HOVER STATES
+   ========================================================= */
+
+html.dark .hover\:bg-white:hover {
+    background-color: #1e293b !important;
+}
+
+html.dark .hover\:bg-slate-50:hover {
+    background-color: #202d42 !important;
+}
+
+html.dark .hover\:bg-slate-100:hover {
+    background-color: #29374c !important;
+}
+
+html.dark .hover\:bg-slate-800:hover {
+    background-color: #1e293b !important;
+}
+
+html.dark .hover\:text-slate-900:hover {
+    color: #ffffff !important;
+}
+
+/* =========================================================
+   DARK MODE — DIVIDERS
+   ========================================================= */
+
+html.dark .divide-slate-200 > :not(:last-child) {
+    border-color: var(--finance-border) !important;
+}
+
+html.dark .divide-y > :not(:last-child) {
+    border-color: #29374b !important;
+}
+
+/* =========================================================
+   DARK MODE — STATUS / ERROR SURFACES
+   ========================================================= */
+
+html.dark .bg-red-50 {
+    background-color: #3a1f28 !important;
+}
+
+html.dark .border-red-100 {
+    border-color: #6b3342 !important;
+}
+
+html.dark .text-red-700 {
+    color: #fda4af !important;
+}
+
+html.dark .bg-emerald-50 {
+    background-color: #12352c !important;
+}
+
+html.dark .text-emerald-600 {
+    color: #6ee7b7 !important;
+}
+
+/* =========================================================
+   DARK MODE — SCROLLBAR
+   ========================================================= */
+
+html.dark {
+    scrollbar-color: #475569 #0b1220;
+}
+
+html.dark ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+html.dark ::-webkit-scrollbar-track {
+    background: #0b1220;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-radius: 999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+}
+
+/* =========================================================
+   DARK MODE — APPLICATION ROOT
+   ========================================================= */
+
+html.dark,
+html.dark body,
+html.dark #root {
+    background-color: var(--finance-bg) !important;
+    color: var(--finance-text) !important;
+}
+
+/* =========================================================
+   COMPACT MODE
+   ========================================================= */
+
+html.compact-mode {
+    --finance-row-padding: 0.45rem;
+    --finance-section-gap: 0.75rem;
+}
+
+/* Tables */
+html.compact-mode table th,
+html.compact-mode table td {
+    padding-top: 0.45rem !important;
+    padding-bottom: 0.45rem !important;
+}
+
+/* Common financial list rows */
+html.compact-mode [role="row"] {
+    min-height: 2.25rem;
+}
+
+/* Cards and list containers */
+html.compact-mode .space-y-6 > :not(:first-child) {
+    margin-top: 0.75rem !important;
+}
+
+html.compact-mode .space-y-5 > :not(:first-child) {
+    margin-top: 0.65rem !important;
+}
+
+html.compact-mode .space-y-4 > :not(:first-child) {
+    margin-top: 0.5rem !important;
+}
+
+/* Common table/list controls */
+html.compact-mode table {
+    line-height: 1.25 !important;
+}
+
+html.compact-mode table th {
+    font-size: 0.75rem !important;
+}
+
+html.compact-mode table td {
+    font-size: 0.8125rem !important;
+}
+
+/* Financial list items */
+html.compact-mode [data-compact-row] {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+}
+
+/* =========================================================
+   TOAST / NOTIFICATION SYSTEM (Sonner)
+
+   Sonner injects its own base stylesheet at runtime (via a
+   <style> tag appended to <head> when the "sonner" module
+   first loads), which can land after this stylesheet in the
+   cascade depending on build/dev ordering. The rules below use
+   !important - consistent with this file's existing dark-mode
+   overrides above - so our design-system colors reliably win
+   over sonner's injected defaults regardless of load order.
+   ========================================================= */
+
+/* Global toast area: centred over the content column (right of the
+   220px AppSidebar) instead of the whole window - see
+   getToasterPlacement in components/layout/layoutMetrics.ts, which
+   sets --finance-toaster-center-shift on the toaster. Desktop only;
+   below 601px sonner's own full-width mobile layout applies. */
+@media (min-width: 601px) {
+    [data-sonner-toaster][data-x-position="center"] {
+        left: calc(50% + var(--finance-toaster-center-shift, 0px)) !important;
+    }
+}
+
+[data-sonner-toast][data-styled="true"] {
+    background: var(--toast-bg) !important;
+    border-color: var(--toast-border) !important;
+    color: var(--toast-text) !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-title] {
+    color: var(--toast-text) !important;
+    font-weight: 600 !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-description] {
+    color: var(--toast-body-text) !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button] {
+    background: var(--toast-bg) !important;
+    border-color: var(--toast-border) !important;
+    color: var(--toast-body-text) !important;
+}
+
+[data-sonner-toast][data-styled="true"] [data-close-button]:hover {
+    filter: brightness(0.94);
+}
+
+[data-sonner-toast][data-type="success"] {
+    background: var(--toast-success-bg) !important;
+    border-color: var(--toast-success-border) !important;
+}
+[data-sonner-toast][data-type="success"] [data-title] {
+    color: var(--toast-success-heading) !important;
+}
+[data-sonner-toast][data-type="success"] [data-icon] {
+    color: var(--toast-success-icon) !important;
+}
+[data-sonner-toast][data-type="success"] [data-close-button] {
+    background: var(--toast-success-bg) !important;
+    border-color: var(--toast-success-border) !important;
+}
+
+[data-sonner-toast][data-type="error"] {
+    background: var(--toast-error-bg) !important;
+    border-color: var(--toast-error-border) !important;
+}
+[data-sonner-toast][data-type="error"] [data-title] {
+    color: var(--toast-error-heading) !important;
+}
+[data-sonner-toast][data-type="error"] [data-icon] {
+    color: var(--toast-error-icon) !important;
+}
+[data-sonner-toast][data-type="error"] [data-close-button] {
+    background: var(--toast-error-bg) !important;
+    border-color: var(--toast-error-border) !important;
+}
+
+[data-sonner-toast][data-type="info"] {
+    background: var(--toast-info-bg) !important;
+    border-color: var(--toast-info-border) !important;
+}
+[data-sonner-toast][data-type="info"] [data-title] {
+    color: var(--toast-info-heading) !important;
+}
+[data-sonner-toast][data-type="info"] [data-icon] {
+    color: var(--toast-info-icon) !important;
+}
+[data-sonner-toast][data-type="info"] [data-close-button] {
+    background: var(--toast-info-bg) !important;
+    border-color: var(--toast-info-border) !important;
+}
+
+[data-sonner-toast][data-type="warning"] {
+    background: var(--toast-warning-bg) !important;
+    border-color: var(--toast-warning-border) !important;
+}
+[data-sonner-toast][data-type="warning"] [data-title] {
+    color: var(--toast-warning-heading) !important;
+}
+[data-sonner-toast][data-type="warning"] [data-icon] {
+    color: var(--toast-warning-icon) !important;
+}
+[data-sonner-toast][data-type="warning"] [data-close-button] {
+    background: var(--toast-warning-bg) !important;
+    border-color: var(--toast-warning-border) !important;
+}
+
+[data-sonner-toast][data-styled="true"] {
+    box-shadow:
+        0 4px 12px rgba(15, 23, 42, 0.08),
+        0 1px 3px rgba(15, 23, 42, 0.06) !important;
+}

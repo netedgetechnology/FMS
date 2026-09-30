@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { ShoppingBag } from "lucide-react";
+
 import {
     Pie,
     PieChart,
@@ -67,7 +69,10 @@ export function ExpenseBreakdownCard({
      */
     const displayData = buildExpenseSegments(items);
 
-    const total = displayData.reduce(
+    // Computed from the raw items (not displayData) so the real total
+    // still shows correctly even when every expense is "Others" and
+    // displayData is therefore empty.
+    const total = items.reduce(
         (sum, item) => sum + item.value,
         0,
     );
@@ -93,98 +98,129 @@ export function ExpenseBreakdownCard({
 
             </div>
 
-            <div className="mt-4 grid grid-cols-[150px_1fr] items-center gap-3">
+            {displayData.length === 0 ? (
 
-                <div className="flex flex-col items-center">
+                <div className="flex flex-1 select-none flex-col items-center justify-center gap-1 text-center">
 
-                    <div className="h-[150px] w-[150px]">
+                    <ShoppingBag
+                        className="h-6 w-6 text-slate-300"
+                        aria-hidden="true"
+                    />
 
-                        <ResponsiveContainer
-                            width="100%"
-                            height="100%"
-                        >
-
-                            <PieChart>
-
-                                <Pie
-                                    data={displayData}
-                                    dataKey="value"
-                                    nameKey="name"
-                                    outerRadius={64}
-                                    stroke="white"
-                                    strokeWidth={2}
-                                    minAngle={4}
-                                    isAnimationActive={false}
-                                />
-
-                            </PieChart>
-
-                        </ResponsiveContainer>
-
+                    <div className="mt-2 text-[13px] font-semibold text-slate-700">
+                        No categorized expenses
                     </div>
 
-                    <div className="mt-3 text-center">
+                    <div className="max-w-[220px] text-[12px] text-slate-500">
+                        Categorize your transactions to see your top spending categories.
+                    </div>
 
-                        <div className="text-[11px] font-medium text-slate-500">
-                            Total
-                        </div>
+                    <div className="mt-3 text-[11px] font-medium text-slate-500">
+                        Total
+                    </div>
 
-                        <div className="text-[14px] font-bold leading-tight text-slate-900 tabular-nums">
-                            {formatMoney(total)}
-                        </div>
-
+                    <div className="text-[14px] font-bold leading-tight text-slate-900 tabular-nums">
+                        {formatMoney(total)}
                     </div>
 
                 </div>
 
-                <div className="flex min-w-0 flex-col justify-center space-y-1.5">
+            ) : (
 
-                    {displayData.map((item, index) => {
+                <div className="mt-4 grid grid-cols-[150px_1fr] items-center gap-3">
 
-                        const percent =
-                            total > 0
-                                ? Math.round(
-                                      (item.value / total) * 100,
-                                  )
-                                : 0;
+                    <div className="flex flex-col items-center">
 
-                        return (
-                            <div
-                                key={`${item.name}-${index}`}
-                                className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-2"
+                        <div className="h-[150px] w-[150px]">
+
+                            <ResponsiveContainer
+                                width="100%"
+                                height="100%"
                             >
 
-                                <span
-                                    className="h-2.5 w-2.5 rounded-full"
-                                    style={{
-                                        background: item.fill,
-                                    }}
-                                />
+                                <PieChart>
 
-                                <span className="truncate text-[13px] font-medium text-slate-700">
-                                    {item.name}
-                                </span>
+                                    <Pie
+                                        data={displayData}
+                                        dataKey="value"
+                                        nameKey="name"
+                                        outerRadius={64}
+                                        stroke="white"
+                                        strokeWidth={2}
+                                        minAngle={4}
+                                        isAnimationActive={false}
+                                    />
 
-                                <span className="flex items-baseline justify-end gap-2 whitespace-nowrap text-[13px]">
+                                </PieChart>
 
-                                    <span className="text-slate-400">
-                                        {percent}%
-                                    </span>
+                            </ResponsiveContainer>
 
-                                    <span className="font-semibold text-slate-900 tabular-nums">
-                                        {formatMoney(item.value)}
-                                    </span>
+                        </div>
 
-                                </span>
+                        <div className="mt-3 text-center">
 
+                            <div className="text-[11px] font-medium text-slate-500">
+                                Total
                             </div>
-                        );
 
-                    })}
+                            <div className="text-[14px] font-bold leading-tight text-slate-900 tabular-nums">
+                                {formatMoney(total)}
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                    <div className="flex min-w-0 flex-col justify-center space-y-1.5">
+
+                        {displayData.map((item, index) => {
+
+                            const percent =
+                                total > 0
+                                    ? Math.round(
+                                          (item.value / total) * 100,
+                                      )
+                                    : 0;
+
+                            return (
+                                <div
+                                    key={`${item.name}-${index}`}
+                                    className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-2"
+                                >
+
+                                    <span
+                                        className="h-2.5 w-2.5 rounded-full"
+                                        style={{
+                                            background: item.fill,
+                                        }}
+                                    />
+
+                                    <span className="truncate text-[13px] font-medium text-slate-700">
+                                        {item.name}
+                                    </span>
+
+                                    <span className="flex items-baseline justify-end gap-2 whitespace-nowrap text-[13px]">
+
+                                        <span className="text-slate-400">
+                                            {percent}%
+                                        </span>
+
+                                        <span className="font-semibold text-slate-900 tabular-nums">
+                                            {formatMoney(item.value)}
+                                        </span>
+
+                                    </span>
+
+                                </div>
+                            );
+
+                        })}
+
+                    </div>
 
                 </div>
 
-            </div>
+            )}
 
         </Card>
     );

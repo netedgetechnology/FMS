@@ -129,6 +129,24 @@ export class ImportMappingRepository
         return renamed;
     }
 
+    // Deletes only this saved mapping row. import_mappings is never
+    // referenced by a FOREIGN KEY from any other table - a mapping's
+    // headers/column mapping and header_signature exist solely for this
+    // page's own "reuse on future imports" lookup (findBySignature), and
+    // an already-imported transaction's Mapping Name (source_statement)
+    // is free text stamped at import time, not a reference to this row
+    // - so a single DELETE is already atomic and safe, with nothing else
+    // to clean up and nothing else that can be left dangling.
+    async delete(id: string): Promise<void> {
+        await this.execute(
+            `
+            DELETE FROM import_mappings
+            WHERE id = ?
+            `,
+            [id]
+        );
+    }
+
     // Persists a confirmed mapping. A mapping already saved for the same
     // header structure (header_signature is UNIQUE) is refreshed in place
     // - same id, updated name/institution/mapping - rather than
