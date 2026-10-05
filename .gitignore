@@ -7,3 +7,12 @@ coverage
 *.db
 *.db-journal
 .vscode
+
+# Local database/runtime data - never commit
+database/
+
+# Temporary development artifacts
+*.backup.ts
+*.phase1-backup
+*.broken
+q.mjs
