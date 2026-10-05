@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import type { Account } from "@/modules/accounts/types";
 import type { Category } from "@/modules/categories/types";
+import type { PaymentType } from "@/modules/payment-types";
 
 import { CustomRuleManager } from "../components/CustomRuleManager";
 import type {
@@ -40,6 +41,8 @@ export interface CustomRulesDialogProps {
     // rule id -> rows it currently applies to in the preview.
     appliedCountByRule: ReadonlyMap<string, number>;
     categories: readonly Category[];
+    // Payment Type master list - the rule form's Type options.
+    paymentTypes: readonly PaymentType[];
     formatDate: (value: string | Date | null | undefined) => string;
     onCreate: (input: CreateCustomImportRuleInput) => Promise<void>;
     onUpdate: (
@@ -59,6 +62,7 @@ export function CustomRulesDialog({
     previewCandidates,
     appliedCountByRule,
     categories,
+    paymentTypes,
     formatDate,
     onCreate,
     onUpdate,
@@ -81,6 +85,7 @@ export function CustomRulesDialog({
                         rules={rules}
                         accounts={accounts}
                         categories={categories}
+                        paymentTypes={paymentTypes}
                         formatDate={formatDate}
                         scopeAccountId={accountId}
                         appliedCountByRule={appliedCountByRule}

@@ -11,34 +11,25 @@ export type TransactionStatus =
     | "PENDING"
     | "CLEARED";
 
-export type PaymentMethod =
-    | "CASH"
-    | "CARD"
-    | "DEBIT_CARD"
-    | "UPI"
-    | "BANK_TRANSFER"
-    | "DIRECT_DEBIT"
-    | "OTHER";
+// A Payment Type code from the user-managed master list (Settings ->
+// Payment Types, table payment_types) - e.g. "UPI", "PAYPAL", or one the
+// user added such as "GOOGLE_PAY". Every Payment Type selector offers the
+// active master-list types; no list of codes is kept in code.
+export type PaymentTypeCode = string;
 
-// The transaction *channel* - which rail carried the money (UPI/IMPS/
-// NEFT/RTGS/Cash/Cheque/Credit Card). Separate from PaymentMethod (a
-// broader, manually-selected category) and from TransactionType above
+// The manually-selected Payment Method (transactions.payment_method). A
+// master-list code.
+export type PaymentMethod = PaymentTypeCode;
+
+// The transaction *channel* - which rail carried the money
+// (transactions.transaction_type). Also a master-list code, but a
+// separate field from PaymentMethod, and from TransactionType above
 // (DR/CR direction, i.e. income/expense/transfer): this never
-// overwrites either. Kept in sync with @financeos/import-engine's own
-// TransactionChannel. CREDIT_CARD is a generic payment rail like every
-// other value here, independent of an account's own
-// AccountType.CREDIT_CARD.
-export type TransactionChannel =
-    | "UPI"
-    | "IMPS"
-    | "NEFT"
-    | "RTGS"
-    | "CASH"
-    | "CHEQUE"
-    | "EMANDATE"
-    | "NET_BANKING"
-    | "MOBILE_APP"
-    | "CREDIT_CARD";
+// overwrites either. @financeos/import-engine detects a fixed subset of
+// these codes from bank narrations; the user may pick any master-list
+// type in Import Preview. CREDIT_CARD is a generic payment rail,
+// independent of an account's own AccountType.CREDIT_CARD.
+export type TransactionChannel = PaymentTypeCode;
 
 export interface Transaction {
 

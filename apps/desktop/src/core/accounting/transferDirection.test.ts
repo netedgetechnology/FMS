@@ -31,6 +31,10 @@ import {
     transferCategoryIdSet,
     transferDirectionForType,
 } from "./transferClassification";
+import {
+    SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+    SEEDED_PAYMENT_TYPE_LIST,
+} from "@/modules/payment-types/testing/seededPaymentTypes";
 
 // ---------------------------------------------------------------------
 // Choosing a Transfer category makes a transaction a Transfer. Its
@@ -139,9 +143,18 @@ describe("the shared rule", () => {
         expect(applyTransferCategoryRule({ type: "transfer", transferDirection: "IN" }, true)).toEqual({ type: "transfer", transferDirection: "IN" });
     });
 
-    it("a normal category never changes the type, and never un-does a transfer", () => {
+    it("a normal category never changes the type, and never un-does a standalone transfer", () => {
         expect(applyTransferCategoryRule({ type: "expense" }, false)).toEqual({ type: "expense", transferDirection: null });
         expect(applyTransferCategoryRule({ type: "transfer", transferDirection: "OUT" }, false)).toEqual({ type: "transfer", transferDirection: "OUT" });
+    });
+
+    it("leaving a Transfer category restores Income/Expense from the direction", () => {
+        expect(applyTransferCategoryRule({ type: "transfer", transferDirection: "OUT" }, false, true)).toEqual({ type: "expense", transferDirection: null });
+        expect(applyTransferCategoryRule({ type: "transfer", transferDirection: "IN" }, false, true)).toEqual({ type: "income", transferDirection: null });
+        // Legacy transfer with no direction: nothing to restore - stays a transfer.
+        expect(applyTransferCategoryRule({ type: "transfer", transferDirection: null }, false, true)).toEqual({ type: "transfer", transferDirection: null });
+        // Transfer category -> another Transfer category: still a transfer.
+        expect(applyTransferCategoryRule({ type: "transfer", transferDirection: "OUT" }, true, true)).toEqual({ type: "transfer", transferDirection: "OUT" });
     });
 
     it("balance side: income +, expense -, transfer by direction, legacy transfer none", () => {
@@ -211,12 +224,24 @@ describe("Edit Transaction", () => {
         expect(await load(id)).toMatchObject({ type: "transfer", transferDirection: "OUT", categoryId: "cat-bank-transfer", amount: 2000 });
     });
 
-    it("Transfer category -> normal category keeps Type = Transfer and its direction", async () => {
-        const id = await create({ type: "income", categoryId: "cat-bank-transfer" });
+    it("Transfer category -> normal category restores Income/Expense from the transfer's direction", async () => {
+        const credit = await create({ type: "income", categoryId: "cat-bank-transfer" });
+        const debit = await create({ type: "expense", categoryId: "cat-bank-transfer" });
+
+        // Even when the caller still sends type "transfer".
+        await service().update({ id: credit, categoryId: "cat-salary", type: "transfer", accountId: "bank", amount: 2000, payee: "Payee", transactionDate: "2026-09-10" });
+        await service().update({ id: debit, categoryId: "cat-groceries", type: "transfer", accountId: "bank", amount: 2000, payee: "Payee", transactionDate: "2026-09-10" });
+
+        expect(await load(credit)).toMatchObject({ type: "income", transferDirection: null, categoryId: "cat-salary" });
+        expect(await load(debit)).toMatchObject({ type: "expense", transferDirection: null, categoryId: "cat-groceries" });
+    });
+
+    it("a standalone transfer (typed by hand on a normal category) stays a transfer when the category changes", async () => {
+        const id = await create({ type: "transfer", transferDirection: "OUT", categoryId: "cat-groceries" });
 
         await service().update({ id, categoryId: "cat-salary", type: "transfer", accountId: "bank", amount: 2000, payee: "Payee", transactionDate: "2026-09-10" });
 
-        expect(await load(id)).toMatchObject({ type: "transfer", transferDirection: "IN", categoryId: "cat-salary" });
+        expect(await load(id)).toMatchObject({ type: "transfer", transferDirection: "OUT", categoryId: "cat-salary" });
     });
 
     it("switching Type to Transfer without a direction derives it from the row's Debit/Credit", async () => {
@@ -235,12 +260,19 @@ describe("Edit Transaction", () => {
         expect(await load(id)).toMatchObject({ type: "transfer", transferDirection: "OUT", notes: "moved to savings", payee: "To Savings" });
     });
 
-    it("the form keeps a Transfer when a normal category is picked (unless a mapping locks the type)", () => {
+    it("the form keeps a standalone Transfer when a normal category is picked (unless a mapping locks the type)", () => {
         const form = readFileSync(path.resolve(__dirname, "../../modules/transactions/components/TransactionForm.tsx"), "utf8");
 
         expect(form).toMatch(
             /currentType === "transfer" &&\s+suggestedType !== "transfer" &&\s+!isLockedResolution\(typeResolution\)\s+\) \{\s+return;/
         );
+    });
+
+    it("the form restores Income/Expense from the direction when leaving a Transfer category (by type, not name)", () => {
+        const form = readFileSync(path.resolve(__dirname, "../../modules/transactions/components/TransactionForm.tsx"), "utf8");
+
+        expect(form).toMatch(/previousCategory\?\.categoryType === "TRANSFER" &&\s+typeResolution\.categoryType !== "TRANSFER"/);
+        expect(form).toMatch(/debitCreditTypeForDirection\(\s+getValues\("transferDirection"\)\s+\)/);
     });
 });
 
@@ -296,7 +328,7 @@ describe("Import", () => {
                     },
                     displayNumber: 1, hasErrors: false, isDuplicate: false, isTransfer: true,
                     indicatorState: "blank", indicatorClickable: false, hasMatchedLearnedRule: false,
-                    importing: false, directionCategoryOptions: [], categories, categoriesLoading: false,
+                    importing: false, directionCategoryOptions: [], categories, categoriesLoading: false, paymentTypeOptions: SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS, paymentTypes: SEEDED_PAYMENT_TYPE_LIST,
                     onToggleSelfLearning: noop, onPayeeCommit: noop, onTransactionTypeChange: noop,
                     onCategoryChange: noop, onNotesCommit: noop, onViewDescription: noop,
                 })

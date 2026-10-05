@@ -29,6 +29,7 @@ import {
 
 import { useSettings } from "../hooks";
 import { BackupService } from "@/modules/backup";
+import { PaymentTypeManager } from "@/modules/payment-types";
 import { SQLiteProvider } from "@/core/database/engine/SQLiteProvider";
 import { getErrorMessage } from "@/core/errors";
 import {
@@ -464,6 +465,10 @@ export default function SettingsPage() {
                         </SettingRow>
 
                     </div>
+                </SectionCard>
+
+                <SectionCard title="Payment Types">
+                    <PaymentTypeManager />
                 </SectionCard>
 
                 <SectionCard title="Backup & Restore">

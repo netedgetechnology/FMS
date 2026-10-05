@@ -27,6 +27,10 @@ import {
 } from "./ImportsPage";
 import { resolveImportCategoryOptions } from "./importCategoryOptions";
 import { ImportPreviewRow, type ImportPreviewRowProps } from "./ImportPreviewRow";
+import {
+    SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+    SEEDED_PAYMENT_TYPE_LIST,
+} from "@/modules/payment-types/testing/seededPaymentTypes";
 
 // ---------------------------------------------------------------------
 // Import Preview scalability (5,000+ rows).
@@ -152,6 +156,8 @@ function renderProps(state: PageState): {
             directionCategoryOptions: optionsByDirection[candidate.type ?? "none"],
             categories,
             categoriesLoading: false,
+            paymentTypeOptions: SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+            paymentTypes: SEEDED_PAYMENT_TYPE_LIST,
            
             ...handlers,
         } satisfies ImportPreviewRowProps;
@@ -377,6 +383,8 @@ describe("typing never touches the page (row-local drafts)", () => {
                             directionCategoryOptions: optionsByDirection.expense,
                             categories,
                             categoriesLoading: false,
+                            paymentTypeOptions: SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+                            paymentTypes: SEEDED_PAYMENT_TYPE_LIST,
                            
                             ...handlers,
                         })

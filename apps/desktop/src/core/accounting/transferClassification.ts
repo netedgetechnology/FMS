@@ -51,6 +51,22 @@ export function transferDirectionForType(
     return null;
 }
 
+// The reverse of transferDirectionForType: the Income/Expense a transfer
+// becomes again when it stops being a transfer (OUT -> expense, IN ->
+// income), so its account balance never moves. null for a legacy
+// transfer with no recorded direction - there is nothing to restore.
+export function debitCreditTypeForDirection(
+    direction: string | null | undefined
+): "income" | "expense" | null {
+    if (direction === "OUT") {
+        return "expense";
+    }
+    if (direction === "IN") {
+        return "income";
+    }
+    return null;
+}
+
 // The Debit/Credit side a transaction moves its account's balance on:
 // "income" (+) or "expense" (-). A transfer counts by its direction; a
 // transfer with no recorded direction (legacy) returns null and - as
@@ -76,15 +92,32 @@ export function balanceSide(transaction: {
     return null;
 }
 
-// The rule applied wherever a transaction's category is set: choosing a
-// TRANSFER category makes it a transfer, keeping its money direction
-// (from its previous Debit/Credit side, or its existing transfer
-// direction). Choosing any other category never changes the type.
+// The rule applied wherever a transaction's category is set. Only the
+// category's TYPE matters - never its name ("Bank Transfer", "Credit Card
+// Payment" and any user-created TRANSFER category behave identically):
+//  - a TRANSFER category makes it a transfer, keeping its money direction
+//    (from its previous Debit/Credit side, or its existing transfer
+//    direction);
+//  - moving a transfer OFF a TRANSFER category (`wasTransferCategory`) to
+//    any other category - or none - restores its Income/Expense from its
+//    direction (OUT -> expense, IN -> income), so the balance is unchanged;
+//  - any other change never alters the type: a transfer typed by hand on
+//    a normal category (a standalone transfer) stays a transfer.
 export function applyTransferCategoryRule(
     current: { type: string; transferDirection?: TransferDirection | null },
-    isTransferCategory: boolean
+    isTransferCategory: boolean,
+    wasTransferCategory = false
 ): { type: string; transferDirection: TransferDirection | null } {
     if (current.type === "transfer") {
+        const restored =
+            !isTransferCategory && wasTransferCategory
+                ? debitCreditTypeForDirection(current.transferDirection)
+                : null;
+
+        if (restored) {
+            return { type: restored, transferDirection: null };
+        }
+
         return {
             type: "transfer",
             transferDirection: current.transferDirection ?? null,

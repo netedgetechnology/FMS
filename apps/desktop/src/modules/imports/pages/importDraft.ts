@@ -1,7 +1,6 @@
 import type {
     CsvImportType,
     NormalizedTransactionCandidate,
-    TransactionChannel,
 } from "@financeos/import-engine";
 
 import type { BaseFinanceScope } from "@/modules/categories/types";
@@ -410,7 +409,7 @@ export function decodeDraftPreview(json: Json): ImportDraftPreview {
 
 function isTransactionTypeOverride(
     value: unknown
-): value is TransactionChannel | "" {
+): value is string {
     return typeof value === "string";
 }
 

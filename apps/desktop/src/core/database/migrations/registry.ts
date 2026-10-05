@@ -39,7 +39,11 @@ import { CounterpartyRulesCategoryMigration } from "./039_counterparty_rules_cat
 import { TransactionTransferDirectionMigration } from "./040_transaction_transfer_direction";
 import { ImportCustomRulesMigration } from "./041_import_custom_rules";
 import { ImportDraftsMigration } from "./042_import_drafts";
+import { PaymentTypesMigration } from "./044_payment_types";
 
+// Version 43 is retired: a since-removed migration (transfer links) was
+// applied to some development databases, and MigrationEngine skips any
+// version already in schema_version. The next migration must be 44.
 export const migrations = [
     InitialSchemaMigration,
     SeedDataMigration,
@@ -82,5 +86,6 @@ export const migrations = [
     TransactionTransferDirectionMigration,
     ImportCustomRulesMigration,
     ImportDraftsMigration,
+    PaymentTypesMigration,
 ];
 

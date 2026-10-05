@@ -17,6 +17,10 @@ import {
     deriveSessionLearnedRowNumbers,
 } from "./ImportsPage";
 import { ImportPreviewRow, type ImportPreviewRowProps } from "./ImportPreviewRow";
+import {
+    SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+    SEEDED_PAYMENT_TYPE_LIST,
+} from "@/modules/payment-types/testing/seededPaymentTypes";
 
 function row(
     rowNumber: number,
@@ -75,6 +79,8 @@ function render(props: Partial<ImportPreviewRowProps> & { candidate: NormalizedT
                     directionCategoryOptions: [],
                     categories: [],
                     categoriesLoading: false,
+                    paymentTypeOptions: SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+                    paymentTypes: SEEDED_PAYMENT_TYPE_LIST,
                     onToggleSelfLearning: noop,
                     onPayeeCommit: noop,
                     onTransactionTypeChange: noop,

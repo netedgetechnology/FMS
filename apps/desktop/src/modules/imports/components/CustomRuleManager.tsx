@@ -1,10 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Pencil, Plus, Search, Trash2, Wand2 } from "lucide-react";
 
-import type {
-    NormalizedTransactionCandidate,
-    TransactionChannel,
-} from "@financeos/import-engine";
+import type { NormalizedTransactionCandidate } from "@financeos/import-engine";
 
 import {
     AlertDialog,
@@ -17,8 +14,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { Account } from "@/modules/accounts/types";
 import type { Category } from "@/modules/categories/types";
+import {
+    activePaymentTypeOptions,
+    paymentTypeLabel,
+    paymentTypeOptionsFor,
+    type PaymentType,
+    type PaymentTypeOption,
+} from "@/modules/payment-types";
 
-import { TRANSACTION_CHANNEL_OPTIONS } from "../pages/ImportPreviewRow";
 import { countCustomRuleMatches } from "../services/customImportRules";
 import type {
     CreateCustomImportRuleInput,
@@ -45,7 +48,8 @@ export interface CustomRuleFormValues {
     payee: string;
     notes: string;
     categoryId: string;
-    transactionType: TransactionChannel | "";
+    // A Payment Type master-list code; "" = not set.
+    transactionType: string;
 }
 
 export const EMPTY_CUSTOM_RULE_FORM: CustomRuleFormValues = {
@@ -66,9 +70,7 @@ export function customRuleFormFromRule(
         payee: rule.payee ?? "",
         notes: rule.notes ?? "",
         categoryId: rule.categoryId ?? "",
-        transactionType: (rule.transactionType ?? "") as
-            | TransactionChannel
-            | "",
+        transactionType: rule.transactionType ?? "",
     };
 }
 
@@ -98,15 +100,30 @@ export function canSaveCustomRuleForm(form: CustomRuleFormValues): boolean {
     );
 }
 
-export function customRuleTypeLabel(value: string | null): string | null {
+// The rule form's Type options: the active Payment Types, plus the edited
+// rule's own Type if that type is now inactive - kept so saving the rule
+// never silently clears it.
+export function customRuleTypeOptions(
+    paymentTypes: readonly PaymentType[],
+    editingRule: Pick<CustomImportRule, "transactionType"> | null
+): readonly PaymentTypeOption[] {
+    return paymentTypeOptionsFor(
+        activePaymentTypeOptions(paymentTypes),
+        paymentTypes,
+        editingRule?.transactionType ?? null
+    );
+}
+
+// A rule's Type as shown: its Payment Type master-list label.
+export function customRuleTypeLabel(
+    value: string | null,
+    paymentTypes: readonly PaymentType[]
+): string | null {
     if (!value) {
         return null;
     }
 
-    return (
-        TRANSACTION_CHANNEL_OPTIONS.find(option => option.value === value)
-            ?.label ?? value
-    );
+    return paymentTypeLabel(paymentTypes, value);
 }
 
 export interface CustomRuleDisplay {
@@ -122,7 +139,8 @@ export interface CustomRuleDisplay {
 export function describeCustomRule(
     rule: CustomImportRule,
     accounts: readonly AccountOption[],
-    categories: readonly Pick<Category, "id" | "name">[]
+    categories: readonly Pick<Category, "id" | "name">[],
+    paymentTypes: readonly PaymentType[]
 ): CustomRuleDisplay {
     return {
         keyword: rule.keyword,
@@ -134,7 +152,7 @@ export function describeCustomRule(
             ? categories.find(category => category.id === rule.categoryId)
                   ?.name ?? "(unavailable category)"
             : null,
-        type: customRuleTypeLabel(rule.transactionType),
+        type: customRuleTypeLabel(rule.transactionType, paymentTypes),
         notes: rule.notes,
     };
 }
@@ -145,7 +163,8 @@ export function filterCustomRules(
     rules: readonly CustomImportRule[],
     filter: { search: string; accountId: string },
     accounts: readonly AccountOption[],
-    categories: readonly Pick<Category, "id" | "name">[]
+    categories: readonly Pick<Category, "id" | "name">[],
+    paymentTypes: readonly PaymentType[]
 ): CustomImportRule[] {
     const needle = filter.search.trim().toLowerCase();
 
@@ -158,7 +177,12 @@ export function filterCustomRules(
             return true;
         }
 
-        const shown = describeCustomRule(rule, accounts, categories);
+        const shown = describeCustomRule(
+            rule,
+            accounts,
+            categories,
+            paymentTypes
+        );
 
         return Object.values(shown).some(
             value => value !== null && value.toLowerCase().includes(needle)
@@ -177,6 +201,9 @@ export interface CustomRuleManagerProps {
     rules: readonly CustomImportRule[];
     accounts: readonly AccountOption[];
     categories: readonly Category[];
+    // Payment Type master list (Settings -> Payment Types) - the form's
+    // Type options and how a rule's Type is shown.
+    paymentTypes: readonly PaymentType[];
     formatDate: (value: string | Date | null | undefined) => string;
     // Import Preview: only this account's rules, and new rules are for
     // it. Null there means no account is selected yet. Leave undefined
@@ -212,6 +239,7 @@ export function CustomRuleManager({
     rules,
     accounts,
     categories,
+    paymentTypes,
     formatDate,
     scopeAccountId,
     appliedCountByRule,
@@ -253,6 +281,15 @@ export function CustomRuleManager({
         [categories]
     );
 
+    const typeOptions = useMemo(
+        () =>
+            customRuleTypeOptions(
+                paymentTypes,
+                editor?.mode === "edit" ? editor.rule : null
+            ),
+        [paymentTypes, editor]
+    );
+
     const scopedRules = useMemo(
         () =>
             scoped
@@ -267,9 +304,18 @@ export function CustomRuleManager({
                 scopedRules,
                 { search, accountId: scoped ? "" : accountFilter },
                 accounts,
-                categories
+                categories,
+                paymentTypes
             ),
-        [scopedRules, search, scoped, accountFilter, accounts, categories]
+        [
+            scopedRules,
+            search,
+            scoped,
+            accountFilter,
+            accounts,
+            categories,
+            paymentTypes,
+        ]
     );
 
     const matchCount = useMemo(
@@ -507,9 +553,7 @@ export function CustomRuleManager({
                                 onChange={event =>
                                     setField(
                                         "transactionType",
-                                        event.target.value as
-                                            | TransactionChannel
-                                            | ""
+                                        event.target.value
                                     )
                                 }
                                 aria-label="Type"
@@ -517,9 +561,7 @@ export function CustomRuleManager({
                                 className={FIELD_CLASS}
                             >
                                 <option value="">— Not set —</option>
-                                {TRANSACTION_CHANNEL_OPTIONS.filter(
-                                    option => option.value !== ""
-                                ).map(option => (
+                                {typeOptions.map(option => (
                                     <option key={option.value} value={option.value}>
                                         {option.label}
                                     </option>
@@ -660,7 +702,8 @@ export function CustomRuleManager({
                                     const shown = describeCustomRule(
                                         rule,
                                         accounts,
-                                        categories
+                                        categories,
+                                        paymentTypes
                                     );
                                     const applied =
                                         appliedCountByRule?.get(rule.id) ?? 0;
@@ -760,7 +803,7 @@ export function CustomRuleManager({
                         <AlertDialogTitle>Delete this import rule?</AlertDialogTitle>
                         <AlertDialogDescription>
                             {pendingDelete &&
-                                `“${pendingDelete.keyword}” will no longer apply to future imports into ${describeCustomRule(pendingDelete, accounts, categories).account}. Transactions already in FinWea are not changed.`}
+                                `“${pendingDelete.keyword}” will no longer apply to future imports into ${describeCustomRule(pendingDelete, accounts, categories, paymentTypes).account}. Transactions already in FinWea are not changed.`}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
 

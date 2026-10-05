@@ -1,0 +1,77 @@
+{
+  "source": "Structure of a real Indian credit-card statement (anonymised): single billed Amount column with a trailing C/D marker, no running balance. Statement-level fee/tax lines are printed WITHOUT a date directly under the statement-date finance-charge row, before the per-cardholder transaction list. Summary figures, reward-point counts and page footers sit between rows and must not become transactions.",
+  "importType": "CREDIT_CARD_PDF",
+  "features": [
+    "amount-only",
+    "single-letter-cd-marker",
+    "no-balance",
+    "two-digit-year",
+    "undated-fee-lines",
+    "foreign-currency-amount-in-narration"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 0,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-07-16",
+        "type": "income",
+        "amount": 50000,
+        "balance": null,
+        "description": "PAYMENT RECEIVED 000000000TESTPAY000003"
+      },
+      {
+        "date": "2026-08-13",
+        "type": "expense",
+        "amount": 69.66,
+        "balance": null,
+        "description": "DCC MARKUP FEE DR (EXCL TAX 12.54)"
+      },
+      {
+        "date": "2026-08-15",
+        "type": "expense",
+        "amount": 3833.71,
+        "balance": null,
+        "description": "FIN CHARGE ON RETAIL (EXCL TAX 690.07)"
+      },
+      {
+        "date": "2026-08-15",
+        "type": "expense",
+        "amount": 950.58,
+        "balance": null,
+        "description": "FORGN CURR MARKUP DB (EXCL TAX 171.11)"
+      },
+      {
+        "date": "2026-08-15",
+        "type": "expense",
+        "amount": 873.72,
+        "balance": null,
+        "description": "IGST DB @ 18.00%"
+      },
+      {
+        "date": "2026-07-15",
+        "type": "expense",
+        "amount": 415.79,
+        "balance": null,
+        "description": "TEST HOSTING CO TX 4.32 USD"
+      },
+      {
+        "date": "2026-07-16",
+        "type": "expense",
+        "amount": 1011.8,
+        "balance": null,
+        "description": "TEST FUEL STATION CITY IN"
+      },
+      {
+        "date": "2026-07-19",
+        "type": "expense",
+        "amount": 179.66,
+        "balance": null,
+        "description": "TEST SOFTWARE CO CITY IN"
+      }
+    ]
+  }
+}

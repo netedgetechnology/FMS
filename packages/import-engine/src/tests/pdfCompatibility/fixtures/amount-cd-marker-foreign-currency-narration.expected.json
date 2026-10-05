@@ -1,0 +1,83 @@
+{
+  "source": "Structure of a real Indian credit-card statement (anonymised): single billed Amount column with a trailing single-letter C/D marker and no running balance, where international transactions print their original foreign-currency amount ('4.32 USD') in the narration directly before the billed amount. Consecutive rows repeat the same billed amount, which used to be read as an unchanged 'running balance'.",
+  "importType": "CREDIT_CARD_PDF",
+  "features": [
+    "amount-only",
+    "single-letter-cd-marker",
+    "no-balance",
+    "two-digit-year",
+    "foreign-currency-amount-in-narration"
+  ],
+  "expect": {
+    "validationErrors": 0,
+    "balanceReconciliation": {
+      "checkedRows": 0,
+      "mismatches": 0
+    },
+    "rows": [
+      {
+        "date": "2026-07-15",
+        "type": "expense",
+        "amount": 415.79,
+        "balance": null,
+        "description": "TEST HOSTING CO TX 4.32 USD"
+      },
+      {
+        "date": "2026-07-16",
+        "type": "income",
+        "amount": 50000,
+        "balance": null,
+        "description": "PAYMENT RECEIVED 000000000TESTPAY000002"
+      },
+      {
+        "date": "2026-07-19",
+        "type": "expense",
+        "amount": 796.37,
+        "balance": null,
+        "description": "TEST VPN SERVICE Lisboa PT 8.26 USD"
+      },
+      {
+        "date": "2026-07-20",
+        "type": "expense",
+        "amount": 796.37,
+        "balance": null,
+        "description": "TEST VPN SERVICE London GB 8.26 USD"
+      },
+      {
+        "date": "2026-07-20",
+        "type": "expense",
+        "amount": 1012.33,
+        "balance": null,
+        "description": "TEST HOSTING CO TX 10.50 USD"
+      },
+      {
+        "date": "2026-07-20",
+        "type": "expense",
+        "amount": 594.87,
+        "balance": null,
+        "description": "TEST HOSTING CO TX 6.17 USD"
+      },
+      {
+        "date": "2026-08-02",
+        "type": "expense",
+        "amount": 8556.02,
+        "balance": null,
+        "description": "TEST WEB HOST YORK GB 66.39 GBP (Pay in EMIs)"
+      },
+      {
+        "date": "2026-08-13",
+        "type": "expense",
+        "amount": 3500.75,
+        "balance": null,
+        "description": "TEST BILLING GB 3,500.75 INR (Pay in EMIs)"
+      },
+      {
+        "date": "2026-08-14",
+        "type": "expense",
+        "amount": 1011.8,
+        "balance": null,
+        "description": "TEST FUEL STATION CITY IN"
+      }
+    ]
+  }
+}

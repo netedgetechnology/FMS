@@ -29,6 +29,7 @@ import { bulkMoveBlockReason } from "./bulkAccountMove";
 import {
     applyTransferCategoryRule,
     balanceSide,
+    debitCreditTypeForDirection,
     transferDirectionForType,
 } from "@/core/accounting/transferClassification";
 import { CounterpartyRuleRepository } from "@/modules/imports/repositories/CounterpartyRuleRepository";
@@ -39,6 +40,17 @@ import {
 
 function createId(): string {
     return crypto.randomUUID();
+}
+
+// The request's own keys whose value is not undefined. An update request is
+// partial: a key it omits (or leaves undefined) means "not edited", while an
+// explicit null/""/false is a deliberate change.
+function providedFields<T extends object>(request: T): Partial<T> {
+    return Object.fromEntries(
+        Object.entries(request).filter(
+            ([, value]) => value !== undefined
+        )
+    ) as Partial<T>;
 }
 
 export class TransactionService {
@@ -134,19 +146,29 @@ export class TransactionService {
     // category (see applyTransferCategoryRule): a TRANSFER category makes
     // it a transfer, keeping its money direction - from `direction` when
     // given, else its Debit/Credit side (expense -> OUT, income -> IN).
-    // Any other category leaves the type exactly as requested.
+    // Leaving a TRANSFER category (`previousCategoryId` was one) for any
+    // other category restores Income/Expense from that direction. Any
+    // other change leaves the type exactly as requested. Only the
+    // category's type is consulted - never its name.
     private async resolveTransferTyping(
         categoryId: string | null,
         type: TransactionType,
-        direction: TransferDirection | null
+        direction: TransferDirection | null,
+        previousCategoryId: string | null = null
     ): Promise<{ type: TransactionType; transferDirection: TransferDirection | null }> {
-        const category = categoryId
-            ? await this.categoryRepository.getById(categoryId)
-            : null;
+        const [category, previousCategory] = await Promise.all([
+            categoryId
+                ? this.categoryRepository.getById(categoryId)
+                : null,
+            previousCategoryId && previousCategoryId !== categoryId
+                ? this.categoryRepository.getById(previousCategoryId)
+                : null,
+        ]);
 
         const resolved = applyTransferCategoryRule(
             { type, transferDirection: direction },
-            category?.categoryType === "TRANSFER"
+            category?.categoryType === "TRANSFER",
+            previousCategory?.categoryType === "TRANSFER"
         );
 
         return {
@@ -344,7 +366,8 @@ export class TransactionService {
             request.type ?? existing.type,
             request.transferDirection !== undefined
                 ? request.transferDirection
-                : existing.transferDirection ?? null
+                : existing.transferDirection ?? null,
+            existing.categoryId ?? null
         );
 
         // Becoming a transfer with no direction supplied: it is the
@@ -365,8 +388,19 @@ export class TransactionService {
             typing.type
         );
 
+        // A partial update merged over the stored row: every field the
+        // request omits keeps its stored value. The Edit form only carries
+        // the fields it shows, so without this an edit silently erased
+        // import metadata (transaction_type, is_imported,
+        // external_transaction_id, counterparty, branch) and the
+        // reconciliation state - repository.update rewrites every column.
+        const merged = {
+            ...existing,
+            ...providedFields(request),
+        };
+
         await this.repository.update({
-            ...request,
+            ...merged,
 
             type:
                 typing.type,
@@ -377,61 +411,64 @@ export class TransactionService {
             // See the matching comment in create() - normalizes the "None"
             // category's "" submission to null.
             categoryId:
-                request.categoryId?.trim() || null,
+                merged.categoryId?.trim() || null,
 
             subcategoryId:
-                request.subcategoryId ?? null,
+                merged.subcategoryId ?? null,
 
             payee:
-                request.payee?.trim() || "",
+                merged.payee?.trim() || "",
 
             counterparty:
-                request.counterparty?.trim() || null,
+                merged.counterparty?.trim() || null,
 
             branch:
-                request.branch?.trim() || null,
+                merged.branch?.trim() || null,
 
             referenceNumber:
-                request.referenceNumber?.trim() || null,
+                merged.referenceNumber?.trim() || null,
 
             notes:
-                request.notes?.trim() || null,
+                merged.notes?.trim() || null,
 
             tags:
-                request.tags?.trim() || null,
+                merged.tags?.trim() || null,
 
             status:
-                request.status ?? "CLEARED",
+                merged.status ?? "CLEARED",
 
             paymentMethod:
-                request.paymentMethod ?? null,
+                merged.paymentMethod ?? null,
 
             upiReference:
-                request.upiReference?.trim() || null,
+                merged.upiReference?.trim() || null,
 
             bankTransactionReference:
-                request.bankTransactionReference?.trim() || null,
+                merged.bankTransactionReference?.trim() || null,
 
             cardReference:
-                request.cardReference?.trim() || null,
+                merged.cardReference?.trim() || null,
+
+            transactionType:
+                merged.transactionType ?? null,
 
             reconciled:
-                request.reconciled ?? false,
+                Boolean(merged.reconciled),
 
             reconciledAt:
-                request.reconciledAt ?? null,
+                merged.reconciledAt ?? null,
 
             isImported:
-                request.isImported ?? false,
+                Boolean(merged.isImported),
 
             sourceStatement:
-                request.sourceStatement?.trim() || null,
+                merged.sourceStatement?.trim() || null,
 
             externalTransactionId:
-                request.externalTransactionId?.trim() || null,
+                merged.externalTransactionId?.trim() || null,
 
             originalNarration:
-                request.originalNarration?.trim() || null,
+                merged.originalNarration?.trim() || null,
         });
 
         await this.learnFromEdit(existing, {
@@ -606,14 +643,33 @@ export class TransactionService {
         // checked with that final type, exactly as a single edit is.
         const makeTransfer = category.categoryType === "TRANSFER";
 
+        // A normal category replacing a TRANSFER category turns those
+        // transfers back into Income/Expense from their direction - the
+        // same rule as a single edit (applyTransferCategoryRule).
+        const revertIds = makeTransfer
+            ? new Set<string>()
+            : await this.transferCategoryRevertIds(
+                  transactions,
+                  categoryId
+              );
+
+        const finalTransactions = transactions.map(transaction => {
+            if (makeTransfer) {
+                return { ...transaction, type: "transfer" as const };
+            }
+
+            const restored = revertIds.has(transaction.id)
+                ? debitCreditTypeForDirection(transaction.transferDirection)
+                : null;
+
+            return restored
+                ? { ...transaction, type: restored }
+                : transaction;
+        });
+
         const incompatible = incompatibleTransactionIds(
             category,
-            makeTransfer
-                ? transactions.map(transaction => ({
-                      ...transaction,
-                      type: "transfer" as const,
-                  }))
-                : transactions,
+            finalTransactions,
             mappings,
             new Map(
                 accounts.map(account => [
@@ -632,10 +688,60 @@ export class TransactionService {
         await this.repository.updateCategoryForIds(
             transactions.map(transaction => transaction.id),
             categoryId,
-            makeTransfer
+            makeTransfer,
+            [...revertIds]
         );
 
         return { updated: transactions.length };
+    }
+
+    // The transfers among `transactions` currently on a TRANSFER category
+    // other than `newCategoryId` - they revert when it replaces that
+    // category. Standalone transfers (on a normal category or none) are
+    // never included.
+    private async transferCategoryRevertIds(
+        transactions: readonly Transaction[],
+        newCategoryId: string
+    ): Promise<Set<string>> {
+        const isCandidate = (transaction: Transaction) =>
+            transaction.type === "transfer" &&
+            !!transaction.transferDirection &&
+            !!transaction.categoryId &&
+            transaction.categoryId !== newCategoryId;
+
+        const currentCategoryIds = [
+            ...new Set(
+                transactions
+                    .filter(isCandidate)
+                    .map(transaction => transaction.categoryId as string)
+            ),
+        ];
+
+        if (currentCategoryIds.length === 0) {
+            return new Set();
+        }
+
+        const currentCategories = await Promise.all(
+            currentCategoryIds.map(id =>
+                this.categoryRepository.getById(id)
+            )
+        );
+
+        const transferCategoryIds = new Set(
+            currentCategories
+                .filter(category => category?.categoryType === "TRANSFER")
+                .map(category => category!.id)
+        );
+
+        return new Set(
+            transactions
+                .filter(
+                    transaction =>
+                        isCandidate(transaction) &&
+                        transferCategoryIds.has(transaction.categoryId as string)
+                )
+                .map(transaction => transaction.id)
+        );
     }
 
     /**

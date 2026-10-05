@@ -32,6 +32,10 @@ import {
     withRowCategory,
 } from "./importCategoryOptions";
 import { ImportPreviewRow } from "./ImportPreviewRow";
+import {
+    SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+    SEEDED_PAYMENT_TYPE_LIST,
+} from "@/modules/payment-types/testing/seededPaymentTypes";
 
 // ---------------------------------------------------------------------
 // Import Preview - Category Scope (Personal / Business).
@@ -82,6 +86,8 @@ function renderRow(candidate: NormalizedTransactionCandidate, scope: BaseFinance
                 indicatorState: "blank", indicatorClickable: false, hasMatchedLearnedRule: false,
                 importing: false, directionCategoryOptions: options(scope), categories,
                 categoriesLoading: false,
+                paymentTypeOptions: SEEDED_ACTIVE_PAYMENT_TYPE_OPTIONS,
+                paymentTypes: SEEDED_PAYMENT_TYPE_LIST,
                 onToggleSelfLearning: noop, onPayeeCommit: noop, onTransactionTypeChange: noop,
                 onCategoryChange: noop, onNotesCommit: noop, onViewDescription: noop,
             }))));

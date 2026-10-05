@@ -280,12 +280,22 @@ describe("TransactionService.changeCategory", () => {
         ).toBe(true);
     });
 
-    it("a normal category never changes the type - not even of an existing transfer", async () => {
-        await service().changeCategory(["t4"], "cat-self");
-        await service().changeCategory(["t4", "t1"], "cat-fuel");
+    it("a normal category replacing a Transfer category restores Income/Expense from the direction", async () => {
+        await service().changeCategory(["t4", "t5"], "cat-self");
+        await service().changeCategory(["t4", "t5", "t1"], "cat-fuel");
+
+        // Transfer OUT -> Expense, Transfer IN -> Income: balances unchanged.
+        expect(rows().get("t4")).toMatchObject({ category_id: "cat-fuel", type: "expense", transfer_direction: null, amount: 2000 });
+        expect(rows().get("t5")).toMatchObject({ category_id: "cat-fuel", type: "income", transfer_direction: null, amount: 7000 });
+        expect(rows().get("t1")).toMatchObject({ category_id: "cat-fuel", type: "expense", transfer_direction: null });
+    });
+
+    it("a normal category never changes a standalone transfer (typed by hand, not via a Transfer category)", async () => {
+        sqlite.db!.exec("UPDATE transactions SET type = 'transfer', transfer_direction = 'OUT' WHERE id = 't4'");
+
+        await service().changeCategory(["t4"], "cat-fuel");
 
         expect(rows().get("t4")).toMatchObject({ category_id: "cat-fuel", type: "transfer", transfer_direction: "OUT" });
-        expect(rows().get("t1")).toMatchObject({ category_id: "cat-fuel", type: "expense", transfer_direction: null });
     });
 
     it("category and type change together or not at all", async () => {

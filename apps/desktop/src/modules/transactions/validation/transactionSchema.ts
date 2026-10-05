@@ -80,16 +80,13 @@ export const transactionSchema = z.object({
             "CLEARED",
         ]),
 
+    // A Payment Type master-list code (Settings -> Payment Types). The
+    // form only offers active types plus the transaction's own current
+    // value, so the allowed set lives in the master list, not here.
     paymentMethod:
-        z.enum([
-            "CASH",
-            "CARD",
-            "DEBIT_CARD",
-            "UPI",
-            "BANK_TRANSFER",
-            "DIRECT_DEBIT",
-            "OTHER",
-        ])
+        z.string()
+            .trim()
+            .min(1)
             .nullable()
             .optional(),
 

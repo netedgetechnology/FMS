@@ -17,6 +17,7 @@ import {
     describeCustomRule,
     filterCustomRules,
 } from "./CustomRuleManager";
+import { SEEDED_PAYMENT_TYPE_LIST } from "@/modules/payment-types/testing/seededPaymentTypes";
 
 // ---------------------------------------------------------------------
 // The shared Custom Import Rules management UI (Import Rules page and
@@ -79,6 +80,7 @@ function render(props: Partial<CustomRuleManagerProps> = {}): string {
             rules: [DOD, SALARY],
             accounts: ACCOUNTS,
             categories: CATEGORIES,
+            paymentTypes: SEEDED_PAYMENT_TYPE_LIST,
             formatDate: value =>
                 value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? ""),
             onCreate: noop,
@@ -164,7 +166,8 @@ describe("Import Rules list", () => {
         const shown = describeCustomRule(
             rule({ accountId: "gone", categoryId: "gone-cat", payee: "X" }),
             ACCOUNTS,
-            CATEGORIES
+            CATEGORIES,
+            SEEDED_PAYMENT_TYPE_LIST
         );
 
         expect(shown.account).toBe("(unavailable account)");
@@ -203,7 +206,7 @@ describe("Import Preview wand (scoped to the preview's account)", () => {
 describe("search and account filter", () => {
     it("search matches keyword, account, payee, category, type and notes (case-insensitive)", () => {
         const search = (text: string) =>
-            filterCustomRules([DOD, SALARY], { search: text, accountId: "" }, ACCOUNTS, CATEGORIES).map(
+            filterCustomRules([DOD, SALARY], { search: text, accountId: "" }, ACCOUNTS, CATEGORIES, SEEDED_PAYMENT_TYPE_LIST).map(
                 r => r.id
             );
 
@@ -219,7 +222,7 @@ describe("search and account filter", () => {
 
     it("account filter keeps one account's rules", () => {
         expect(
-            filterCustomRules([DOD, SALARY], { search: "", accountId: "acct-savings" }, ACCOUNTS, CATEGORIES).map(
+            filterCustomRules([DOD, SALARY], { search: "", accountId: "acct-savings" }, ACCOUNTS, CATEGORIES, SEEDED_PAYMENT_TYPE_LIST).map(
                 r => r.id
             )
         ).toEqual(["rule-salary"]);

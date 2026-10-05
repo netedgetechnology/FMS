@@ -67,8 +67,8 @@ import {
     type CsvColumnMapping,
     type CsvImportType,
     type NormalizedTransactionCandidate,
-    type TransactionChannel,
 } from "@financeos/import-engine";
+import { usePaymentTypes } from "@/modules/payment-types";
 import { learningKeyForCandidate } from "../services/learningKey";
 import {
     affectedRowsToggleLabel,
@@ -171,7 +171,8 @@ export function resolveMappingInstitutionName(
 }
 
 export interface PreviewOverrides {
-    transactionType: Map<number, TransactionChannel | "">;
+    // A Payment Type master-list code per row; "" = cleared.
+    transactionType: Map<number, string>;
     payee: Map<number, string>;
     notes: Map<number, string>;
     // Category id per row; "" = Uncategorized. Preview state only -
@@ -250,10 +251,13 @@ export function applyPreviewOverrides(
 
         return {
             ...candidate,
+            // Any Payment Type master-list code - the engine's type only
+            // names the codes it can detect from a narration.
             transactionType:
                 transactionTypeOverride === undefined
                     ? candidate.transactionType
-                    : transactionTypeOverride || null,
+                    : ((transactionTypeOverride ||
+                          null) as NormalizedTransactionCandidate["transactionType"]),
             payee:
                 payeeOverride === undefined
                     ? candidate.payee
@@ -510,7 +514,7 @@ export function applyTransactionTypeToMatchingRows(
     candidates: NormalizedTransactionCandidate[],
     overrides: PreviewOverrides,
     rowNumber: number,
-    value: TransactionChannel | ""
+    value: string
 ): PreviewOverrides {
     const baselineCandidate = candidates.find(
         candidate => candidate.rowNumber === rowNumber
@@ -1002,6 +1006,13 @@ export default function ImportsPage() {
         useCategories();
     const { mappings: categoryContextMappings } =
         useCategoryContextMappings();
+
+    // Type column + Custom Import Rules: the Payment Type master list
+    // (Settings -> Payment Types) is the only source of Type options.
+    const {
+        paymentTypes,
+        activeOptions: paymentTypeOptions,
+    } = usePaymentTypes();
 
     const service = useMemo(
         () => new ImportService(),
@@ -1836,7 +1847,7 @@ export default function ImportsPage() {
     // override may currently show.
     const handleTransactionTypeOverride = useCallback((
         rowNumber: number,
-        value: TransactionChannel | ""
+        value: string
     ) => {
         setPreviewOverrides(previous =>
             applyTransactionTypeToMatchingRows(
@@ -3826,6 +3837,8 @@ export default function ImportsPage() {
                                                         }
                                                         categories={categories}
                                                         categoriesLoading={categoriesLoading}
+                                                        paymentTypeOptions={paymentTypeOptions}
+                                                        paymentTypes={paymentTypes}
                                                         onToggleSelfLearning={handleToggleSelfLearning}
                                                         onPayeeCommit={handlePayeeOverrideCommit}
                                                         onTransactionTypeChange={handleTransactionTypeOverride}
@@ -4583,6 +4596,7 @@ export default function ImportsPage() {
                 previewCandidates={baseCandidates}
                 appliedCountByRule={customRuleCountByRule}
                 categories={categories}
+                paymentTypes={paymentTypes}
                 formatDate={formatDate}
                 onCreate={handleCreateCustomRule}
                 onUpdate={handleUpdateCustomRule}

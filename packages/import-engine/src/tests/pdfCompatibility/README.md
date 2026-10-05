@@ -76,6 +76,8 @@ summary totals: `{ "rows": 88, "income": 1882822.16, "expense": 1884633.65 }`.
 | `debits-credits-zero-filled-overdraft` | Debits/Credits with the unused cell `0.00`, tab-separated, negative balances, `B/F` row, negative debit (reversal) |
 | `amount-drcr-marker-balance-branch` | Amount + separate `DR`/`CR` column + balance + trailing branch column |
 | `amount-single-letter-cd-marker-no-balance` | Amount + trailing `C`/`D`, no balance (credit card) |
+| `amount-cd-marker-foreign-currency-narration` | Credit card: original foreign-currency amount (`4.32 USD`) in the narration before the billed amount, no balance |
+| `amount-cd-marker-undated-fee-lines` | Credit card: fee/tax lines printed with no date under the row they belong to (they take its date), summary figures and footers between rows |
 | `withdrawal-deposit-dash-placeholder-rupee` | `-` placeholders, attached `₹` |
 | `deposit-first-column-order-zero-filled` | Credit column printed before Debit |
 | `signed-amount-balance` | Signed amount (`-`, `+`, parentheses) + balance |

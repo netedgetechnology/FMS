@@ -503,15 +503,20 @@ export class TransactionRepository extends Repository {
     // transfer keeps its own) - so category and type can never be left
     // half-updated. Nothing else is touched: amount, account, dates,
     // payee, sub-category, reconciliation state stay exactly as they are.
+    // `revertIds` (a normal category replacing a TRANSFER category - see
+    // applyTransferCategoryRule): those transfers become Income/Expense
+    // again from their direction (OUT -> expense, IN -> income), in the
+    // same statement.
     // Deleted transactions are never updated.
     async updateCategoryForIds(
         ids: readonly string[],
         categoryId: string,
-        makeTransfer = false
+        makeTransfer = false,
+        revertIds: readonly string[] = []
     ): Promise<void> {
-        await this.execute(
-            makeTransfer
-                ? `
+        if (makeTransfer) {
+            await this.execute(
+                `
             UPDATE transactions
             SET
                 category_id = ?,
@@ -524,16 +529,47 @@ export class TransactionRepository extends Repository {
                 updated_at = CURRENT_TIMESTAMP
             WHERE id IN (SELECT value FROM json_each(?))
               AND deleted_at IS NULL
+            `,
+                [categoryId, JSON.stringify(ids)]
+            );
+            return;
+        }
+
+        // Every SET expression reads the row's pre-update values, so
+        // `type` and `transfer_direction` below both see the old
+        // direction.
+        const reverting = `
+                id IN (SELECT value FROM json_each(?))
+                AND type = 'transfer'
+                AND transfer_direction IN ('OUT', 'IN')`;
+
+        await this.execute(
             `
-                : `
             UPDATE transactions
             SET
                 category_id = ?,
+                type = CASE
+                    WHEN ${reverting} THEN
+                        CASE transfer_direction
+                            WHEN 'OUT' THEN 'expense'
+                            ELSE 'income'
+                        END
+                    ELSE type
+                END,
+                transfer_direction = CASE
+                    WHEN ${reverting} THEN NULL
+                    ELSE transfer_direction
+                END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id IN (SELECT value FROM json_each(?))
               AND deleted_at IS NULL
             `,
-            [categoryId, JSON.stringify(ids)]
+            [
+                categoryId,
+                JSON.stringify(revertIds),
+                JSON.stringify(revertIds),
+                JSON.stringify(ids),
+            ]
         );
     }
 

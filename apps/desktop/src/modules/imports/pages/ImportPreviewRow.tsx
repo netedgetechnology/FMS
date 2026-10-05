@@ -1,12 +1,14 @@
 import { Fragment, memo, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Wand2 } from "lucide-react";
 
-import type {
-    NormalizedTransactionCandidate,
-    TransactionChannel,
-} from "@financeos/import-engine";
+import type { NormalizedTransactionCandidate } from "@financeos/import-engine";
 
 import { signedTransactionAmount } from "@/core/formatting";
+import {
+    paymentTypeOptionsFor,
+    type PaymentType,
+    type PaymentTypeOption,
+} from "@/modules/payment-types";
 import type { Category } from "@/modules/categories/types";
 
 import {
@@ -38,25 +40,6 @@ import {
 //   and the draft is dropped at that moment, so what's shown is always
 //   either the text being typed or the committed/propagated value.
 // ---------------------------------------------------------------------
-
-// Transaction *channel* (UPI/IMPS/NEFT/RTGS/Cash/Cheque) - separate from
-// DR/CR direction. Optional; "" clears it back to blank/undetected.
-export const TRANSACTION_CHANNEL_OPTIONS: Array<{
-    value: TransactionChannel | "";
-    label: string;
-}> = [
-    { value: "", label: "—" },
-    { value: "UPI", label: "UPI" },
-    { value: "IMPS", label: "IMPS" },
-    { value: "NEFT", label: "NEFT" },
-    { value: "RTGS", label: "RTGS" },
-    { value: "CASH", label: "Cash" },
-    { value: "CHEQUE", label: "Cheque" },
-    { value: "EMANDATE", label: "E-Mandate" },
-    { value: "NET_BANKING", label: "Net Banking" },
-    { value: "MOBILE_APP", label: "Mobile App" },
-    { value: "CREDIT_CARD", label: "Credit Card" },
-];
 
 // One shared formatter: building an Intl.NumberFormat is expensive, and
 // this runs once per row. Same options -> identical output.
@@ -134,11 +117,19 @@ export interface ImportPreviewRowProps {
     directionCategoryOptions: readonly ImportCategoryOption[];
     categories: readonly Category[];
     categoriesLoading: boolean;
+    /**
+     * Payment Type master list (Settings -> Payment Types): the active
+     * types offered by this row's Type select, and the full list (for the
+     * label of an inactive value the row already has). Both are kept
+     * stable by ImportsPage, so they never re-render rows on their own.
+     */
+    paymentTypeOptions: readonly PaymentTypeOption[];
+    paymentTypes: readonly PaymentType[];
     onToggleSelfLearning: (rowNumber: number) => void;
     onPayeeCommit: (rowNumber: number, value: string) => void;
     onTransactionTypeChange: (
         rowNumber: number,
-        value: TransactionChannel | ""
+        value: string
     ) => void;
     onCategoryChange: (rowNumber: number, value: string) => void;
     onNotesCommit: (rowNumber: number, value: string) => void;
@@ -181,6 +172,8 @@ function ImportPreviewRowComponent({
     directionCategoryOptions,
     categories,
     categoriesLoading,
+    paymentTypeOptions,
+    paymentTypes,
     onToggleSelfLearning,
     onPayeeCommit,
     onTransactionTypeChange,
@@ -215,6 +208,18 @@ function ImportPreviewRowComponent({
             categories,
             categoriesLoading,
         ]
+    );
+
+    // Active Payment Types, plus this row's own value if that type is
+    // inactive (shown, never silently cleared).
+    const typeOptions = useMemo(
+        () =>
+            paymentTypeOptionsFor(
+                paymentTypeOptions,
+                paymentTypes,
+                candidate.transactionType
+            ),
+        [paymentTypeOptions, paymentTypes, candidate.transactionType]
     );
 
     const amountColorClass =
@@ -364,13 +369,14 @@ function ImportPreviewRowComponent({
                     onChange={event =>
                         onTransactionTypeChange(
                             candidate.rowNumber,
-                            event.target.value as TransactionChannel | ""
+                            event.target.value
                         )
                     }
                     disabled={importing}
                     className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-slate-400 disabled:bg-slate-50"
                 >
-                    {TRANSACTION_CHANNEL_OPTIONS.map(option => (
+                    <option value="">—</option>
+                    {typeOptions.map(option => (
                         <option key={option.value} value={option.value}>
                             {option.label}
                         </option>

@@ -1523,6 +1523,11 @@ export class ImportService {
                         sourceStatement:
                             mappingName ??
                             undefined,
+                        // Created by this import (a duplicate row never
+                        // reaches here - it is skipped above and its
+                        // existing transaction is left untouched).
+                        isImported:
+                            true,
                     });
 
                 createdInThisImport.add(transactionId);

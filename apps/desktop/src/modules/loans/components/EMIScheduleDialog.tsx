@@ -24,6 +24,7 @@ import { EMIScheduleService } from "../services/EMIScheduleService";
 import { LoanPaymentService } from "../services/LoanPaymentService";
 import { isScheduleOverdue } from "../services/loanScheduleOverdue";
 import type { PaymentMethod } from "@/modules/transactions/types";
+import { usePaymentTypes } from "@/modules/payment-types";
 import { useMoneyFormatter, useDateFormatter } from "@/core/formatting";
 import type {
     Loan,
@@ -118,6 +119,9 @@ export function EMIScheduleDialog({
 
     const [paymentMethod, setPaymentMethod] =
         useState<PaymentMethod | null>(null);
+
+    // A new EMI payment: only active master-list Payment Types.
+    const { activeOptions: activePaymentTypes } = usePaymentTypes();
 
     const [paymentReference, setPaymentReference] =
         useState("");
@@ -669,8 +673,7 @@ export function EMIScheduleDialog({
                                                 onChange={event =>
                                                     setPaymentMethod(
                                                         event.target.value
-                                                            ? event.target
-                                                                  .value as PaymentMethod
+                                                            ? event.target.value
                                                             : null
                                                     )
                                                 }
@@ -683,33 +686,14 @@ export function EMIScheduleDialog({
                                                     Select payment method
                                                 </option>
 
-                                                <option value="CASH">
-                                                    Cash
-                                                </option>
-
-                                                <option value="CARD">
-                                                    Credit Card
-                                                </option>
-
-                                                <option value="DEBIT_CARD">
-                                                    Debit Card
-                                                </option>
-
-                                                <option value="UPI">
-                                                    UPI
-                                                </option>
-
-                                                <option value="BANK_TRANSFER">
-                                                    Bank Transfer
-                                                </option>
-
-                                                <option value="DIRECT_DEBIT">
-                                                    Direct Debit
-                                                </option>
-
-                                                <option value="OTHER">
-                                                    Other
-                                                </option>
+                                                {activePaymentTypes.map(option => (
+                                                    <option
+                                                        key={option.value}
+                                                        value={option.value}
+                                                    >
+                                                        {option.label}
+                                                    </option>
+                                                ))}
                                             </select>
                                         </label>
 

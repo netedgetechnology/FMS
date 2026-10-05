@@ -180,6 +180,12 @@ const PLACEHOLDER_TOKEN_RE = /^(?:-{1,3}|–|—)$/;
 const CURRENCY_TOKEN_RE =
     /^(?:₹|\$|€|£|Rs\.?|INR|USD|EUR|GBP)$/i;
 
+const CURRENCY_SYMBOL_CODES: Record<string, string> = {
+    $: "USD",
+    "€": "EUR",
+    "£": "GBP",
+};
+
 const OPENING_BALANCE_RE =
     /opening\s+balance[^\d-]{0,10}?(-?[\d,]+\.\d{1,2}(?:\s*(?:dr|cr)\b)?)/i;
 
@@ -192,6 +198,12 @@ const OPENING_ROW_RE =
 
 const CLOSING_ROW_RE =
     /^(?:c\/f|c\/fwd|carried\s+forward|balance\s+(?:c\/f|c\/fwd|carried\s+forward)|closing\s+balance)\b/i;
+
+// A total/sub-total line ("Total", "Sub Total", "Grand Total", "Page
+// Total") sums rows already listed - never a money movement of its own.
+// Only consulted for lines that print no date (see isUndatedPosting).
+const TOTAL_ROW_RE =
+    /^(?:grand\s+|sub\s*-?\s*|page\s+)?totals?\b/i;
 
 const HEADER_DATE_RE = /\bdate\b/i;
 
@@ -392,6 +404,66 @@ function tokensForBlock(
     return tokens;
 }
 
+// The currency a standalone code token names, or null when the token is
+// not a currency code.
+function currencyOfToken(
+    token: string | undefined,
+): string | null {
+    if (!token || !CURRENCY_TOKEN_RE.test(token)) {
+        return null;
+    }
+
+    const code = token.toUpperCase();
+
+    if (code === "₹" || code.startsWith("RS")) {
+        return "INR";
+    }
+
+    return CURRENCY_SYMBOL_CODES[code] ?? code;
+}
+
+// "<amount> <CODE> <cell>": who owns CODE, and is <amount> an amount
+// quoted inside the narration rather than a money cell of the table? A
+// currency code between two amounts either prefixes the cell after it
+// ("INR 9,650.00") or ends the amount before it ("4.32 USD" - e.g. a card
+// transaction's original foreign-currency amount, printed in the
+// narration before the billed amount). The row's own notation decides,
+// never vocabulary:
+//   - prefix notation - <amount> carries its own code before it
+//     ("INR 1,45,000.00 INR 1,54,650.00"): CODE prefixes <cell>;
+//   - suffix notation - <cell> carries its own code after it
+//     ("500.00 INR 10,000.00 INR"): CODE ends <amount>;
+//   - neither: CODE can only end <amount>, with no code on <cell> - a
+//     different notation from the table's own cells, so narration.
+// Either way, the cells of one statement table share one currency: an
+// amount quoted in a different currency from <cell> is narration too.
+// `cellPos`: index of <cell>'s money token; tokens[cellPos - 1] is CODE.
+function readCodeBeforeCell(
+    tokens: string[],
+    cellPos: number,
+): { prefixesCell: boolean; narrationBefore: boolean } {
+    if (!parseMoneyToken(tokens[cellPos - 2])) {
+        return { prefixesCell: true, narrationBefore: false };
+    }
+
+    const code = currencyOfToken(tokens[cellPos - 1]);
+    const amountPrefix = currencyOfToken(tokens[cellPos - 3]);
+    const cellSuffix = currencyOfToken(tokens[cellPos + 1]);
+
+    if (amountPrefix !== null) {
+        return {
+            prefixesCell: true,
+            narrationBefore: amountPrefix !== code,
+        };
+    }
+
+    return {
+        prefixesCell: false,
+        narrationBefore:
+            cellSuffix === null || code !== cellSuffix,
+    };
+}
+
 // Collects the trailing money cells of a block (scanning backward from
 // the last money token, which tolerates trailing free text after the
 // balance such as a branch name), then classifies them into a TailShape.
@@ -481,17 +553,35 @@ function findTail(
         }
 
         let pos = cell.pos;
+        // Index of the token before this cell and its own code.
+        let previous = pos - 1;
 
         if (
             CURRENCY_TOKEN_RE.test(
                 tokens[pos - 1] ?? "",
             )
         ) {
-            pos -= 1;
+            const code = readCodeBeforeCell(
+                tokens,
+                pos,
+            );
+
+            if (code.prefixesCell) {
+                pos -= 1;
+            }
+
+            previous = pos - 1 - (code.prefixesCell ? 0 : 1);
+
+            if (code.narrationBefore) {
+                // The amount before it is quoted inside the narration
+                // ("4.32 USD 415.79 D"): this cell is the tail's first.
+                cells.unshift({ ...cell, pos });
+                break;
+            }
         }
 
         cells.unshift({ ...cell, pos });
-        k = pos - 1;
+        k = previous;
     }
 
     return classifyTail(
@@ -918,10 +1008,14 @@ type BuiltRow =
       }
     | { kind: "closing" };
 
+// `undatedDate`: set only for an undated posting (see
+// isUndatedPosting) - the date it takes, or "" when none can be
+// associated with it.
 function buildRawTransaction(
     block: RawLine[],
     tail: TailMatch,
     layout: HeaderLayout,
+    undatedDate?: string,
 ): BuiltRow | null {
     const firstLine = block[0];
 
@@ -934,9 +1028,9 @@ function buildRawTransaction(
             firstLine.text,
         );
 
-    const date = dates[0] ?? "";
+    const date = undatedDate ?? dates[0] ?? "";
 
-    if (!date) {
+    if (!date && undatedDate === undefined) {
         return null;
     }
 
@@ -1107,6 +1201,103 @@ function resolveDirections(
     }
 }
 
+// A line that prints no date of its own but is still a statement row: a
+// separate posting (e.g. a fee or tax line listed under the charge it
+// relates to) rather than narration, a summary figure or a total. It
+// must be structurally a twin of the table's transaction rows - a
+// description, then the SAME tail shape as the transaction before it -
+// and carry its own direction evidence, so a stray number in wrapped
+// narration never becomes a transaction:
+//   - amount-only: an explicit DR/CR (or C/D) marker or sign;
+//   - amount-balance: an explicit marker/sign, or a running balance that
+//     moves by exactly its amount from the row before;
+//   - debit-credit shapes: the empty-cell placeholder already places it
+//     in a Debit or Credit column.
+function isUndatedPosting(
+    tail: TailMatch,
+    previous: {
+        tail: TailMatch;
+        transaction: RawTransaction;
+    },
+    description: string,
+): boolean {
+    if (
+        tail.startPos === 0 ||
+        tail.shape !== previous.tail.shape ||
+        tail.amount.kind !== "value" ||
+        TOTAL_ROW_RE.test(description) ||
+        OPENING_ROW_RE.test(description) ||
+        CLOSING_ROW_RE.test(description)
+    ) {
+        return false;
+    }
+
+    const explicit =
+        tail.amount.marker !== null ||
+        tail.amount.negative;
+
+    if (tail.shape === "amount-only") {
+        return explicit;
+    }
+
+    if (tail.shape === "amount-balance") {
+        const previousBalance =
+            previous.transaction.balanceValue;
+        const balance = tail.balance
+            ? signedBalance(tail.balance)
+            : null;
+
+        return (
+            explicit ||
+            (previousBalance !== null &&
+                balance !== null &&
+                Math.abs(
+                    Math.abs(balance - previousBalance) -
+                        (tail.amount.magnitude ?? 0),
+                ) < 0.005)
+        );
+    }
+
+    return true;
+}
+
+// The undated posting printed on `line`, when it is one, dated like the
+// previous row when `contiguous` (directly below it), else with no date.
+function undatedPostingRow(
+    line: RawLine,
+    previous: {
+        tail: TailMatch;
+        transaction: RawTransaction;
+    },
+    contiguous: boolean,
+    layout: HeaderLayout,
+): { tail: TailMatch; transaction: RawTransaction } | null {
+    const tokens = tokensForBlock([line]);
+    const tail = findTail(tokens, layout);
+
+    if (
+        !tail ||
+        !isUndatedPosting(
+            tail,
+            previous,
+            tokens.slice(0, tail.startPos).join(" "),
+        )
+    ) {
+        return null;
+    }
+
+    const built = buildRawTransaction(
+        [line],
+        tail,
+        layout,
+        contiguous ? previous.transaction.date : "",
+    );
+
+    return built?.kind === "transaction"
+        ? { tail, transaction: built.transaction }
+        : null;
+}
+
 function extractBankTransactions(
     lines: RawLine[],
 ): Transaction[] {
@@ -1119,6 +1310,22 @@ function extractBankTransactions(
         balance: number;
     } | null = null;
 
+    // The last row taken (dated or undated) and the index of the line
+    // after it - an undated posting directly below it continues it.
+    let previous: {
+        tail: TailMatch;
+        transaction: RawTransaction;
+        end: number;
+    } | null = null;
+
+    let lastStartIndex = -1;
+
+    lines.forEach((line, index) => {
+        if (isTransactionStartLine(line.text)) {
+            lastStartIndex = index;
+        }
+    });
+
     let i = 0;
 
     while (i < lines.length) {
@@ -1128,6 +1335,31 @@ function extractBankTransactions(
             !current ||
             !isTransactionStartLine(current.text)
         ) {
+            // An undated posting is never silently dropped. Directly
+            // below a row (or a run of such postings) it shares that
+            // row's date: the statement printed the date once for the
+            // group. Elsewhere inside the transaction table (e.g. after
+            // a page break) no date can be associated, so it is kept
+            // with none - validation then flags it for review.
+            if (
+                current &&
+                previous &&
+                (previous.end === i ||
+                    i < lastStartIndex)
+            ) {
+                const posting = undatedPostingRow(
+                    current,
+                    previous,
+                    previous.end === i,
+                    layout,
+                );
+
+                if (posting) {
+                    raw.push(posting.transaction);
+                    previous = { ...posting, end: i + 1 };
+                }
+            }
+
             i += 1;
             continue;
         }
@@ -1193,6 +1425,12 @@ function extractBankTransactions(
 
             if (built?.kind === "transaction") {
                 raw.push(built.transaction);
+
+                previous = {
+                    tail,
+                    transaction: built.transaction,
+                    end: j,
+                };
             } else if (
                 built?.kind === "opening" &&
                 built.balance !== null &&

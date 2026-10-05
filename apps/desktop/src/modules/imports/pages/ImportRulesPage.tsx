@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDateFormatter } from "@/core/formatting";
 import { useAccounts } from "@/modules/accounts/hooks";
 import { useCategories } from "@/modules/categories/hooks";
+import { usePaymentTypes } from "@/modules/payment-types";
 
 import { CustomRuleManager } from "../components/CustomRuleManager";
 import { ImportService } from "../services/ImportService";
@@ -23,6 +24,7 @@ export default function ImportRulesPage() {
     const formatDate = useDateFormatter();
     const { accounts, loading: accountsLoading } = useAccounts();
     const { categories, loading: categoriesLoading } = useCategories();
+    const { paymentTypes, loading: paymentTypesLoading } = usePaymentTypes();
 
     const service = useMemo(() => new ImportService(), []);
 
@@ -70,8 +72,14 @@ export default function ImportRulesPage() {
                 rules={rules}
                 accounts={accounts}
                 categories={categories}
+                paymentTypes={paymentTypes}
                 formatDate={formatDate}
-                loading={loading || accountsLoading || categoriesLoading}
+                loading={
+                    loading ||
+                    accountsLoading ||
+                    categoriesLoading ||
+                    paymentTypesLoading
+                }
                 loadError={loadError}
                 header={
                     <>

@@ -78,10 +78,10 @@ export function EditTransactionDialog({
                 ...rest,
                 originalNarration: description,
                 // Not a form field - never user-editable on the manual
-                // Edit dialog. TransactionService.update rewrites every
-                // field, so this must be carried through explicitly or an
-                // edit to any imported transaction would silently erase
-                // its Mapping Name (sourceStatement).
+                // Edit dialog. TransactionService.update now preserves
+                // every field this request omits, so this is redundant,
+                // but carried through explicitly to keep the imported
+                // transaction's Mapping Name (sourceStatement) obvious.
                 sourceStatement: transaction.sourceStatement,
             });
 

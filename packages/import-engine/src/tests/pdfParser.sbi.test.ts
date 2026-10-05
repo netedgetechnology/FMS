@@ -76,6 +76,19 @@ vi.mock("pdf-parse", () => {
 
 import { parsePdf } from "../parser/pdfParser";
 import { processPdf } from "../pipeline";
+import type { NormalizedTransactionCandidate } from "../types";
+
+// Sum of one direction's amounts, in exact cents.
+function totalOf(
+    candidates: readonly NormalizedTransactionCandidate[],
+    type: string,
+): number {
+    return (
+        candidates
+            .filter((c) => c.type === type)
+            .reduce((sum, c) => sum + Math.round((c.amount ?? 0) * 100), 0) / 100
+    );
+}
 
 beforeAll(() => {
     vi.stubGlobal("window", {
@@ -84,7 +97,7 @@ beforeAll(() => {
 });
 
 describe("PDF parser - real SBI Credit Card statement (2-digit years, single-letter C/D markers)", () => {
-    it("extracts exactly the 80 real transactions - the bare '04 Sep 2026' summary/total row is not one of them", async () => {
+    it("extracts exactly the 82 real transactions - the bare '04 Sep 2026' summary/total row is not one of them", async () => {
         mockState.text = loadSbiFixtureText();
 
         const result = await parsePdf(
@@ -93,14 +106,15 @@ describe("PDF parser - real SBI Credit Card statement (2-digit years, single-let
 
         expect(result.structured).toBe(true);
 
-        // Real statement: 80 dated transaction lines. The Account
+        // Real statement: 80 dated transaction lines plus 2 undated fee
+        // lines (FORGN CURR MARKUP DB, IGST DB). The Account
         // Summary section's "Payment Due Date" (04 Sep 2026) sits
         // immediately above a bare two-number line (Total Amount Due /
         // current balance) with no description at all between them -
         // exactly the shape that used to be misidentified as an
         // 81st, bogus transaction.
         expect(result.document.rows).toHaveLength(
-            80
+            82
         );
 
         expect(
@@ -195,7 +209,7 @@ describe("PDF parser - real SBI Credit Card statement (2-digit years, single-let
         expect(e2e?.values[5]).toBe("17700.00");
     });
 
-    it("no candidate produced from the full pipeline has an empty payee/description, and all 80 real transactions survive as candidates", async () => {
+    it("no candidate produced from the full pipeline has an empty payee/description, and all 82 real transactions survive as candidates", async () => {
         mockState.text = loadSbiFixtureText();
 
         const result = await processPdf(
@@ -203,7 +217,7 @@ describe("PDF parser - real SBI Credit Card statement (2-digit years, single-let
             "CREDIT_CARD_PDF"
         );
 
-        expect(result.candidates).toHaveLength(80);
+        expect(result.candidates).toHaveLength(82);
 
         const emptyPayeeCandidates =
             result.candidates.filter(
@@ -402,5 +416,270 @@ describe("PDF parser - real SBI Credit Card statement (parenthetical tax/annotat
         expect(
             parsed.document.rows[0]?.values[2]
         ).toBe("500.00");
+    });
+});
+
+// The real statement in fixture 1 is the one whose import preview showed
+// 6 errors: row 22 "Transaction type could not be determined" and
+// balance mismatches on rows 31, 35, 39, 65 and 72. Every affected line
+// is an international transaction printing its original foreign-currency
+// amount in the narration before the billed amount:
+//   "15 Jul 26 BREEZEHOST BREEZEHOST.IO TX 4.32 USD 415.79 D"
+// findTail read "USD" as a currency PREFIX of 415.79 and kept walking, so
+// 4.32 became the amount and "415.79 D" a negative running balance - on
+// a statement that prints no running balance at all. Directions were
+// then guessed from those fake balances (row 22, the first, had nothing
+// to compare with). The fix is the generic notation rule in
+// readCodeBeforeCell - nothing here is issuer-specific.
+describe("PDF parser - original foreign-currency amount printed in the narration", () => {
+    const FOREIGN_LINE_RE =
+        /^\d{2} [A-Z][a-z]{2} 26 (.+ [\d,]+\.\d{2} [A-Z]{3}) ([\d,]+\.\d{2}) D$/;
+
+    // [row, description, billed amount] straight from the fixture text.
+    // The preview's rows 22, 31, 35, 39, 65 and 72 - two higher now that
+    // the two undated fee lines after row 20 are no longer dropped.
+    const failingRows: [number, string, string][] = [
+        [24, "BREEZEHOST BREEZEHOST.IO TX 4.32 USD", "415.79"],
+        [33, "PADDLE.NET* VPSDIME London GB 8.26 USD", "796.37"],
+        [37, "BREEZEHOST BREEZEHOST.IO TX 6.17 USD", "594.87"],
+        [41, "BREEZEHOST BREEZEHOST.IO TX 6.17 USD", "595.90"],
+        [67, "BREEZEHOST BREEZEHOST.IO TX 10.29 USD", "981.36"],
+        [74, "BREEZEHOST BREEZEHOST.IO TX 9.14 USD", "872.50"],
+    ];
+
+    it.each(failingRows)(
+        "row %i: the billed amount is the amount, D is its direction, the foreign amount stays in the narration, no balance",
+        async (rowNumber, description, amount) => {
+            mockState.text = loadSbiFixtureText();
+
+            const parsed = await parsePdf(new ArrayBuffer(0));
+            const row = parsed.document.rows.find(
+                (r) => r.rowNumber === rowNumber,
+            );
+
+            // Description | Amount | Type | Reference | Debit | Credit | Balance
+            expect(row?.values.slice(1)).toEqual([
+                description,
+                amount,
+                "DR",
+                "",
+                amount,
+                "",
+                "",
+            ]);
+        },
+    );
+
+    it("the full pipeline: no type or balance errors, every foreign-currency line is an expense of its billed amount", async () => {
+        mockState.text = loadSbiFixtureText();
+
+        const result = await processPdf(
+            new ArrayBuffer(0),
+            "CREDIT_CARD_PDF",
+        );
+
+        expect(result.validation.errors).toEqual([]);
+        expect(result.candidates.every((c) => c.type)).toBe(true);
+        // The statement prints no running balance, so there is nothing
+        // to reconcile - and no fake balance to reconcile against.
+        expect(result.candidates.every((c) => c.balance === null)).toBe(true);
+        expect(result.balanceReconciliation.checkedRows).toBe(0);
+
+        const foreignLines = loadSbiFixtureText()
+            .split(/\r?\n/)
+            .map((line) => line.match(FOREIGN_LINE_RE))
+            .filter((match) => match !== null);
+
+        expect(foreignLines).toHaveLength(16);
+
+        // In document order - descriptions repeat with different amounts.
+        expect(
+            result.candidates
+                .filter((c) => / [\d,]+\.\d{2} [A-Z]{3}$/.test(c.description ?? ""))
+                .map((c) => [c.description, c.type, c.amount]),
+        ).toEqual(
+            foreignLines.map(([, description, billed]) => [
+                description,
+                "expense",
+                Number(billed.replace(/,/g, "")),
+            ]),
+        );
+    });
+
+    it("every transaction line's printed amount and C/D direction is imported exactly once, as printed - nothing altered, nothing dropped", async () => {
+        mockState.text = loadSbiFixtureText();
+
+        const result = await processPdf(
+            new ArrayBuffer(0),
+            "CREDIT_CARD_PDF",
+        );
+
+        // Independent of the parser: the trailing "<amount> C|D" of every
+        // line in the source text that describes a movement - dated or
+        // not - i.e. a description followed by a C/D-marked amount.
+        const printed = loadSbiFixtureText()
+            .split(/\r?\n/)
+            .map((line) =>
+                line.match(/^(?:\d{2} [A-Z][a-z]{2} 26 )?[A-Za-z].* ([\d,]+\.\d{2}) ([CD])$/),
+            )
+            .filter((match) => match !== null)
+            .map(([, amount, marker]) =>
+                `${marker === "C" ? "income" : "expense"} ${Number(amount.replace(/,/g, "")).toFixed(2)}`,
+            )
+            .sort();
+
+        const imported = result.candidates
+            .map((c) => `${c.type} ${c.amount?.toFixed(2)}`)
+            .sort();
+
+        expect(printed).toHaveLength(82);
+        expect(imported).toEqual(printed);
+
+        // The statement's own Account Summary: "Payments, Reversals &
+        // other Credits" 4,50,122.76; "Purchases & Other Debits"
+        // 4,62,272.77 + "Fee, Taxes & Interest Charges" 5,727.67.
+        expect(totalOf(result.candidates, "income")).toBe(450122.76);
+        expect(totalOf(result.candidates, "expense")).toBe(468000.44);
+    });
+
+    it("the previous statement (fixture 2) has the same shape and is read the same way", async () => {
+        mockState.text = loadSbiFixtureText2();
+
+        const result = await processPdf(
+            new ArrayBuffer(0),
+            "CREDIT_CARD_PDF",
+        );
+
+        expect(
+            result.candidates.find(
+                (c) => c.transactionDate === "2026-05-16" &&
+                    c.description === "BREEZEHOST BREEZEHOST.IO TX 6.00 USD",
+            ),
+        ).toMatchObject({ type: "expense", amount: 576.91, balance: null });
+
+        expect(
+            result.validation.errors.filter(
+                (e) => e.field === "type" || e.field === "balance",
+            ),
+        ).toEqual([]);
+    });
+});
+
+describe("PDF parser - a currency code between two amounts follows the row's own notation", () => {
+    async function parseLine(line: string) {
+        mockState.text = line;
+
+        const parsed = await parsePdf(new ArrayBuffer(0));
+
+        return parsed.document.rows[0]?.values;
+    }
+
+    // Date | Description | Amount | Type | Reference | Debit | Credit | Balance
+    it("prefix notation on both cells: amount + balance, as before", async () => {
+        expect(
+            await parseLine("01/07/2026 UPI TEST SHOP INR 350.00 INR 9,650.00"),
+        ).toMatchObject({ 1: "UPI TEST SHOP", 2: "350.00", 7: "9650.00" });
+    });
+
+    it("suffix notation on both cells: amount + balance, as before", async () => {
+        expect(
+            await parseLine("01/07/2026 UPI TEST SHOP 350.00 INR 9,650.00 INR"),
+        ).toMatchObject({ 1: "UPI TEST SHOP", 2: "350.00", 7: "9650.00" });
+    });
+
+    it("an amount in a different currency is narration, even when prefixed", async () => {
+        expect(
+            await parseLine("15 Jul 26 TEST HOST USD 4.32 INR 415.79 D"),
+        ).toMatchObject({ 1: "TEST HOST USD 4.32", 2: "415.79", 3: "DR", 7: "" });
+    });
+
+    it("a suffixed amount before an un-coded cell is narration", async () => {
+        expect(
+            await parseLine("15 Jul 26 TEST HOST 4.32 USD 415.79 D"),
+        ).toMatchObject({ 1: "TEST HOST 4.32 USD", 2: "415.79", 3: "DR", 7: "" });
+    });
+});
+
+describe("balance validation still catches genuine mismatches", () => {
+    it("a statement WITH a running balance: a foreign-currency narration amount never hides a wrong balance", async () => {
+        mockState.text = [
+            "Date Description Amount Balance",
+            "Opening Balance 1,000.00",
+            "01/07/2026 TEST SHOP 100.00 DR 900.00",
+            // Billed 50.00 should leave 850.00 - the statement says 800.00.
+            "02/07/2026 TEST HOST 4.32 USD 50.00 DR 800.00",
+            "03/07/2026 TEST REFUND 25.00 CR 825.00",
+        ].join("\n");
+
+        const result = await processPdf(
+            new ArrayBuffer(0),
+            "BANK_PDF",
+        );
+
+        expect(
+            result.candidates.map((c) => [c.description, c.type, c.amount, c.balance]),
+        ).toEqual([
+            ["TEST SHOP", "expense", 100, 900],
+            ["TEST HOST 4.32 USD", "expense", 50, 800],
+            ["TEST REFUND", "income", 25, 825],
+        ]);
+
+        // Row 2 is flagged with its real amount - not altered to fit.
+        expect(result.balanceReconciliation.mismatches).toMatchObject([
+            { rowNumber: 2, amount: 50, expectedBalance: 850, statementBalance: 800, kind: "amount" },
+        ]);
+        expect(result.balanceReconciliation.checkedRows).toBe(2);
+    });
+});
+
+// Both real statements print two fee/tax lines with no date of their own
+// directly under the statement-date finance-charge row:
+//   15 Aug 26 FIN CHARGE ON RETAIL (EXCL TAX 690.07) 3,833.71 D
+//   FORGN CURR MARKUP DB (EXCL TAX 171.11) 950.58 D
+//   IGST DB @ 18.00% 873.72 D
+//   TRANSACTIONS FOR <CARDHOLDER>
+// extractBankTransactions only ever started a row at a dated line, so
+// both were skipped without a trace - while the preview still showed 0
+// errors. They are now undated postings (see isUndatedPosting) sharing
+// the date of the row they are printed under.
+describe("PDF parser - undated fee/tax lines are never dropped", () => {
+    // Date | Description | Amount | Type | Reference | Debit | Credit | Balance
+    it("August: rows 21 and 22 are the two fee lines, dated like row 20 above them; rows 20 and 23 are unchanged", async () => {
+        mockState.text = loadSbiFixtureText();
+
+        const parsed = await parsePdf(new ArrayBuffer(0));
+        const rows = new Map(
+            parsed.document.rows.map((r) => [r.rowNumber, r.values]),
+        );
+
+        expect(rows.get(20)).toEqual(["15 Aug 26", "FIN CHARGE ON RETAIL (EXCL TAX 690.07)", "3833.71", "DR", "", "3833.71", "", ""]);
+        expect(rows.get(21)).toEqual(["15 Aug 26", "FORGN CURR MARKUP DB (EXCL TAX 171.11)", "950.58", "DR", "", "950.58", "", ""]);
+        expect(rows.get(22)).toEqual(["15 Aug 26", "IGST DB @ 18.00%", "873.72", "DR", "", "873.72", "", ""]);
+        expect(rows.get(23)).toEqual(["15 Jul 26", "E2E NETWORKS LIMITED BANGALORE IN (Pay in EMIs)", "17700.00", "DR", "", "17700.00", "", ""]);
+    });
+
+    it("June: the two equivalent fee lines are rows too, and both statements' totals now equal their own Account Summary", async () => {
+        mockState.text = loadSbiFixtureText2();
+
+        const result = await processPdf(
+            new ArrayBuffer(0),
+            "CREDIT_CARD_PDF",
+        );
+
+        const fees = result.candidates.filter((c) =>
+            /^(FORGN CURR MARKUP DB|IGST DB)/.test(c.description ?? ""),
+        );
+
+        expect(fees.map((c) => [c.transactionDate, c.description, c.type, c.amount])).toEqual([
+            ["2026-06-15", "FORGN CURR MARKUP DB (EXCL TAX 69.48)", "expense", 386.01],
+            ["2026-06-15", "IGST DB @ 18.00%", "expense", 2381.88],
+        ]);
+
+        expect(result.validation.errors).toEqual([]);
+
+        // June Account Summary: credits 2,50,075.52; purchases
+        // 1,85,582.27 + fees, taxes & interest 15,614.55.
+        expect(totalOf(result.candidates, "income")).toBe(250075.52);
+        expect(totalOf(result.candidates, "expense")).toBe(201196.82);
     });
 });

@@ -24,7 +24,16 @@ import {
     useCategories,
     useCategoryContextMappings,
 } from "@/modules/categories";
-import { transferDirectionForType } from "@/core/accounting/transferClassification";
+import {
+    debitCreditTypeForDirection,
+    transferDirectionForType,
+} from "@/core/accounting/transferClassification";
+
+import {
+    paymentTypeLabel,
+    paymentTypeOptionsFor,
+    usePaymentTypes,
+} from "@/modules/payment-types";
 
 import {
     TransactionFormInput,
@@ -72,6 +81,15 @@ function creditCardOptionLabel(account: Account): string {
         .join(" — ");
 }
 
+// The Card Reference picker belongs to a credit-card payment: CREDIT_CARD
+// (the master list's "Credit Card") or CARD, the legacy code the form
+// stored for it before the Payment Type master list existed.
+export function isCreditCardPaymentType(
+    code: string | null | undefined
+): boolean {
+    return code === "CREDIT_CARD" || code === "CARD";
+}
+
 function Section({
     title,
     children,
@@ -104,6 +122,10 @@ export function TransactionForm({
     const { accounts } = useAccounts();
     const { categories } = useCategories();
     const { mappings } = useCategoryContextMappings();
+    const {
+        paymentTypes,
+        activeOptions: activePaymentTypes,
+    } = usePaymentTypes();
 
     const {
         register,
@@ -150,6 +172,15 @@ export function TransactionForm({
     );
 
     const paymentMethod = watch("paymentMethod");
+
+    // Active master-list types, plus the transaction's own stored value
+    // when that type is now inactive - kept selectable so editing never
+    // erases it.
+    const paymentMethodOptions = paymentTypeOptionsFor(
+        activePaymentTypes,
+        paymentTypes,
+        defaultValues?.paymentMethod
+    );
     const accountId = watch("accountId");
     const categoryId = watch("categoryId");
     const transactionType = watch("type");
@@ -225,6 +256,38 @@ export function TransactionForm({
             accountId: accountId ?? "",
             categoryId: categoryId ?? "",
         };
+
+        // Leaving a Transfer category (by its TYPE - never its name) for a
+        // normal category or none turns the transfer back into the
+        // Income/Expense its direction came from (Out -> Expense, In ->
+        // Income), unless a mapping locks the type. A transfer typed by
+        // hand on a normal category is not affected.
+        const previousCategory = previous
+            ? categories.find(
+                  category => category.id === previous.categoryId
+              )
+            : undefined;
+
+        if (
+            previous &&
+            previous.categoryId !== categoryId &&
+            previousCategory?.categoryType === "TRANSFER" &&
+            typeResolution.categoryType !== "TRANSFER" &&
+            getValues("type") === "transfer" &&
+            !isLockedResolution(typeResolution)
+        ) {
+            const restored = debitCreditTypeForDirection(
+                getValues("transferDirection")
+            );
+
+            if (restored) {
+                setValue("type", restored, {
+                    shouldValidate: true,
+                    shouldDirty: true,
+                });
+                return;
+            }
+        }
 
         if (
             previous &&
@@ -551,21 +614,12 @@ export function TransactionForm({
                                 >
                                     <SelectTrigger id="paymentMethod">
                                         <SelectValue placeholder="None">
-                                            {field.value === "CARD"
-                                                ? "Credit Card"
-                                                : field.value === "DEBIT_CARD"
-                                                    ? "Debit Card"
-                                                    : field.value === "BANK_TRANSFER"
-                                                        ? "Bank Transfer"
-                                                        : field.value === "DIRECT_DEBIT"
-                                                            ? "Direct Debit"
-                                                            : field.value === "CASH"
-                                                                ? "Cash"
-                                                                : field.value === "UPI"
-                                                                    ? "UPI"
-                                                                    : field.value === "OTHER"
-                                                                        ? "Other"
-                                                                        : "None"}
+                                            {field.value
+                                                ? paymentTypeLabel(
+                                                    paymentTypes,
+                                                    field.value
+                                                )
+                                                : "None"}
                                         </SelectValue>
                                     </SelectTrigger>
 
@@ -574,33 +628,14 @@ export function TransactionForm({
                                             None
                                         </SelectItem>
 
-                                        <SelectItem value="CASH">
-                                            Cash
-                                        </SelectItem>
-
-                                        <SelectItem value="CARD">
-                                            Credit Card
-                                        </SelectItem>
-
-                                        <SelectItem value="DEBIT_CARD">
-                                            Debit Card
-                                        </SelectItem>
-
-                                        <SelectItem value="UPI">
-                                            UPI
-                                        </SelectItem>
-
-                                        <SelectItem value="BANK_TRANSFER">
-                                            Bank Transfer
-                                        </SelectItem>
-
-                                        <SelectItem value="DIRECT_DEBIT">
-                                            Direct Debit
-                                        </SelectItem>
-
-                                        <SelectItem value="OTHER">
-                                            Other
-                                        </SelectItem>
+                                        {paymentMethodOptions.map(option => (
+                                            <SelectItem
+                                                key={option.value}
+                                                value={option.value}
+                                            >
+                                                {option.label}
+                                            </SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                             )}
@@ -635,7 +670,7 @@ export function TransactionForm({
                         </FormField>
                     )}
 
-                    {paymentMethod === "CARD" && (
+                    {isCreditCardPaymentType(paymentMethod) && (
                         <FormField
                             label="Card Reference"
                             htmlFor="cardReference"
