@@ -232,6 +232,23 @@ export class TransactionService {
     async create(
         request: CreateTransactionRequest
     ): Promise<string> {
+        const transaction =
+            await this.prepareCreate(request);
+
+        await this.repository.create(
+            transaction
+        );
+
+        return transaction.id;
+    }
+
+    // Everything create() does except the insert: type resolution, the
+    // category/type compatibility check and building the stored row. For
+    // a caller that must persist the row inside its own atomic write
+    // (LoanPaymentService's EMI payment) - create() itself is unchanged.
+    async prepareCreate(
+        request: CreateTransactionRequest
+    ): Promise<Transaction> {
         const typing = await this.resolveTransferTyping(
             request.categoryId?.trim() || null,
             request.type,
@@ -340,11 +357,7 @@ export class TransactionService {
                 now,
         };
 
-        await this.repository.create(
-            transaction
-        );
-
-        return transaction.id;
+        return transaction;
     }
 
     async update(

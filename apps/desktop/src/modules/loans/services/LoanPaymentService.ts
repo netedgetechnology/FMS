@@ -9,6 +9,10 @@ import { LoanRepository } from "../repositories/LoanRepository";
 import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentScheduleRepository";
 import { LoanSchedulePaymentRepository } from "../repositories/LoanSchedulePaymentRepository";
 import {
+    recordEmiPaymentAtomic,
+    reverseEmiPaymentAtomic,
+} from "../repositories/emiPaymentAtomic";
+import {
     Loan,
     LoanPaymentSchedule,
     LoanPaymentStatus,
@@ -99,6 +103,15 @@ export class LoanPaymentService {
 
     private readonly transactionService =
         new TransactionService();
+
+    // Every write of a payment or a reversal goes through one atomic,
+    // single-connection command (src-tauri/src/loan_payment.rs) - never
+    // through beginTransaction()/execute()/commit(), which lands those
+    // statements on different pooled connections (see emiPaymentAtomic.ts).
+    private readonly atomicWriter = {
+        recordPayment: recordEmiPaymentAtomic,
+        reversePayment: reverseEmiPaymentAtomic,
+    };
 
     // reversePayment() deliberately uses the repository directly, not
     // TransactionService - TransactionService.delete() refuses to
@@ -215,7 +228,9 @@ export class LoanPaymentService {
             request.amount ?? remainingScheduled
         );
 
-        if (amountPaid <= 0) {
+        // !(x > 0) also rejects NaN/undefined-derived amounts, which a
+        // plain `<= 0` check lets through.
+        if (!Number.isFinite(amountPaid) || !(amountPaid > 0)) {
             throw new Error(
                 "Payment amount must be greater than zero."
             );
@@ -265,152 +280,150 @@ export class LoanPaymentService {
         const isFullyPaid =
             cumulativePaidAfter >= scheduledAmount;
 
-        await this.loanRepository.beginTransaction();
+        // The bank-side transaction row is built (and validated) exactly as
+        // TransactionService.create() builds it, but persisted together
+        // with everything below in one atomic write.
+        const transaction =
+            await this.transactionService.prepareCreate({
+                accountId:
+                    loan.accountId,
 
-        try {
-            const transactionId =
-                await this.transactionService.create({
-                    accountId:
-                        loan.accountId,
+                payee:
+                    loan.name,
 
-                    payee:
-                        loan.name,
+                type:
+                    "expense",
 
-                    type:
-                        "expense",
+                amount:
+                    amountPaid,
 
-                    amount:
-                        amountPaid,
+                transactionDate:
+                    request.paymentDate,
 
-                    transactionDate:
-                        request.paymentDate,
+                referenceNumber:
+                    request.referenceNumber ??
+                    null,
 
-                    referenceNumber:
-                        request.referenceNumber ??
-                        null,
-
-                    notes:
-                        request.notes ??
-                        `EMI payment - Installment ${schedule.installmentNumber}`,
-
-                    status:
-                        "CLEARED",
-
-                    paymentMethod:
-                        request.paymentMethod ??
-                        null,
-                });
-
-            await this.paymentRepository.create({
-                id: crypto.randomUUID(),
-                loanId: loan.id,
-                scheduleId: schedule.id,
-                transactionId,
-                paymentDate: request.paymentDate,
-                amount: amountPaid,
-                principalAmount: principalPaid,
-                interestAmount: interestPaid,
-                createdAt: new Date().toISOString(),
-            });
-
-            const newOutstandingPrincipal =
-                roundMoney(
-                    Math.max(
-                        0,
-                        loan.outstandingPrincipal -
-                            principalPaid
-                    )
-                );
-
-            const newOutstandingInterest =
-                roundMoney(
-                    Math.max(
-                        0,
-                        loan.outstandingInterest -
-                            interestPaid
-                    )
-                );
-
-            const loanClosed =
-                newOutstandingPrincipal <= 0 &&
-                newOutstandingInterest <= 0;
-
-            const updatedSchedule:
-                LoanPaymentSchedule = {
-                    ...schedule,
-
-                    status:
-                        isFullyPaid
-                            ? LoanPaymentStatus.PAID
-                            : LoanPaymentStatus.PARTIAL,
-
-                    paidDate:
-                        request.paymentDate,
-
-                    // Running total across every payment recorded
-                    // against this row, not just this one.
-                    paidAmount:
-                        cumulativePaidAfter,
-
-                    // Set once, from the first payment, and never
-                    // overwritten by a later top-up - the full list of
-                    // transactions lives in loan_schedule_payments.
-                    transactionId:
-                        schedule.transactionId ??
-                        transactionId,
-
-                    outstandingPrincipal:
-                        schedule.outstandingPrincipal,
-                };
-
-            await this.scheduleRepository.update(
-                updatedSchedule
-            );
-
-            const updatedLoan: Loan = {
-                ...loan,
-
-                outstandingPrincipal:
-                    newOutstandingPrincipal,
-
-                outstandingInterest:
-                    newOutstandingInterest,
+                notes:
+                    request.notes ??
+                    `EMI payment - Installment ${schedule.installmentNumber}`,
 
                 status:
-                    loanClosed
-                        ? LoanStatus.CLOSED
-                        : loan.status,
-            };
+                    "CLEARED",
 
-            await this.loanRepository.updateAccountingBalances(
-                updatedLoan.id,
-                updatedLoan.outstandingPrincipal,
-                updatedLoan.outstandingInterest,
-                updatedLoan.status
+                paymentMethod:
+                    request.paymentMethod ??
+                    null,
+            });
+
+        const transactionId = transaction.id;
+
+        const payment = {
+            id: crypto.randomUUID(),
+            loanId: loan.id,
+            scheduleId: schedule.id,
+            transactionId,
+            paymentDate: request.paymentDate,
+            amount: amountPaid,
+            principalAmount: principalPaid,
+            interestAmount: interestPaid,
+        };
+
+        const newOutstandingPrincipal =
+            roundMoney(
+                Math.max(
+                    0,
+                    loan.outstandingPrincipal -
+                        principalPaid
+                )
             );
 
-            await this.loanRepository.commit();
+        const newOutstandingInterest =
+            roundMoney(
+                Math.max(
+                    0,
+                    loan.outstandingInterest -
+                        interestPaid
+                )
+            );
 
-            return {
-                transactionId,
-                loan: updatedLoan,
-                schedule: updatedSchedule,
-                principalPaid,
-                interestPaid,
-                amountPaid,
+        const loanClosed =
+            newOutstandingPrincipal <= 0 &&
+            newOutstandingInterest <= 0;
+
+        const updatedSchedule:
+            LoanPaymentSchedule = {
+                ...schedule,
+
+                status:
+                    isFullyPaid
+                        ? LoanPaymentStatus.PAID
+                        : LoanPaymentStatus.PARTIAL,
+
+                paidDate:
+                    request.paymentDate,
+
+                // Running total across every payment recorded
+                // against this row, not just this one.
+                paidAmount:
+                    cumulativePaidAfter,
+
+                // Set once, from the first payment, and never
+                // overwritten by a later top-up - the full list of
+                // transactions lives in loan_schedule_payments.
+                transactionId:
+                    schedule.transactionId ??
+                    transactionId,
+
+                outstandingPrincipal:
+                    schedule.outstandingPrincipal,
             };
-        } catch (error) {
-            try {
-                await this.loanRepository.rollback();
-            } catch (rollbackError) {
-                console.error(
-                    "Failed to rollback EMI payment transaction:",
-                    rollbackError
-                );
-            }
 
-            throw error;
-        }
+        const updatedLoan: Loan = {
+            ...loan,
+
+            outstandingPrincipal:
+                newOutstandingPrincipal,
+
+            outstandingInterest:
+                newOutstandingInterest,
+
+            status:
+                loanClosed
+                    ? LoanStatus.CLOSED
+                    : loan.status,
+        };
+
+        // The transaction, the payment-ledger row, the schedule row and
+        // the loan balances - all or nothing. The command also re-checks
+        // the instalment's remaining amount inside its transaction, so a
+        // repeated submission can never overpay it.
+        await this.atomicWriter.recordPayment({
+            transaction,
+            payment,
+            schedule: {
+                id: updatedSchedule.id,
+                status: updatedSchedule.status,
+                paidDate: updatedSchedule.paidDate,
+                paidAmount: updatedSchedule.paidAmount,
+                transactionId: updatedSchedule.transactionId,
+            },
+            loan: {
+                id: updatedLoan.id,
+                outstandingPrincipal: updatedLoan.outstandingPrincipal,
+                outstandingInterest: updatedLoan.outstandingInterest,
+                status: updatedLoan.status,
+            },
+        });
+
+        return {
+            transactionId,
+            loan: updatedLoan,
+            schedule: updatedSchedule,
+            principalPaid,
+            interestPaid,
+            amountPaid,
+        };
     }
 
     /**
@@ -464,145 +477,128 @@ export class LoanPaymentService {
             throw new Error("Loan not found.");
         }
 
-        await this.loanRepository.beginTransaction();
-
-        try {
-            // 1. Soft-delete the linked bank transaction if it still
-            // exists - never hard-deleted, and a no-op (not an error)
-            // if it was already removed independently.
-            const transaction =
-                await this.transactionRepository.getById(
-                    payment.transactionId
-                );
-
-            if (transaction) {
-                await this.transactionRepository.delete(
-                    payment.transactionId
-                );
-            }
-
-            // 2. Remove the reversed payment from the ledger.
-            await this.paymentRepository.delete(
-                payment.id
+        // 1. The linked bank transaction is soft-deleted if it still
+        // exists - never hard-deleted, and a no-op (not an error) if it
+        // was already removed independently.
+        const transaction =
+            await this.transactionRepository.getById(
+                payment.transactionId
             );
 
-            // 3. Recompute the schedule from whatever payments
-            // survive - never by simply decrementing the old cached
-            // values, so repeated corrections can never drift.
-            const remainingPayments =
-                await this.paymentRepository.getAllByScheduleId(
-                    schedule.id
-                );
+        // 2-3. Recompute the schedule from the payments that survive
+        // this reversal - never by simply decrementing the old cached
+        // values, so repeated corrections can never drift.
+        const remainingPayments = (
+            await this.paymentRepository.getAllByScheduleId(
+                schedule.id
+            )
+        ).filter(item => item.id !== payment.id);
 
-            const remainingTotal = roundMoney(
-                remainingPayments.reduce(
-                    (sum, item) => sum + item.amount,
-                    0
-                )
-            );
+        const remainingTotal = roundMoney(
+            remainingPayments.reduce(
+                (sum, item) => sum + item.amount,
+                0
+            )
+        );
 
-            const scheduledAmount = roundMoney(
-                schedule.totalAmount
-            );
+        const scheduledAmount = roundMoney(
+            schedule.totalAmount
+        );
 
-            // getAllByScheduleId orders by created_at, so [0] is the
-            // earliest surviving payment - its date and transaction
-            // become the schedule's reference, exactly like a fresh
-            // first payment would set them.
-            const earliestSurviving =
-                remainingPayments[0] ?? null;
+        // getAllByScheduleId orders by created_at, so [0] is the
+        // earliest surviving payment - its date and transaction
+        // become the schedule's reference, exactly like a fresh
+        // first payment would set them.
+        const earliestSurviving =
+            remainingPayments[0] ?? null;
 
-            const newStatus =
-                remainingTotal <= 0
-                    ? LoanPaymentStatus.UPCOMING
-                    : remainingTotal >= scheduledAmount
-                      ? LoanPaymentStatus.PAID
-                      : LoanPaymentStatus.PARTIAL;
+        const newStatus =
+            remainingTotal <= 0
+                ? LoanPaymentStatus.UPCOMING
+                : remainingTotal >= scheduledAmount
+                  ? LoanPaymentStatus.PAID
+                  : LoanPaymentStatus.PARTIAL;
 
-            const updatedSchedule:
-                LoanPaymentSchedule = {
-                    ...schedule,
+        const updatedSchedule:
+            LoanPaymentSchedule = {
+                ...schedule,
 
-                    status: newStatus,
+                status: newStatus,
 
-                    paidAmount:
-                        remainingTotal > 0
-                            ? remainingTotal
-                            : null,
+                paidAmount:
+                    remainingTotal > 0
+                        ? remainingTotal
+                        : null,
 
-                    paidDate:
-                        earliestSurviving?.paymentDate ??
-                        null,
+                paidDate:
+                    earliestSurviving?.paymentDate ??
+                    null,
 
-                    transactionId:
-                        earliestSurviving?.transactionId ??
-                        null,
+                transactionId:
+                    earliestSurviving?.transactionId ??
+                    null,
 
-                    outstandingPrincipal:
-                        schedule.outstandingPrincipal,
-                };
-
-            await this.scheduleRepository.update(
-                updatedSchedule
-            );
-
-            // 4. Restore outstanding balances by exactly this
-            // payment's own stored allocation - never the cumulative
-            // total, so reversing one payment can never disturb what
-            // any other payment already correctly contributed.
-            const newOutstandingPrincipal = roundMoney(
-                loan.outstandingPrincipal +
-                    payment.principalAmount
-            );
-
-            const newOutstandingInterest = roundMoney(
-                loan.outstandingInterest +
-                    payment.interestAmount
-            );
-
-            // 5. Reopen the loan if this reversal leaves it with a
-            // real outstanding balance again - the mirror image of
-            // processPayment's auto-close.
-            const newLoanStatus =
-                loan.status === LoanStatus.CLOSED &&
-                (newOutstandingPrincipal > 0 ||
-                    newOutstandingInterest > 0)
-                    ? LoanStatus.ACTIVE
-                    : loan.status;
-
-            await this.loanRepository.updateAccountingBalances(
-                loan.id,
-                newOutstandingPrincipal,
-                newOutstandingInterest,
-                newLoanStatus
-            );
-
-            await this.loanRepository.commit();
-
-            return {
-                payment,
-                schedule: updatedSchedule,
-                loan: {
-                    ...loan,
-                    outstandingPrincipal:
-                        newOutstandingPrincipal,
-                    outstandingInterest:
-                        newOutstandingInterest,
-                    status: newLoanStatus,
-                },
+                outstandingPrincipal:
+                    schedule.outstandingPrincipal,
             };
-        } catch (error) {
-            try {
-                await this.loanRepository.rollback();
-            } catch (rollbackError) {
-                console.error(
-                    "Failed to rollback loan payment reversal transaction:",
-                    rollbackError
-                );
-            }
 
-            throw error;
-        }
+        // 4. Restore outstanding balances by exactly this payment's own
+        // stored allocation - never the cumulative total, so reversing
+        // one payment can never disturb what any other payment already
+        // correctly contributed.
+        const newOutstandingPrincipal = roundMoney(
+            loan.outstandingPrincipal +
+                payment.principalAmount
+        );
+
+        const newOutstandingInterest = roundMoney(
+            loan.outstandingInterest +
+                payment.interestAmount
+        );
+
+        // 5. Reopen the loan if this reversal leaves it with a real
+        // outstanding balance again - the mirror image of
+        // processPayment's auto-close.
+        const newLoanStatus =
+            loan.status === LoanStatus.CLOSED &&
+            (newOutstandingPrincipal > 0 ||
+                newOutstandingInterest > 0)
+                ? LoanStatus.ACTIVE
+                : loan.status;
+
+        // All of the above in one atomic write - all or nothing.
+        await this.atomicWriter.reversePayment({
+            paymentId: payment.id,
+            transactionId: transaction
+                ? payment.transactionId
+                : null,
+            schedule: {
+                id: updatedSchedule.id,
+                status: updatedSchedule.status,
+                paidDate: updatedSchedule.paidDate,
+                paidAmount: updatedSchedule.paidAmount,
+                transactionId: updatedSchedule.transactionId,
+            },
+            loan: {
+                id: loan.id,
+                outstandingPrincipal: newOutstandingPrincipal,
+                outstandingInterest: newOutstandingInterest,
+                status: newLoanStatus,
+            },
+        });
+
+        return {
+            payment,
+            schedule: updatedSchedule,
+            loan: {
+                ...loan,
+                outstandingPrincipal:
+                    newOutstandingPrincipal,
+                outstandingInterest:
+                    newOutstandingInterest,
+                status: newLoanStatus,
+            },
+        };
     }
 }
 

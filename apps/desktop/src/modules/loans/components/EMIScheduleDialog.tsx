@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -23,6 +23,11 @@ import {
 import { EMIScheduleService } from "../services/EMIScheduleService";
 import { LoanPaymentService } from "../services/LoanPaymentService";
 import { isScheduleOverdue } from "../services/loanScheduleOverdue";
+import { emiPaymentErrorMessage } from "./emiPaymentErrorMessage";
+import {
+    emiDialogLayout,
+    measureNaturalTableWidth,
+} from "./emiScheduleLayout";
 import type { PaymentMethod } from "@/modules/transactions/types";
 import { usePaymentTypes } from "@/modules/payment-types";
 import { useMoneyFormatter, useDateFormatter } from "@/core/formatting";
@@ -48,13 +53,19 @@ export interface EMIScheduleDialogProps {
 // across every payment already recorded against the row (Loans Phase
 // 4 correction), so this is correct whether the row has never been
 // paid, is PARTIAL, or (defensively) already PAID.
-function remainingAmount(
-    item: LoanPaymentSchedule
+// Rounded to paise, like LoanPaymentService's roundMoney: a raw float
+// difference (151167.39 - 68943 = 82224.39000000001) otherwise shows up in
+// the pre-filled amount and can wrongly fail the "cannot exceed the
+// remaining amount" check for a correctly typed figure.
+export function remainingAmount(
+    item: Pick<LoanPaymentSchedule, "totalAmount" | "paidAmount">
 ): number {
-    return Math.max(
+    const remaining = Math.max(
         0,
         item.totalAmount - (item.paidAmount ?? 0)
     );
+
+    return Math.round((remaining + Number.EPSILON) * 100) / 100;
 }
 
 // Overdue is never a persisted status (Loans Phase 5 - derived, not
@@ -113,6 +124,10 @@ export function EMIScheduleDialog({
     const formatMoney = useMoneyFormatter();
     const [schedule, setSchedule] = useState<LoanPaymentSchedule[]>([]);
     const [loading, setLoading] = useState(false);
+
+    // Blocks a second submission before React has re-rendered the
+    // disabled button (a fast double-click).
+    const paymentInFlight = useRef(false);
 
     const [payingScheduleId, setPayingScheduleId] =
         useState<string | null>(null);
@@ -279,34 +294,45 @@ export function EMIScheduleDialog({
 
             const service = new LoanPaymentService();
 
-            await service.reversePayment(payment.id);
-
-            await refreshSchedule();
-
-            if (viewingPaymentsFor) {
-                await loadPayments(
-                    viewingPaymentsFor.id
+            try {
+                await service.reversePayment(payment.id);
+            } catch (error) {
+                toast.error(
+                    emiPaymentErrorMessage(
+                        error,
+                        "Failed to reverse payment."
+                    )
                 );
+                return;
             }
-
-            await onSuccess?.();
 
             setConfirmingPayment(null);
 
             toast.success(
                 "Payment reversed successfully."
             );
-        } catch (error) {
-            console.error(
-                "Failed to reverse payment:",
-                error
-            );
 
-            toast.error(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to reverse payment."
-            );
+            // The reversal is saved; a failed refresh must not be
+            // reported as a failed reversal.
+            try {
+                await refreshSchedule();
+
+                if (viewingPaymentsFor) {
+                    await loadPayments(
+                        viewingPaymentsFor.id
+                    );
+                }
+
+                await onSuccess?.();
+            } catch (error) {
+                console.error(
+                    "Payment reversed, but refreshing the schedule failed:",
+                    error
+                );
+                toast.warning(
+                    "The payment was reversed, but the schedule could not be refreshed. Close and reopen it to see the latest state."
+                );
+            }
         } finally {
             setReversingPaymentId(null);
         }
@@ -378,25 +404,38 @@ export function EMIScheduleDialog({
             return;
         }
 
+        if (paymentInFlight.current) {
+            return;
+        }
+
+        paymentInFlight.current = true;
+
         try {
             setPayingScheduleId(item.id);
 
             const service = new LoanPaymentService();
 
-            await service.processPayment({
-                loanId: loan.id,
-                scheduleId: item.id,
-                paymentDate,
-                amount,
-                paymentMethod,
-                referenceNumber:
-                    paymentReference.trim() || null,
-                notes:
-                    paymentNotes.trim() || null,
-            });
-
-            await refreshSchedule();
-            await onSuccess?.();
+            try {
+                await service.processPayment({
+                    loanId: loan.id,
+                    scheduleId: item.id,
+                    paymentDate,
+                    amount,
+                    paymentMethod,
+                    referenceNumber:
+                        paymentReference.trim() || null,
+                    notes:
+                        paymentNotes.trim() || null,
+                });
+            } catch (error) {
+                toast.error(
+                    emiPaymentErrorMessage(
+                        error,
+                        "Failed to process EMI payment."
+                    )
+                );
+                return;
+            }
 
             setPaymentReference("");
             setPaymentNotes("");
@@ -410,21 +449,98 @@ export function EMIScheduleDialog({
             toast.success(
                 "EMI payment recorded successfully."
             );
-        } catch (error) {
-            console.error(
-                "Failed to process EMI payment:",
-                error
-            );
 
-            toast.error(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to process EMI payment."
-            );
+            // The payment is saved; a failed refresh must never be
+            // reported as a failed payment (that invites a duplicate).
+            try {
+                await refreshSchedule();
+                await onSuccess?.();
+            } catch (error) {
+                console.error(
+                    "EMI payment recorded, but refreshing the schedule failed:",
+                    error
+                );
+                toast.warning(
+                    "The payment was recorded, but the schedule could not be refreshed. Close and reopen it to see the latest state."
+                );
+            }
         } finally {
+            paymentInFlight.current = false;
             setPayingScheduleId(null);
         }
     }
+
+    // Dialog width follows the schedule table's natural width (see
+    // emiScheduleLayout.ts): every column visible, no horizontal scroll.
+    const scheduleTableRef = useRef<HTMLTableElement | null>(null);
+    const scrollAreaRef = useRef<HTMLDivElement | null>(null);
+    const [compactTable, setCompactTable] = useState(false);
+    const [dialogWidth, setDialogWidth] = useState<number | null>(null);
+    // The table's natural width at normal density, so a compact table can
+    // return to normal density when the window grows again.
+    const normalTableWidth = useRef<number | null>(null);
+
+    useLayoutEffect(() => {
+        if (!open) {
+            return;
+        }
+
+        function fitToTable() {
+            const table = scheduleTableRef.current;
+
+            if (!table) {
+                return;
+            }
+
+            const natural = measureNaturalTableWidth(table);
+            // The list's vertical scrollbar (when it has one) takes width
+            // from the content area - measured, not assumed.
+            const scrollArea = scrollAreaRef.current;
+            const scrollbar = scrollArea
+                ? scrollArea.offsetWidth - scrollArea.clientWidth
+                : 0;
+
+            if (!compactTable) {
+                normalTableWidth.current = natural;
+            }
+
+            const layout = emiDialogLayout(
+                natural,
+                window.innerWidth,
+                scrollbar
+            );
+
+            if (!compactTable && !layout.fits) {
+                setCompactTable(true);
+                return;
+            }
+
+            if (
+                compactTable &&
+                normalTableWidth.current !== null &&
+                emiDialogLayout(
+                    normalTableWidth.current,
+                    window.innerWidth,
+                    scrollbar
+                ).fits
+            ) {
+                setCompactTable(false);
+                return;
+            }
+
+            setDialogWidth(layout.width);
+        }
+
+        fitToTable();
+        window.addEventListener("resize", fitToTable);
+
+        return () => {
+            window.removeEventListener("resize", fitToTable);
+        };
+    }, [open, loading, schedule, compactTable]);
+
+    const cellPadding = compactTable ? "px-2.5 py-2.5" : "px-4 py-3";
+    const cellText = compactTable ? "text-[13px]" : "text-sm";
 
     const summary = useMemo(() => {
         return {
@@ -472,10 +588,15 @@ export function EMIScheduleDialog({
         >
             <DialogContent
                 showCloseButton
+                style={
+                    dialogWidth === null
+                        ? undefined
+                        : { width: dialogWidth }
+                }
                 className="
                     flex
-                    w-[1100px]
-                    max-w-[calc(100vw-32px)]
+                    w-[min(1100px,calc(100vw-48px))]
+                    max-w-[calc(100vw-48px)]
                     max-h-[calc(100vh-32px)]
                     flex-col
                     gap-0
@@ -497,7 +618,10 @@ export function EMIScheduleDialog({
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-5">
+                <div
+                    ref={scrollAreaRef}
+                    className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden border-t border-slate-100 px-7 py-5"
+                >
                     {loading ? (
                         <div className="flex min-h-[240px] items-center justify-center">
                             <p className="text-sm text-slate-500">
@@ -839,8 +963,8 @@ export function EMIScheduleDialog({
                                                 instalment.
                                             </p>
                                         ) : (
-                                            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                                                <table className="w-full min-w-[600px] border-collapse">
+                                            <div className="rounded-xl border border-slate-200 bg-white">
+                                                <table className="w-full border-collapse">
                                                     <thead className="bg-slate-50">
                                                         <tr>
                                                             <th className="px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
@@ -925,47 +1049,50 @@ export function EMIScheduleDialog({
                                 </div>
                             )}
 
-                            <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-100">
-                                <table className="w-full min-w-[1000px] border-collapse">
+                            <div className="mt-5 rounded-2xl border border-slate-100">
+                                <table
+                                    ref={scheduleTableRef}
+                                    className="w-full border-collapse"
+                                >
                                     <thead className="bg-slate-50">
                                         <tr>
-                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 #
                                             </th>
 
-                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Due Date
                                             </th>
 
-                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Principal
                                             </th>
 
-                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Interest
                                             </th>
 
-                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 EMI
                                             </th>
 
-                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Outstanding
                                             </th>
 
-                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Status
                                             </th>
 
-                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Paid Date
                                             </th>
 
-                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500`}>
                                                 Paid Amount
                                             </th>
 
-                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            <th className={`${cellPadding} whitespace-nowrap text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500`}>
                                                 Action
                                             </th>
                                         </tr>
@@ -977,39 +1104,39 @@ export function EMIScheduleDialog({
                                                 key={item.id}
                                                 className="transition-colors hover:bg-slate-50/70"
                                             >
-                                                <td className="px-4 py-3 text-sm font-medium text-slate-800">
+                                                <td className={`${cellPadding} whitespace-nowrap ${cellText} font-medium text-slate-800`}>
                                                     {item.installmentNumber}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-sm text-slate-600">
+                                                <td className={`${cellPadding} whitespace-nowrap ${cellText} text-slate-600`}>
                                                     {formatDate(item.dueDate)}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-right text-sm text-slate-600">
+                                                <td className={`${cellPadding} whitespace-nowrap text-right ${cellText} text-slate-600`}>
                                                     {formatMoney(
                                                         item.principalAmount
                                                     )}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-right text-sm text-slate-600">
+                                                <td className={`${cellPadding} whitespace-nowrap text-right ${cellText} text-slate-600`}>
                                                     {formatMoney(
                                                         item.interestAmount
                                                     )}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-right text-sm font-medium text-slate-800">
+                                                <td className={`${cellPadding} whitespace-nowrap text-right ${cellText} font-medium text-slate-800`}>
                                                     {formatMoney(
                                                         item.totalAmount
                                                     )}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-right text-sm text-slate-600">
+                                                <td className={`${cellPadding} whitespace-nowrap text-right ${cellText} text-slate-600`}>
                                                     {formatMoney(
                                                         item.outstandingPrincipal
                                                     )}
                                                 </td>
 
-                                                <td className="px-4 py-3">
+                                                <td className={`${cellPadding} whitespace-nowrap`}>
                                                     <StatusBadge
                                                         status={item.status}
                                                         overdue={isScheduleOverdue(
@@ -1018,13 +1145,13 @@ export function EMIScheduleDialog({
                                                     />
                                                 </td>
 
-                                                <td className="px-4 py-3 text-sm text-slate-600">
+                                                <td className={`${cellPadding} whitespace-nowrap ${cellText} text-slate-600`}>
                                                     {formatDate(
                                                         item.paidDate
                                                     )}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-right text-sm text-slate-600">
+                                                <td className={`${cellPadding} whitespace-nowrap text-right ${cellText} text-slate-600`}>
                                                     {item.paidAmount === null
                                                         ? "—"
                                                         : formatMoney(
@@ -1032,7 +1159,7 @@ export function EMIScheduleDialog({
                                                           )}
                                                 </td>
 
-                                                <td className="px-4 py-3 text-right">
+                                                <td className={`${cellPadding} whitespace-nowrap text-right`}>
                                                     <div className="flex flex-nowrap items-center justify-end gap-1.5">
                                                         {item.status ===
                                                         "PAID" ? (

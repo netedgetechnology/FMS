@@ -92,6 +92,15 @@ describe("LoanPaymentService.processPayment", () => {
 
     const transactionService = {
         create: vi.fn(),
+        prepareCreate: vi.fn(),
+    };
+
+    // The one atomic write (src-tauri loan_payment.rs). Its default mock
+    // replays the request into the repository mocks the assertions below
+    // inspect, so they check exactly what is sent to the atomic write.
+    const atomicWriter = {
+        recordPayment: vi.fn(),
+        reversePayment: vi.fn(),
     };
 
     function createService(): LoanPaymentService {
@@ -114,6 +123,11 @@ describe("LoanPaymentService.processPayment", () => {
             service,
             "transactionService",
             { value: transactionService }
+        );
+        Object.defineProperty(
+            service,
+            "atomicWriter",
+            { value: atomicWriter }
         );
 
         return service;
@@ -151,6 +165,30 @@ describe("LoanPaymentService.processPayment", () => {
         );
         transactionService.create.mockResolvedValue(
             "txn-1"
+        );
+        // prepareCreate builds the row create() would insert; its id
+        // comes from the create mock so the existing assertions hold.
+        transactionService.prepareCreate.mockImplementation(
+            async (request: Record<string, unknown>) => ({
+                ...request,
+                id: await transactionService.create(request),
+            })
+        );
+        atomicWriter.recordPayment.mockImplementation(
+            async (request: {
+                payment: Record<string, unknown>;
+                schedule: Record<string, unknown>;
+                loan: { id: string; outstandingPrincipal: number; outstandingInterest: number; status: string };
+            }) => {
+                await paymentRepository.create(request.payment);
+                await scheduleRepository.update(request.schedule);
+                await loanRepository.updateAccountingBalances(
+                    request.loan.id,
+                    request.loan.outstandingPrincipal,
+                    request.loan.outstandingInterest,
+                    request.loan.status
+                );
+            }
         );
     });
 
@@ -412,7 +450,7 @@ describe("LoanPaymentService.processPayment", () => {
             );
 
             expect(
-                loanRepository.beginTransaction
+                atomicWriter.recordPayment
             ).not.toHaveBeenCalled();
         });
 
@@ -507,7 +545,7 @@ describe("LoanPaymentService.processPayment", () => {
             ).rejects.toThrow(/greater than zero/);
 
             expect(
-                loanRepository.beginTransaction
+                atomicWriter.recordPayment
             ).not.toHaveBeenCalled();
         });
 
@@ -552,13 +590,19 @@ describe("LoanPaymentService.processPayment", () => {
             ).rejects.toThrow(/loan is closed/i);
 
             expect(
-                loanRepository.beginTransaction
+                atomicWriter.recordPayment
             ).not.toHaveBeenCalled();
         });
     });
 
-    describe("rollback safety", () => {
-        it("rolls back and rethrows when the transaction write fails", async () => {
+    describe("atomic write safety (no JS-managed transaction)", () => {
+        function expectNoJsManagedTransaction() {
+            expect(loanRepository.beginTransaction).not.toHaveBeenCalled();
+            expect(loanRepository.commit).not.toHaveBeenCalled();
+            expect(loanRepository.rollback).not.toHaveBeenCalled();
+        }
+
+        it("rethrows when building the transaction row fails, and writes nothing", async () => {
             transactionService.create.mockRejectedValue(
                 new Error("Transaction write failed.")
             );
@@ -572,17 +616,12 @@ describe("LoanPaymentService.processPayment", () => {
             );
 
             expect(
-                loanRepository.rollback
-            ).toHaveBeenCalledTimes(1);
-            expect(
-                loanRepository.commit
+                atomicWriter.recordPayment
             ).not.toHaveBeenCalled();
-            expect(
-                paymentRepository.create
-            ).not.toHaveBeenCalled();
+            expectNoJsManagedTransaction();
         });
 
-        it("rolls back and rethrows when the payment-ledger write fails", async () => {
+        it("rethrows the original error when the atomic write fails (nothing is committed)", async () => {
             paymentRepository.create.mockRejectedValue(
                 new Error("Payment ledger write failed.")
             );
@@ -596,50 +635,36 @@ describe("LoanPaymentService.processPayment", () => {
             );
 
             expect(
-                loanRepository.rollback
+                atomicWriter.recordPayment
             ).toHaveBeenCalledTimes(1);
-            expect(
-                loanRepository.commit
-            ).not.toHaveBeenCalled();
-            expect(
-                scheduleRepository.update
-            ).not.toHaveBeenCalled();
+            expectNoJsManagedTransaction();
         });
 
-        it("rolls back and rethrows when the schedule update fails", async () => {
-            scheduleRepository.update.mockRejectedValue(
-                new Error("Schedule write failed.")
+        it("sends the transaction, ledger row, schedule and loan balances as ONE write", async () => {
+            const service = createService();
+
+            await service.processPayment(baseRequest);
+
+            expect(
+                atomicWriter.recordPayment
+            ).toHaveBeenCalledTimes(1);
+            expect(
+                transactionService.prepareCreate
+            ).toHaveBeenCalledTimes(1);
+            expectNoJsManagedTransaction();
+        });
+
+        it("propagates a refusal from the atomic write (e.g. a repeated submission) unchanged", async () => {
+            atomicWriter.recordPayment.mockRejectedValue(
+                new Error("This payment was not recorded: only 0.00 remains on this installment (it may already have been paid).")
             );
 
             const service = createService();
 
             await expect(
                 service.processPayment(baseRequest)
-            ).rejects.toThrow("Schedule write failed.");
-
-            expect(
-                loanRepository.rollback
-            ).toHaveBeenCalledTimes(1);
-            expect(
-                loanRepository.commit
-            ).not.toHaveBeenCalled();
-        });
-
-        it("still rethrows the original error when rollback itself fails", async () => {
-            transactionService.create.mockRejectedValue(
-                new Error("Transaction write failed.")
-            );
-            loanRepository.rollback.mockRejectedValue(
-                new Error("Rollback failed.")
-            );
-
-            const service = createService();
-
-            await expect(
-                service.processPayment(baseRequest)
-            ).rejects.toThrow(
-                "Transaction write failed."
-            );
+            ).rejects.toThrow(/may already have been paid/);
+            expectNoJsManagedTransaction();
         });
     });
 });
@@ -669,6 +694,13 @@ describe("LoanPaymentService.reversePayment", () => {
         delete: vi.fn(),
     };
 
+    // See processPayment's atomicWriter: replays the request into the
+    // repository mocks the assertions below inspect.
+    const atomicWriter = {
+        recordPayment: vi.fn(),
+        reversePayment: vi.fn(),
+    };
+
     function createService(): LoanPaymentService {
         const service = new LoanPaymentService();
 
@@ -689,6 +721,11 @@ describe("LoanPaymentService.reversePayment", () => {
             service,
             "transactionRepository",
             { value: transactionRepository }
+        );
+        Object.defineProperty(
+            service,
+            "atomicWriter",
+            { value: atomicWriter }
         );
 
         return service;
@@ -733,6 +770,26 @@ describe("LoanPaymentService.reversePayment", () => {
         });
         transactionRepository.delete.mockResolvedValue(
             undefined
+        );
+        atomicWriter.reversePayment.mockImplementation(
+            async (request: {
+                paymentId: string;
+                transactionId: string | null;
+                schedule: Record<string, unknown>;
+                loan: { id: string; outstandingPrincipal: number; outstandingInterest: number; status: string };
+            }) => {
+                if (request.transactionId) {
+                    await transactionRepository.delete(request.transactionId);
+                }
+                await paymentRepository.delete(request.paymentId);
+                await scheduleRepository.update(request.schedule);
+                await loanRepository.updateAccountingBalances(
+                    request.loan.id,
+                    request.loan.outstandingPrincipal,
+                    request.loan.outstandingInterest,
+                    request.loan.status
+                );
+            }
         );
     });
 
@@ -789,7 +846,7 @@ describe("LoanPaymentService.reversePayment", () => {
                 "ACTIVE"
             );
             expect(
-                loanRepository.commit
+                atomicWriter.reversePayment
             ).toHaveBeenCalledTimes(1);
         });
 
@@ -1097,7 +1154,7 @@ describe("LoanPaymentService.reversePayment", () => {
                 LoanPaymentStatus.UPCOMING
             );
             expect(
-                loanRepository.commit
+                atomicWriter.reversePayment
             ).toHaveBeenCalledTimes(1);
         });
     });
@@ -1117,7 +1174,7 @@ describe("LoanPaymentService.reversePayment", () => {
             );
 
             expect(
-                loanRepository.beginTransaction
+                atomicWriter.reversePayment
             ).not.toHaveBeenCalled();
             expect(
                 paymentRepository.delete
@@ -1173,91 +1230,46 @@ describe("LoanPaymentService.reversePayment", () => {
             );
         });
 
-        it("rolls back and rethrows when deleting the transaction fails", async () => {
-            transactionRepository.delete.mockRejectedValue(
-                new Error("Transaction delete failed.")
-            );
+        function expectNoJsManagedTransaction() {
+            expect(loanRepository.beginTransaction).not.toHaveBeenCalled();
+            expect(loanRepository.commit).not.toHaveBeenCalled();
+            expect(loanRepository.rollback).not.toHaveBeenCalled();
+        }
+
+        it.each([
+            ["deleting the transaction", () => transactionRepository.delete.mockRejectedValue(new Error("Transaction delete failed.")), "Transaction delete failed."],
+            ["deleting the payment ledger row", () => paymentRepository.delete.mockRejectedValue(new Error("Ledger delete failed.")), "Ledger delete failed."],
+            ["the schedule update", () => scheduleRepository.update.mockRejectedValue(new Error("Schedule update failed.")), "Schedule update failed."],
+            ["restoring loan balances", () => loanRepository.updateAccountingBalances.mockRejectedValue(new Error("Balance update failed.")), "Balance update failed."],
+        ])("rethrows the original error when %s fails inside the atomic write (nothing is committed)", async (_step, fail, message) => {
+            fail();
 
             const service = createService();
 
             await expect(
                 service.reversePayment("pay-1")
-            ).rejects.toThrow(
-                "Transaction delete failed."
-            );
+            ).rejects.toThrow(message);
 
             expect(
-                loanRepository.rollback
+                atomicWriter.reversePayment
             ).toHaveBeenCalledTimes(1);
-            expect(
-                loanRepository.commit
-            ).not.toHaveBeenCalled();
+            expectNoJsManagedTransaction();
         });
 
-        it("rolls back and rethrows when deleting the payment ledger row fails", async () => {
-            paymentRepository.delete.mockRejectedValue(
-                new Error("Ledger delete failed.")
-            );
-
+        it("sends the whole reversal as ONE write", async () => {
             const service = createService();
 
-            await expect(
-                service.reversePayment("pay-1")
-            ).rejects.toThrow("Ledger delete failed.");
+            await service.reversePayment("pay-1");
 
             expect(
-                loanRepository.rollback
-            ).toHaveBeenCalledTimes(1);
-        });
-
-        it("rolls back and rethrows when the schedule update fails", async () => {
-            scheduleRepository.update.mockRejectedValue(
-                new Error("Schedule update failed.")
+                atomicWriter.reversePayment
+            ).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    paymentId: "pay-1",
+                    transactionId: "txn-1",
+                })
             );
-
-            const service = createService();
-
-            await expect(
-                service.reversePayment("pay-1")
-            ).rejects.toThrow("Schedule update failed.");
-
-            expect(
-                loanRepository.rollback
-            ).toHaveBeenCalledTimes(1);
-        });
-
-        it("rolls back and rethrows when restoring loan balances fails", async () => {
-            loanRepository.updateAccountingBalances.mockRejectedValue(
-                new Error("Balance update failed.")
-            );
-
-            const service = createService();
-
-            await expect(
-                service.reversePayment("pay-1")
-            ).rejects.toThrow("Balance update failed.");
-
-            expect(
-                loanRepository.rollback
-            ).toHaveBeenCalledTimes(1);
-            expect(
-                loanRepository.commit
-            ).not.toHaveBeenCalled();
-        });
-
-        it("still rethrows the original error when rollback itself fails", async () => {
-            paymentRepository.delete.mockRejectedValue(
-                new Error("Ledger delete failed.")
-            );
-            loanRepository.rollback.mockRejectedValue(
-                new Error("Rollback failed.")
-            );
-
-            const service = createService();
-
-            await expect(
-                service.reversePayment("pay-1")
-            ).rejects.toThrow("Ledger delete failed.");
+            expectNoJsManagedTransaction();
         });
     });
 });
