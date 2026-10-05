@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PaymentTypesMigration } from "@/core/database/migrations/044_payment_types";
 
 import {
+    DuplicatePaymentTypeError,
     PaymentTypeService,
     normalizePaymentTypeLabel,
     paymentTypeCodeFromLabel,
@@ -154,5 +155,70 @@ describe("PaymentTypeService - rename / activate / deactivate", () => {
 
         const upi = (await byCode("UPI"))!;
         await expect(service().update({ id: upi.id, label: "  " })).rejects.toThrow("Enter a payment type name.");
+    });
+});
+
+describe("PaymentTypeService - name normalization for duplicates", () => {
+    it.each(["Google Pay", "google pay", " Google Pay ", "Google  Pay", "  GOOGLE   PAY  "])(
+        "after adding Google Pay, %j is the same payment type",
+        async variant => {
+            const id = await service().create({ label: "Google Pay" });
+
+            const error = await service().create({ label: variant }).catch(e => e);
+
+            expect(error).toBeInstanceOf(DuplicatePaymentTypeError);
+            expect((error as DuplicatePaymentTypeError).existing).toMatchObject({ id, isActive: true });
+            expect((await service().getAll()).filter(t => t.code === "GOOGLE_PAY")).toHaveLength(1);
+        }
+    );
+
+    it("normalizes the stored side too: a legacy label with extra spaces still blocks its duplicate", async () => {
+        // Bypasses the service, as an older/hand-edited row could.
+        sqlite.db!.prepare(
+            `INSERT INTO payment_types (id, code, label, is_active, sort_order) VALUES ('legacy', 'LEGACY_WALLET_7', '  Apple   Pay ', 1, 999)`
+        ).run();
+
+        await expect(service().create({ label: "apple pay" })).rejects.toBeInstanceOf(DuplicatePaymentTypeError);
+    });
+
+    it("rename is checked the same way", async () => {
+        await service().create({ label: "Google Pay" });
+        const upi = (await byCode("UPI"))!;
+
+        await expect(service().update({ id: upi.id, label: "  google   PAY " })).rejects.toBeInstanceOf(DuplicatePaymentTypeError);
+    });
+});
+
+describe("PaymentTypeService - inactive duplicate is reactivated, never duplicated", () => {
+    it("adding a deactivated type's name returns that record; reactivating it restores the same row", async () => {
+        const id = await service().create({ label: "Google Pay" });
+        await service().update({ id, isActive: false });
+        const countBefore = (await service().getAll()).length;
+
+        const error = (await service().create({ label: "google  pay" }).catch(e => e)) as DuplicatePaymentTypeError;
+        expect(error).toBeInstanceOf(DuplicatePaymentTypeError);
+        expect(error.existing).toMatchObject({ id, code: "GOOGLE_PAY", isActive: false });
+        expect(error.message).toMatch(/inactive\. Activate it instead/);
+        expect(await service().getAll()).toHaveLength(countBefore);
+
+        // What Settings' "Reactivate" button does.
+        await service().update({ id: error.existing.id, isActive: true });
+
+        expect(await byCode("GOOGLE_PAY")).toMatchObject({ id, label: "Google Pay", isActive: true });
+        expect(await service().getAll()).toHaveLength(countBefore);
+    });
+});
+
+describe("PaymentTypeService - persistence", () => {
+    it("a type added, renamed and deactivated is stored as one row, read back by a fresh service", async () => {
+        const id = await new PaymentTypeService().create({ label: "XYZ" });
+        await new PaymentTypeService().update({ id, label: "XYZ Wallet" });
+        await new PaymentTypeService().update({ id, isActive: false });
+
+        const rows = sqlite.db!.prepare(`SELECT id, code, label, is_active FROM payment_types WHERE id = ?`).all(id);
+        expect(rows).toEqual([{ id, code: "XYZ", label: "XYZ Wallet", is_active: 0 }]);
+        expect((await new PaymentTypeService().getAll()).find(t => t.id === id)).toMatchObject({
+            code: "XYZ", label: "XYZ Wallet", isActive: false,
+        });
     });
 });

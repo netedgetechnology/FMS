@@ -34,7 +34,7 @@ import { transactionSchema } from "@/modules/transactions/validation";
 
 import { PaymentTypeService } from "./services";
 import type { PaymentType, PaymentTypeOption } from "./types";
-import { activePaymentTypeOptions, paymentTypeOptionsFor } from "./utils";
+import { activePaymentTypeOptions, paymentTypeLabel, paymentTypeOptionsFor } from "./utils";
 
 // ---------------------------------------------------------------------
 // The Payment Type master list as the single source of truth for every
@@ -340,5 +340,82 @@ describe("Import Preview override -> import: metadata only", () => {
         overrides.transactionType.set(row.rowNumber, "");
 
         expect(applyPreviewOverrides([row], overrides)[0]!.transactionType).toBeNull();
+    });
+});
+
+describe("Rename and reactivate - selectors follow, history does not change", () => {
+    const creditCard = { id: "sbi-cc", type: AccountType.CREDIT_CARD, businessEntityId: null };
+
+    function txService(): TransactionService {
+        const s = new TransactionService();
+        Object.defineProperty(s, "accountRepository", { value: { getById: async () => creditCard, getAll: async () => [creditCard] } });
+        Object.defineProperty(s, "categoryRepository", { value: { getById: async () => null, getAll: async () => [] } });
+        Object.defineProperty(s, "categoryContextMappingRepository", { value: { getByCategoryId: async () => [] } });
+        return s;
+    }
+
+    const row = (id: string) =>
+        sqlite.db!.prepare(`SELECT * FROM transactions WHERE id = ?`).get(id) as Record<string, unknown>;
+
+    it("renaming XYZ keeps the record and every transaction using it; they now display the new name", async () => {
+        const typeId = await new PaymentTypeService().create({ label: "XYZ" });
+        const txId = await txService().create({
+            accountId: "sbi-cc", payee: "Shop", type: "expense", amount: 75, transactionDate: "2026-09-01",
+            paymentMethod: "XYZ", transactionType: "XYZ", isImported: true, originalNarration: "XYZ SHOP",
+        });
+        const before = row(txId);
+
+        await new PaymentTypeService().update({ id: typeId, label: "XYZ Wallet" });
+        const { list } = await loadMasterList();
+
+        expect(row(txId)).toEqual(before);
+        expect(list.find(t => t.id === typeId)).toMatchObject({ code: "XYZ", label: "XYZ Wallet" });
+        expect(paymentTypeLabel(list, before.payment_method as string)).toBe("XYZ Wallet");
+        const preview = await renderPreviewTypeSelect(candidate({ transactionType: "XYZ" as never }));
+        expect(preview.selected).toBe("XYZ");
+        expect(preview.labels).toContain("XYZ Wallet");
+        expect(preview.labels).not.toContain("XYZ");
+    });
+
+    it("a reactivated type is offered again by every selector, as the same code", async () => {
+        const id = await new PaymentTypeService().create({ label: "Google Pay" });
+        await new PaymentTypeService().update({ id, isActive: false });
+        expect((await renderPreviewTypeSelect(candidate())).values).not.toContain("GOOGLE_PAY");
+
+        await new PaymentTypeService().update({ id, isActive: true });
+        const { list, active } = await loadMasterList();
+
+        expect((await renderPreviewTypeSelect(candidate())).values).toContain("GOOGLE_PAY");
+        expect(customRuleTypeOptions(list, null).map(o => o.value)).toContain("GOOGLE_PAY");
+        expect(paymentTypeOptionsFor(active, list, null).map(o => o.value)).toContain("GOOGLE_PAY");
+        expect(list.filter(t => t.code === "GOOGLE_PAY")).toHaveLength(1);
+    });
+});
+
+describe("Manual acceptance flow: add Test Payment Type", () => {
+    it("is offered by Import Preview, Custom Import Rules, Add/Edit Transaction and Loan EMI, and survives deactivate/reactivate", async () => {
+        const id = await new PaymentTypeService().create({ label: "Test Payment Type" });
+        let { list, active } = await loadMasterList();
+
+        expect(list.find(t => t.id === id)).toMatchObject({ code: "TEST_PAYMENT_TYPE", label: "Test Payment Type", isActive: true });
+        // Import Preview
+        expect((await renderPreviewTypeSelect(candidate())).labels).toContain("Test Payment Type");
+        // Custom Import Rules
+        expect(customRuleTypeOptions(list, null).map(o => o.label)).toContain("Test Payment Type");
+        // Add Transaction (no current value) and Loan EMI (active options only)
+        expect(paymentTypeOptionsFor(active, list, null).map(o => o.label)).toContain("Test Payment Type");
+        expect(active.map(o => o.label)).toContain("Test Payment Type");
+        // Edit Transaction (any existing value)
+        expect(paymentTypeOptionsFor(active, list, "UPI").map(o => o.label)).toContain("Test Payment Type");
+
+        await new PaymentTypeService().update({ id, isActive: false });
+        ({ list, active } = await loadMasterList());
+        expect(active.map(o => o.value)).not.toContain("TEST_PAYMENT_TYPE");
+        expect((await renderPreviewTypeSelect(candidate())).values).not.toContain("TEST_PAYMENT_TYPE");
+
+        await new PaymentTypeService().update({ id, isActive: true });
+        ({ list, active } = await loadMasterList());
+        expect(active.map(o => o.value)).toContain("TEST_PAYMENT_TYPE");
+        expect((await renderPreviewTypeSelect(candidate())).values).toContain("TEST_PAYMENT_TYPE");
     });
 });

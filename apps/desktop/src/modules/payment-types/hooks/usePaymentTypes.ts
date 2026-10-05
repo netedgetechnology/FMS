@@ -24,6 +24,17 @@ export function notifyPaymentTypesChanged(): void {
     }
 }
 
+// Called on every notifyPaymentTypesChanged(); returns an unsubscribe.
+export function subscribePaymentTypesChanged(
+    listener: () => void
+): () => void {
+    listeners.add(listener);
+
+    return () => {
+        listeners.delete(listener);
+    };
+}
+
 export function usePaymentTypes() {
 
     const [paymentTypes, setPaymentTypes] =
@@ -84,15 +95,9 @@ export function usePaymentTypes() {
     useEffect(() => {
         void loadPaymentTypes();
 
-        const listener = () => {
+        return subscribePaymentTypesChanged(() => {
             void loadPaymentTypes();
-        };
-
-        listeners.add(listener);
-
-        return () => {
-            listeners.delete(listener);
-        };
+        });
     }, [loadPaymentTypes]);
 
     // Stable between loads, so memoized selectors (Import Preview rows)

@@ -33,6 +33,22 @@ export interface UpdatePaymentTypeRequest {
     isActive?: boolean;
 }
 
+// How many persistent records store a payment type's code. Any non-zero
+// count means the type is in use and must not be deleted.
+export interface PaymentTypeUsage {
+    // transactions.payment_method or transactions.transaction_type,
+    // soft-deleted transactions included.
+    transactions: number;
+    // import_custom_rules.transaction_type
+    importRules: number;
+    // counterparty_rules.type (self-learned import rules)
+    learnedRules: number;
+    // import_rows.normalized_data.transactionType (import history)
+    importHistory: number;
+    // An unfinished Import Preview draft mentioning the code.
+    importDrafts: number;
+}
+
 // One <option> of a Payment Type selector.
 export interface PaymentTypeOption {
     value: string;

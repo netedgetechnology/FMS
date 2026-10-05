@@ -14,6 +14,7 @@ import {
   IconChartBar,
   IconReportAnalytics,
   IconCategory,
+  IconCreditCard,
   IconScale,
   IconSettings,
   IconUserCircle,
@@ -25,7 +26,7 @@ import { useSettings } from "@/modules/settings/hooks/useSettings";
 import { useProfile } from "@/modules/profile/hooks/useProfile";
 
 
-const menu = [
+export const menu = [
   { icon: IconDashboard, label: "Dashboard", path: "/dashboard" },
   { icon: IconBuildingBank, label: "Accounts", path: "/accounts" },
   { icon: IconBuildingStore, label: "Business Entities", path: "/business-entities" },
@@ -40,6 +41,7 @@ const menu = [
   { icon: IconChartBar, label: "Loans", path: "/loans" },
   { icon: IconReportAnalytics, label: "Reports", path: "/reports" },
   { icon: IconCategory, label: "Categories", path: "/categories" },
+  { icon: IconCreditCard, label: "Payment Type", path: "/payment-types" },
   { icon: IconScale, label: "Reconciliation", path: "/reconciliation" },
 ];
 
@@ -71,7 +73,7 @@ export default function AppSidebar() {
         </p>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-hidden px-3">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-3">
 
         {menu.map((item) => (
           <NavLink

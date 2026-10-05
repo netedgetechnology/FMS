@@ -29,7 +29,7 @@ import {
 
 import { useSettings } from "../hooks";
 import { BackupService } from "@/modules/backup";
-import { PaymentTypeManager } from "@/modules/payment-types";
+import { Link } from "react-router-dom";
 import { SQLiteProvider } from "@/core/database/engine/SQLiteProvider";
 import { getErrorMessage } from "@/core/errors";
 import {
@@ -468,7 +468,17 @@ export default function SettingsPage() {
                 </SectionCard>
 
                 <SectionCard title="Payment Types">
-                    <PaymentTypeManager />
+                    <SettingRow
+                        title="Payment Types"
+                        description="Add, rename, activate or deactivate the payment types used throughout FinWea. They are managed on their own page."
+                    >
+                        <Link
+                            to="/payment-types"
+                            className="inline-flex h-10 items-center rounded-xl border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-400 hover:bg-slate-50"
+                        >
+                            Open Payment Types
+                        </Link>
+                    </SettingRow>
                 </SectionCard>
 
                 <SectionCard title="Backup & Restore">

@@ -7,6 +7,7 @@ import { LoansPage } from "@/modules/loans";
 import { InvestmentsPage } from "@/modules/investments";
 import ReportsPage from "@/modules/reports";
 import CategoriesPage from "@/modules/categories";
+import { PaymentTypesPage } from "@/modules/payment-types";
 import { BusinessEntitiesPage } from "@/modules/business-entities";
 import TransactionsPage from "@/modules/transactions/pages/TransactionsPage";
 import { FinancialPlansPage } from "@/modules/financial-plans/pages";
@@ -36,6 +37,8 @@ export default function AppRoutes() {
         <Route path="/reports" element={<ReportsPage />} />
 
         <Route path="/categories" element={<CategoriesPage />} />
+
+        <Route path="/payment-types" element={<PaymentTypesPage />} />
 
         <Route
           path="/business-entities"

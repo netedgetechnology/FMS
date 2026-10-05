@@ -1,6 +1,6 @@
 import { Repository } from "@/core/database/engine/Repository";
 
-import { PaymentType } from "../types";
+import { PaymentType, PaymentTypeUsage } from "../types";
 
 export class PaymentTypeRepository extends Repository {
 
@@ -76,6 +76,75 @@ export class PaymentTypeRepository extends Repository {
                 paymentType.createdAt,
                 paymentType.updatedAt,
             ]
+        );
+    }
+
+    // Every persistent record that stores this code. Read-only.
+    async getUsage(
+        code: string
+    ): Promise<PaymentTypeUsage> {
+
+        const quoted = JSON.stringify(code);
+
+        const rows =
+            await this.select<PaymentTypeUsage>(
+                `
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM transactions
+                        WHERE payment_method = ?
+                           OR transaction_type = ?
+                    ) AS transactions,
+                    (
+                        SELECT COUNT(*)
+                        FROM import_custom_rules
+                        WHERE transaction_type = ?
+                    ) AS importRules,
+                    (
+                        SELECT COUNT(*)
+                        FROM counterparty_rules
+                        WHERE type = ?
+                    ) AS learnedRules,
+                    (
+                        SELECT COUNT(*)
+                        FROM import_rows
+                        WHERE json_valid(normalized_data)
+                          AND json_extract(normalized_data, '$.transactionType') = ?
+                    ) AS importHistory,
+                    (
+                        SELECT COUNT(*)
+                        FROM import_drafts
+                        WHERE instr(state_json, ?) > 0
+                           OR instr(preview_json, ?) > 0
+                    ) AS importDrafts
+                `,
+                [code, code, code, code, code, quoted, quoted]
+            );
+
+        const row = rows[0];
+
+        return {
+            transactions: Number(row?.transactions ?? 0),
+            importRules: Number(row?.importRules ?? 0),
+            learnedRules: Number(row?.learnedRules ?? 0),
+            importHistory: Number(row?.importHistory ?? 0),
+            importDrafts: Number(row?.importDrafts ?? 0),
+        };
+    }
+
+    // Permanent removal - only ever called for an unused, user-added
+    // type (see PaymentTypeService.delete).
+    async delete(
+        id: string
+    ): Promise<void> {
+
+        await this.execute(
+            `
+            DELETE FROM payment_types
+            WHERE id = ?
+            `,
+            [id]
         );
     }
 
