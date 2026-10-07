@@ -91,6 +91,12 @@ pub struct EmiPaymentRow {
     pub amount: f64,
     pub principal_amount: f64,
     pub interest_amount: f64,
+    /// The user's explicit choice that this payment settles the instalment
+    /// in full although it is less than what remains on it (a lender whose
+    /// actual debit differs from the calculated EMI). The instalment's
+    /// total stays as scheduled - the difference is kept, not hidden.
+    #[serde(default)]
+    pub settles_installment: bool,
 }
 
 /// The instalment's payment state after this change.
@@ -117,7 +123,12 @@ pub struct EmiLoanBalances {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordEmiPaymentRequest {
-    pub transaction: EmiTransactionRow,
+    /// The bank-side transaction to create with this payment (a manual
+    /// "Record EMI Payment"). None links the payment to an EXISTING
+    /// transaction instead - `payment.transaction_id`, e.g. a debit
+    /// imported from a bank statement - which is never re-inserted or
+    /// changed (see `check_existing_transaction`).
+    pub transaction: Option<EmiTransactionRow>,
     pub payment: EmiPaymentRow,
     pub schedule: EmiScheduleState,
     pub loan: EmiLoanBalances,
@@ -301,8 +312,70 @@ async fn record_steps(
         )));
     }
 
-    let t = &request.transaction;
+    // Settling is only for a payment that leaves something unpaid, and it
+    // must mark the instalment PAID - never a silent half-state.
+    if payment.settles_installment
+        && (payment.amount >= remaining - MONEY_EPSILON || request.schedule.status != "PAID")
+    {
+        return Err(EmiWriteError::Refused(
+            "Only a payment for less than what remains can settle an installment in full.".to_string(),
+        ));
+    }
 
+    // One transaction can only ever record one loan payment - whether it
+    // is created with this payment or already existed (an imported debit).
+    let already_linked = sqlx::query(
+        "SELECT id FROM loan_schedule_payments WHERE transaction_id = ?",
+    )
+    .bind(&payment.transaction_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .is_some();
+
+    if already_linked {
+        return Err(EmiWriteError::Refused(
+            "This transaction is already recorded as a loan payment.".to_string(),
+        ));
+    }
+
+    match &request.transaction {
+        Some(transaction) => insert_transaction(tx, transaction).await?,
+        None => check_existing_transaction(tx, payment).await?,
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO loan_schedule_payments
+        (id, loan_id, schedule_id, transaction_id, payment_date, amount, principal_amount, interest_amount,
+         transaction_linked, settles_installment)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&payment.id)
+    .bind(&payment.loan_id)
+    .bind(&payment.schedule_id)
+    .bind(&payment.transaction_id)
+    .bind(&payment.payment_date)
+    .bind(payment.amount)
+    .bind(payment.principal_amount)
+    .bind(payment.interest_amount)
+    // Linked = recorded against a transaction that already existed (no new
+    // one in this request) - decided here, never trusted from the caller.
+    .bind(if request.transaction.is_none() { 1_i64 } else { 0_i64 })
+    .bind(if payment.settles_installment { 1_i64 } else { 0_i64 })
+    .execute(&mut **tx)
+    .await?;
+
+    update_schedule(tx, &request.schedule).await?;
+    update_loan_balances(tx, &request.loan).await?;
+
+    Ok(())
+}
+
+async fn insert_transaction(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    t: &EmiTransactionRow,
+) -> Result<(), EmiWriteError> {
     sqlx::query(
         r#"
         INSERT INTO transactions
@@ -351,26 +424,39 @@ async fn record_steps(
     .execute(&mut **tx)
     .await?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO loan_schedule_payments
-        (id, loan_id, schedule_id, transaction_id, payment_date, amount, principal_amount, interest_amount)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&payment.id)
-    .bind(&payment.loan_id)
-    .bind(&payment.schedule_id)
-    .bind(&payment.transaction_id)
-    .bind(&payment.payment_date)
-    .bind(payment.amount)
-    .bind(payment.principal_amount)
-    .bind(payment.interest_amount)
-    .execute(&mut **tx)
-    .await?;
+    Ok(())
+}
 
-    update_schedule(tx, &request.schedule).await?;
-    update_loan_balances(tx, &request.loan).await?;
+/// Linking an existing transaction (an imported bank debit) as the
+/// payment's record: it must still exist, be an outgoing expense and be
+/// for exactly the payment's amount - the payment never changes the real
+/// transaction, so it must already be what the payment says it is.
+async fn check_existing_transaction(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    payment: &EmiPaymentRow,
+) -> Result<(), EmiWriteError> {
+    let existing = sqlx::query(
+        "SELECT type, amount FROM transactions WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&payment.transaction_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| EmiWriteError::Refused("The linked transaction was not found.".to_string()))?;
+
+    let kind: String = existing.get("type");
+    let amount: f64 = existing.get("amount");
+
+    if kind != "expense" {
+        return Err(EmiWriteError::Refused(
+            "Only an outgoing (expense) transaction can record a loan payment.".to_string(),
+        ));
+    }
+
+    if (amount - payment.amount).abs() > MONEY_EPSILON {
+        return Err(EmiWriteError::Refused(
+            "The payment amount does not match the linked transaction.".to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -397,26 +483,34 @@ async fn reverse_steps(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     request: &ReverseEmiPaymentRequest,
 ) -> Result<(), EmiWriteError> {
-    let exists = sqlx::query("SELECT id FROM loan_schedule_payments WHERE id = ?")
-        .bind(&request.payment_id)
-        .fetch_optional(&mut **tx)
-        .await?
-        .is_some();
-
-    if !exists {
-        return Err(EmiWriteError::Refused(
+    let payment = sqlx::query(
+        "SELECT transaction_id, transaction_linked FROM loan_schedule_payments WHERE id = ?",
+    )
+    .bind(&request.payment_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| {
+        EmiWriteError::Refused(
             "This payment record was not found. It may have already been reversed.".to_string(),
-        ));
-    }
+        )
+    })?;
+
+    let payment_transaction_id: String = payment.get("transaction_id");
+    let transaction_linked: i64 = payment.get("transaction_linked");
 
     if let Some(transaction_id) = &request.transaction_id {
+        // Only the payment's own transaction, and only one the payment
+        // created: a linked transaction (an imported debit, or one the user
+        // linked by hand) existed before the payment and outlives it.
         // Soft delete only - never a hard delete (as TransactionRepository.delete).
-        sqlx::query(
-            "UPDATE transactions SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL",
-        )
-        .bind(transaction_id)
-        .execute(&mut **tx)
-        .await?;
+        if *transaction_id == payment_transaction_id && transaction_linked == 0 {
+            sqlx::query(
+                "UPDATE transactions SET deleted_at = CURRENT_TIMESTAMP                  WHERE id = ? AND deleted_at IS NULL AND COALESCE(is_imported, 0) = 0",
+            )
+            .bind(transaction_id)
+            .execute(&mut **tx)
+            .await?;
+        }
     }
 
     sqlx::query("DELETE FROM loan_schedule_payments WHERE id = ?")
@@ -514,7 +608,9 @@ mod tests {
             schedule_id TEXT NOT NULL REFERENCES loan_payment_schedule(id),
             transaction_id TEXT NOT NULL, payment_date TEXT NOT NULL,
             amount REAL NOT NULL, principal_amount REAL NOT NULL,
-            interest_amount REAL NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            interest_amount REAL NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            transaction_linked INTEGER NOT NULL DEFAULT 0,
+            settles_installment INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO accounts VALUES ('acct-1', 'Axis Bank');
         INSERT INTO loans VALUES ('loan-1', 'Aditya Birla Capital', 13300000, 13910131.34, 'ACTIVE', NULL, NULL);
@@ -571,7 +667,7 @@ mod tests {
     /// instalment 1 (Rs 1,51,167.39, due 2026-05-05) - all interest.
     fn partial_payment(payment_id: &str, txn_id: &str, amount: f64) -> RecordEmiPaymentRequest {
         RecordEmiPaymentRequest {
-            transaction: transaction_row(txn_id, amount),
+            transaction: Some(transaction_row(txn_id, amount)),
             payment: EmiPaymentRow {
                 id: payment_id.to_string(),
                 loan_id: "loan-1".to_string(),
@@ -581,6 +677,7 @@ mod tests {
                 amount,
                 principal_amount: 0.0,
                 interest_amount: amount,
+                settles_installment: false,
             },
             schedule: EmiScheduleState {
                 id: "sch-1".to_string(),
@@ -739,6 +836,235 @@ mod tests {
         let interest: f64 = sqlx::query("SELECT outstanding_interest FROM loans WHERE id = 'loan-1'")
             .fetch_one(&pool).await.unwrap().get(0);
         assert!((interest - 13910131.34).abs() < 0.001);
+    }
+
+    /// An imported debit already in `transactions`, linked as the payment.
+    async fn seed_imported_debit(pool: &Pool<Sqlite>, id: &str, kind: &str, amount: f64) {
+        sqlx::query(
+            "INSERT INTO transactions (id, account_id, payee, type, amount, transaction_date, is_imported, original_narration) \
+             VALUES (?, 'acct-1', 'Lender', ?, ?, '2026-06-05', 1, 'ACH-DR LENDER')",
+        )
+        .bind(id)
+        .bind(kind)
+        .bind(amount)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn link_existing(payment_id: &str, txn_id: &str, amount: f64) -> RecordEmiPaymentRequest {
+        let mut request = partial_payment(payment_id, txn_id, amount);
+        request.transaction = None;
+        request
+    }
+
+    #[tokio::test]
+    async fn links_an_existing_imported_transaction_without_inserting_or_changing_it() {
+        let pool = test_pool().await;
+        seed_imported_debit(&pool, "imp-1", "expense", 68943.0).await;
+
+        run_record(&pool, &link_existing("pay-1", "imp-1", 68943.0)).await.expect("linked");
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM transactions").await, 1);
+        let txn = sqlx::query("SELECT payee, amount, transaction_date, is_imported, original_narration, deleted_at FROM transactions WHERE id = 'imp-1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(txn.get::<String, _>("payee"), "Lender");
+        assert_eq!(txn.get::<f64, _>("amount"), 68943.0);
+        assert_eq!(txn.get::<String, _>("transaction_date"), "2026-06-05");
+        assert_eq!(txn.get::<i64, _>("is_imported"), 1);
+        assert_eq!(txn.get::<String, _>("original_narration"), "ACH-DR LENDER");
+        assert!(txn.get::<Option<String>, _>("deleted_at").is_none());
+
+        let linked: String = sqlx::query("SELECT transaction_id FROM loan_schedule_payments WHERE id = 'pay-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(linked, "imp-1");
+        let status: String = sqlx::query("SELECT status FROM loan_payment_schedule WHERE id = 'sch-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(status, "PARTIAL");
+    }
+
+    #[tokio::test]
+    async fn one_transaction_can_never_record_two_payments() {
+        let pool = test_pool().await;
+        seed_imported_debit(&pool, "imp-1", "expense", 1000.0).await;
+
+        run_record(&pool, &link_existing("pay-1", "imp-1", 1000.0)).await.unwrap();
+
+        // The same transaction again - another payment id, another instalment.
+        let mut again = link_existing("pay-2", "imp-1", 1000.0);
+        again.payment.schedule_id = "sch-2".to_string();
+        again.schedule.id = "sch-2".to_string();
+        let error = run_record(&pool, &again).await.unwrap_err();
+        assert!(matches!(error, EmiWriteError::Refused(ref r) if r.contains("already recorded")), "{error:?}");
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM loan_schedule_payments").await, 1);
+        let paid: Option<f64> = sqlx::query("SELECT paid_amount FROM loan_payment_schedule WHERE id = 'sch-2'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert!(paid.is_none());
+    }
+
+    #[tokio::test]
+    async fn refuses_to_link_a_missing_deleted_income_or_different_amount_transaction() {
+        let pool = test_pool().await;
+        seed_imported_debit(&pool, "imp-in", "income", 1000.0).await;
+        seed_imported_debit(&pool, "imp-out", "expense", 1000.0).await;
+        sqlx::query("INSERT INTO transactions (id, account_id, type, amount, transaction_date, deleted_at) VALUES ('imp-del', 'acct-1', 'expense', 1000, '2026-06-05', '2026-06-06')")
+            .execute(&pool).await.unwrap();
+
+        for (txn, amount) in [("missing", 1000.0), ("imp-del", 1000.0), ("imp-in", 1000.0), ("imp-out", 999.0)] {
+            let result = run_record(&pool, &link_existing("pay-x", txn, amount)).await;
+            assert!(matches!(result, Err(EmiWriteError::Refused(_))), "{txn}: {result:?}");
+        }
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM loan_schedule_payments").await, 0);
+        let status: String = sqlx::query("SELECT status FROM loan_payment_schedule WHERE id = 'sch-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(status, "OVERDUE");
+    }
+
+    fn reversal_of(payment_id: &str, txn_id: &str) -> ReverseEmiPaymentRequest {
+        ReverseEmiPaymentRequest {
+            payment_id: payment_id.to_string(),
+            transaction_id: Some(txn_id.to_string()),
+            schedule: EmiScheduleState {
+                id: "sch-1".to_string(),
+                status: "OVERDUE".to_string(),
+                paid_date: None,
+                paid_amount: None,
+                transaction_id: None,
+            },
+            loan: EmiLoanBalances {
+                id: "loan-1".to_string(),
+                outstanding_principal: 13300000.0,
+                outstanding_interest: 13910131.34,
+                status: "ACTIVE".to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hand_linked_manual_transaction_is_marked_linked_and_survives_reversal() {
+        let pool = test_pool().await;
+        // An ordinary, NOT imported transaction the user entered themselves.
+        sqlx::query(
+            "INSERT INTO transactions (id, account_id, payee, type, amount, transaction_date, is_imported)              VALUES ('manual-1', 'acct-1', 'Lender', 'expense', 68943, '2026-06-05', 0)",
+        )
+        .execute(&pool).await.unwrap();
+
+        run_record(&pool, &link_existing("pay-1", "manual-1", 68943.0)).await.expect("linked");
+        let linked: i64 = sqlx::query("SELECT transaction_linked FROM loan_schedule_payments WHERE id = 'pay-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(linked, 1);
+
+        // Even when the caller asks for the transaction to be deleted.
+        run_reverse(&pool, &reversal_of("pay-1", "manual-1")).await.expect("reversed");
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM loan_schedule_payments").await, 0);
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM transactions WHERE id = 'manual-1' AND deleted_at IS NULL").await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_payment_that_created_its_transaction_is_not_linked_and_reversal_deletes_it() {
+        let pool = test_pool().await;
+        run_record(&pool, &partial_payment("pay-1", "txn-1", 68943.0)).await.unwrap();
+        let linked: i64 = sqlx::query("SELECT transaction_linked FROM loan_schedule_payments WHERE id = 'pay-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(linked, 0);
+
+        run_reverse(&pool, &reversal_of("pay-1", "txn-1")).await.unwrap();
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM transactions WHERE id = 'txn-1' AND deleted_at IS NOT NULL").await, 1);
+    }
+
+    /// Unlink from Transactions: no transaction is passed for deletion, so
+    /// even the transaction a manual payment created is kept, unchanged.
+    #[tokio::test]
+    async fn unlink_keeps_even_a_transaction_the_payment_created() {
+        let pool = test_pool().await;
+        run_record(&pool, &partial_payment("pay-1", "txn-1", 68943.0)).await.unwrap();
+        let before = sqlx::query("SELECT id, amount, transaction_date, payee, type FROM transactions WHERE id = 'txn-1'")
+            .fetch_one(&pool).await.unwrap();
+
+        let mut unlink = reversal_of("pay-1", "txn-1");
+        unlink.transaction_id = None;
+        run_reverse(&pool, &unlink).await.expect("unlinked");
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM loan_schedule_payments").await, 0);
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM transactions WHERE id = 'txn-1' AND deleted_at IS NULL").await, 1);
+        let after = sqlx::query("SELECT id, amount, transaction_date, payee, type FROM transactions WHERE id = 'txn-1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(after.get::<f64, _>("amount"), before.get::<f64, _>("amount"));
+        assert_eq!(after.get::<String, _>("transaction_date"), before.get::<String, _>("transaction_date"));
+        assert_eq!(after.get::<String, _>("payee"), before.get::<String, _>("payee"));
+    }
+
+    /// A second Unlink (double click) of the same payment is refused inside
+    /// the transaction - the loan balances are never restored twice.
+    #[tokio::test]
+    async fn a_second_reversal_of_the_same_payment_is_refused_and_changes_nothing() {
+        let pool = test_pool().await;
+        seed_imported_debit(&pool, "imp-1", "expense", 68943.0).await;
+        run_record(&pool, &link_existing("pay-1", "imp-1", 68943.0)).await.unwrap();
+
+        let mut unlink = reversal_of("pay-1", "imp-1");
+        unlink.transaction_id = None;
+        run_reverse(&pool, &unlink).await.expect("first unlink");
+
+        // A different (wrong) balance, as a stale second request would carry.
+        let mut again = reversal_of("pay-1", "imp-1");
+        again.transaction_id = None;
+        again.loan.outstanding_principal = 1.0;
+        let error = run_reverse(&pool, &again).await.expect_err("second unlink refused");
+        assert!(format!("{error:?}").contains("already been reversed"));
+
+        let principal: f64 = sqlx::query("SELECT outstanding_principal FROM loans WHERE id = 'loan-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(principal, 13300000.0);
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM transactions WHERE id = 'imp-1' AND deleted_at IS NULL").await, 1);
+    }
+
+    /// The real lender debit (Rs 1,51,167) against the calculated EMI
+    /// (Rs 1,51,167.39), settled in full by the user's explicit choice.
+    fn settlement(payment_id: &str, txn_id: &str) -> RecordEmiPaymentRequest {
+        let mut request = link_existing(payment_id, txn_id, 151167.0);
+        request.payment.settles_installment = true;
+        request.schedule.status = "PAID".to_string();
+        request.schedule.paid_amount = Some(151167.0);
+        request
+    }
+
+    #[tokio::test]
+    async fn settles_an_installment_keeping_the_scheduled_total_and_the_real_amount() {
+        let pool = test_pool().await;
+        seed_imported_debit(&pool, "imp-1", "expense", 151167.0).await;
+
+        run_record(&pool, &settlement("pay-1", "imp-1")).await.expect("settled");
+
+        let row = sqlx::query("SELECT status, total_amount, paid_amount FROM loan_payment_schedule WHERE id = 'sch-1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.get::<String, _>("status"), "PAID");
+        assert_eq!(row.get::<f64, _>("total_amount"), 151167.39);
+        assert_eq!(row.get::<f64, _>("paid_amount"), 151167.0);
+        let settles: i64 = sqlx::query("SELECT settles_installment FROM loan_schedule_payments WHERE id = 'pay-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(settles, 1);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_settlement_that_is_not_short_or_does_not_mark_the_installment_paid() {
+        let pool = test_pool().await;
+        seed_imported_debit(&pool, "imp-1", "expense", 151167.0).await;
+        seed_imported_debit(&pool, "imp-2", "expense", 151167.39).await;
+
+        let mut not_paid = settlement("pay-1", "imp-1");
+        not_paid.schedule.status = "PARTIAL".to_string();
+        assert!(matches!(run_record(&pool, &not_paid).await, Err(EmiWriteError::Refused(_))));
+
+        let mut full = link_existing("pay-2", "imp-2", 151167.39);
+        full.payment.settles_installment = true;
+        full.schedule.status = "PAID".to_string();
+        assert!(matches!(run_record(&pool, &full).await, Err(EmiWriteError::Refused(_))));
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM loan_schedule_payments").await, 0);
     }
 
     /// Reproduces the production failure with the same sqlx pool the app

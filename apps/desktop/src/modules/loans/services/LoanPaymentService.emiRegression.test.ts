@@ -122,7 +122,7 @@ describe("EMI payment regression - Rs 68,943.00 on 2026-04-06 against instalment
 
         // 2026-04-06 = 6 April 2026 (the dialog's date input), stored as-is;
         // the instalment's due date 2026-05-05 is untouched.
-        expect(sent().transaction.transactionDate).toBe("2026-04-06");
+        expect(sent().transaction!.transactionDate).toBe("2026-04-06");
         expect(sent().payment.paymentDate).toBe("2026-04-06");
         expect(sent().schedule.paidDate).toBe("2026-04-06");
         expect(result.schedule.dueDate).toBe("2026-05-05");
@@ -159,6 +159,7 @@ describe("EMI payment regression - Rs 68,943.00 on 2026-04-06 against instalment
         const first: LoanSchedulePayment = {
             id: "pay-1", loanId: LOAN.id, scheduleId: INSTALMENT_1.id, transactionId: "txn-1",
             paymentDate: "2026-04-06", amount: 68943, principalAmount: 0, interestAmount: 68943,
+            transactionLinked: false, settlesInstallment: false,
             createdAt: "2026-10-05 14:31:08",
         };
         paymentRepository.getAllByScheduleId.mockResolvedValue([first]);

@@ -6,10 +6,13 @@ dist
 coverage
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 .vscode
 
-# Local database/runtime data - never commit
-database/
+# Local database/runtime data - never commit (repo root only;
+# source folders such as src/core/database/ must stay tracked)
+/database/
 
 # Temporary development artifacts
 *.backup.ts

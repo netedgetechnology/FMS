@@ -6,3 +6,5 @@ export * from "./ViewLoanDialog";
 
 export * from './EditLoanDialog';
 export * from "./DeleteLoanDialog";
+export * from "./LinkTransactionToEmiDialog";
+export * from "./LinkedEmiPaymentDialog";

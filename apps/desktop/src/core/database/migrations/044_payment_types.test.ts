@@ -39,9 +39,11 @@ const PREVIOUS_PAYMENT_METHODS = [
 ];
 
 describe("migration 044 - payment_types master list", () => {
-    it("is version 44 (43 is retired) and registered last", () => {
+    it("is version 44 (43 is retired) and registered right after 042", () => {
         expect(PaymentTypesMigration.version).toBe(44);
-        expect(migrations[migrations.length - 1]).toBe(PaymentTypesMigration);
+        const index = migrations.indexOf(PaymentTypesMigration);
+        expect(index).toBeGreaterThan(0);
+        expect(migrations[index - 1].version).toBe(42);
         expect(migrations.some(migration => migration.version === 43)).toBe(false);
     });
 

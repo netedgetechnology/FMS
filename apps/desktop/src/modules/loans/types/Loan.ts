@@ -25,6 +25,14 @@ export interface Loan {
 
     emiAmount: number | null;
 
+    /**
+     * Optional irregular first instalment: the broken-period (pre-EMI)
+     * interest collected as instalment 1 before the regular EMIs start.
+     * Interest only; followed by `tenureMonths` regular EMIs of
+     * `emiAmount`. null/undefined = every instalment is the regular EMI.
+     */
+    firstInstallmentAmount?: number | null;
+
     startDate: string;
 
     maturityDate: string | null;

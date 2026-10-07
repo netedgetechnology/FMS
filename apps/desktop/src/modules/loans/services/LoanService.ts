@@ -236,6 +236,11 @@ export class LoanService {
 
             emiAmount: request.emiAmount ?? null,
 
+            firstInstallmentAmount:
+                request.firstInstallmentAmount && request.firstInstallmentAmount > 0
+                    ? request.firstInstallmentAmount
+                    : null,
+
             startDate: request.startDate,
 
             maturityDate: request.maturityDate ?? null,
@@ -311,6 +316,7 @@ export class LoanService {
                 interestType: loan.interestType,
                 tenureMonths: loan.tenureMonths,
                 emiAmount: loan.emiAmount,
+                firstInstallmentAmount: loan.firstInstallmentAmount ?? null,
                 startDate: loan.startDate,
                 maturityDate: loan.maturityDate,
                 outstandingPrincipal:
@@ -414,6 +420,10 @@ export class LoanService {
                     request.currencyId ||
                 normalizeNumber(existing.emiAmount) !==
                     normalizeNumber(request.emiAmount) ||
+                // undefined (a caller that doesn't send it) means "unchanged".
+                (request.firstInstallmentAmount !== undefined &&
+                    normalizeNumber(existing.firstInstallmentAmount) !==
+                        normalizeNumber(request.firstInstallmentAmount)) ||
                 normalizeString(existing.maturityDate) !==
                     normalizeString(
                         request.maturityDate
@@ -421,7 +431,7 @@ export class LoanService {
 
             if (termsChanged) {
                 throw new Error(
-                    "This loan's EMI schedule has already been generated, so its principal, interest rate, interest type, tenure, start date, currency, EMI amount and maturity date can't be changed. Delete and recreate the loan if these terms were entered incorrectly."
+                    "This loan's EMI schedule has already been generated, so its principal, interest rate, interest type, tenure, start date, currency, EMI amount, first instalment and maturity date can't be changed. Delete and recreate the loan if these terms were entered incorrectly."
                 );
             }
         }

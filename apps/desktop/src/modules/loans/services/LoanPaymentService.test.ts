@@ -66,6 +66,8 @@ function priorPayment(
         amount: 0,
         principalAmount: 0,
         interestAmount: 0,
+        transactionLinked: false,
+        settlesInstallment: false,
         createdAt: "2026-02-01T00:00:00.000Z",
         ...overrides,
     };

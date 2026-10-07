@@ -15,6 +15,11 @@ import {
 } from "@/modules/transactions/services";
 
 import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
+import {
+    LoanImportPaymentService,
+    uncheckedLoanImportSummary,
+    type LoanImportPaymentSummary,
+} from "@/modules/loans/services/LoanImportPaymentService";
 import { CategoryContextMappingRepository } from "@/modules/categories/repositories";
 
 import {
@@ -529,6 +534,11 @@ export class ImportService {
 
     private readonly transactionService =
         new TransactionService();
+
+    // Applies this import's loan EMI debits to their loans once the
+    // import has created its transactions - see executeCandidates.
+    private readonly loanImportPaymentService =
+        new LoanImportPaymentService();
 
     // Only for the destination account's category direction locks - see
     // loadCategoryDirectionLocks.
@@ -1572,8 +1582,34 @@ export class ImportService {
             failedRows,
         });
 
-        return (
-            (await this.getBatch(batch.id)) ?? {
+        // Loan EMI debits among the transactions THIS import created are
+        // applied to their loans (see LoanImportPaymentService) - never a
+        // duplicate row's existing transaction, so re-importing a
+        // statement can never pay an EMI twice. Best-effort: a failure
+        // here never fails or changes the import itself; the
+        // transactions stay imported and can be handled manually.
+        let loanPayments: LoanImportPaymentSummary | undefined;
+
+        if (createdInThisImport.size > 0) {
+            try {
+                loanPayments =
+                    await this.loanImportPaymentService.applyToImportedTransactions(
+                        [...createdInThisImport]
+                    );
+            } catch (loanError) {
+                // The service already reports its own failures this way;
+                // this only guards against anything it missed. The user
+                // is told a payment needs attention, never the cause.
+                console.error(
+                    "Failed to apply imported loan EMI payments:",
+                    loanError
+                );
+                loanPayments = uncheckedLoanImportSummary();
+            }
+        }
+
+        return {
+            ...((await this.getBatch(batch.id)) ?? {
                 ...batch,
                 status,
                 totalRows:
@@ -1581,8 +1617,9 @@ export class ImportService {
                 importedRows,
                 duplicateRows,
                 failedRows,
-            }
-        );
+            }),
+            loanPayments,
+        };
     }
 
     async updateBatch(

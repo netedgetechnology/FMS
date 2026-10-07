@@ -39,6 +39,7 @@ export function computeLoanScheduleAndBalances(
         | "interestType"
         | "tenureMonths"
         | "emiAmount"
+        | "firstInstallmentAmount"
         | "startDate"
         | "paidInstallments"
         | "status"
@@ -72,6 +73,7 @@ export function computeLoanScheduleAndBalances(
         interestType: loan.interestType,
         tenureMonths: loan.tenureMonths,
         emiAmount: loan.emiAmount,
+        firstInstallmentAmount: loan.firstInstallmentAmount ?? null,
         startDate: loan.startDate,
         paidInstallments: loan.paidInstallments,
     });

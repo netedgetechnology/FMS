@@ -30,7 +30,11 @@ import {
 } from "./emiScheduleLayout";
 import type { PaymentMethod } from "@/modules/transactions/types";
 import { usePaymentTypes } from "@/modules/payment-types";
-import { useMoneyFormatter, useDateFormatter } from "@/core/formatting";
+import {
+    formatMoney as formatMoneyValue,
+    useMoneyFormatter,
+    useDateFormatter,
+} from "@/core/formatting";
 import type {
     Loan,
     LoanPaymentSchedule,
@@ -66,6 +70,26 @@ export function remainingAmount(
     );
 
     return Math.round((remaining + Number.EPSILON) * 100) / 100;
+}
+
+// A PAID instalment settled for less than its scheduled amount (the
+// lender's actual EMI differs from the calculated one - see
+// LoanPaymentService.recordPaymentFromTransaction): how much less. 0 for
+// every other row.
+export function settlementDifference(
+    item: Pick<LoanPaymentSchedule, "status" | "totalAmount" | "paidAmount">
+): number {
+    if (item.status !== "PAID" || item.paidAmount === null) {
+        return 0;
+    }
+
+    return remainingAmount(item);
+}
+
+// Always to the paisa - a whole-rupee display would hide a difference
+// such as 0.39.
+function formatExactMoney(value: number): string {
+    return formatMoneyValue(value, { showDecimals: true });
 }
 
 // Overdue is never a persisted status (Loans Phase 5 - derived, not
@@ -924,6 +948,10 @@ export function EMIScheduleDialog({
                                                 its linked
                                                 bank
                                                 transaction
+                                                (a linked or
+                                                imported one is kept,
+                                                only
+                                                unlinked)
                                                 and restores
                                                 the loan's
                                                 outstanding
@@ -1157,6 +1185,22 @@ export function EMIScheduleDialog({
                                                         : formatMoney(
                                                               item.paidAmount
                                                           )}
+                                                    {settlementDifference(
+                                                        item
+                                                    ) > 0 && (
+                                                        <div
+                                                            className="text-[11px] text-amber-700"
+                                                            title="Settled in full at the lender's actual amount - the scheduled amount is kept, so this difference stays visible."
+                                                        >
+                                                            Settled ·{" "}
+                                                            {formatExactMoney(
+                                                                settlementDifference(
+                                                                    item
+                                                                )
+                                                            )}{" "}
+                                                            below schedule
+                                                        </div>
+                                                    )}
                                                 </td>
 
                                                 <td className={`${cellPadding} whitespace-nowrap text-right`}>
@@ -1246,7 +1290,10 @@ export function EMIScheduleDialog({
                                         )}
                                     </span>{" "}
                                     and delete its linked
-                                    bank transaction. The
+                                    bank transaction (a
+                                    transaction linked by hand or
+                                    imported from a statement is
+                                    kept, only unlinked). The
                                     loan's outstanding
                                     balance will be restored
                                     by this payment's own

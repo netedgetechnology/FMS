@@ -1,3 +1,5 @@
+import type { LoanImportPaymentSummary } from "@/modules/loans/services/LoanImportPaymentService";
+
 // Kept in sync with @financeos/import-engine's CsvImportType - an
 // ImportBatch always records the same Import Type value the preview/
 // import was run with.
@@ -28,6 +30,10 @@ export interface ImportBatch {
     failedRows: number;
     createdAt: string;
     updatedAt: string;
+    // Only on the result of a confirmed import run, never stored: which
+    // imported debits were applied to loan EMIs automatically, and which
+    // looked like one but were left for manual handling.
+    loanPayments?: LoanImportPaymentSummary;
 }
 
 export interface CreateImportBatchRequest {

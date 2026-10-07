@@ -30,6 +30,7 @@ export interface CreateLoanAtomicRequest {
         interestType: string;
         tenureMonths: number | null;
         emiAmount: number | null;
+        firstInstallmentAmount: number | null;
         startDate: string;
         maturityDate: string | null;
         outstandingPrincipal: number;
@@ -118,6 +119,7 @@ export class LoanRepository extends Repository {
                 interest_type AS interestType,
                 tenure_months AS tenureMonths,
                 emi_amount AS emiAmount,
+                first_installment_amount AS firstInstallmentAmount,
                 start_date AS startDate,
                 maturity_date AS maturityDate,
                 outstanding_principal AS outstandingPrincipal,
@@ -152,6 +154,7 @@ export class LoanRepository extends Repository {
                 interest_type AS interestType,
                 tenure_months AS tenureMonths,
                 emi_amount AS emiAmount,
+                first_installment_amount AS firstInstallmentAmount,
                 start_date AS startDate,
                 maturity_date AS maturityDate,
                 outstanding_principal AS outstandingPrincipal,
@@ -187,6 +190,7 @@ export class LoanRepository extends Repository {
                 interest_type,
                 tenure_months,
                 emi_amount,
+                first_installment_amount,
                 start_date,
                 maturity_date,
                 outstanding_principal,
@@ -199,7 +203,7 @@ export class LoanRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 loan.id,
@@ -212,6 +216,7 @@ export class LoanRepository extends Repository {
                 loan.interestType,
                 loan.tenureMonths,
                 loan.emiAmount,
+                loan.firstInstallmentAmount ?? null,
                 loan.startDate,
                 loan.maturityDate,
                 loan.outstandingPrincipal,

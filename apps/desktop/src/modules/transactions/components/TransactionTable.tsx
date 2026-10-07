@@ -3,7 +3,7 @@ import {
     signedTransactionAmount,
     useDateFormatter,
 } from "@/core/formatting";
-import { Eye, Pencil, Trash2 } from "lucide-react";
+import { Eye, Landmark, Pencil, Trash2 } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -21,6 +21,31 @@ interface TransactionTableProps {
     onView: (transaction: Transaction) => void;
     onEdit: (transaction: Transaction) => void;
     onDelete: (transaction: Transaction) => void;
+    /**
+     * The Link to Loan EMI action on an outgoing transaction (shown only
+     * when given) - for a transaction already linked it is called too, to
+     * show what it is linked to.
+     */
+    onLinkToLoan?: (transaction: Transaction) => void;
+    /** Ids of the transactions that are a loan EMI payment. */
+    loanLinkedIds?: ReadonlySet<string>;
+}
+
+/**
+ * The Link to Loan EMI button for a linked / unlinked transaction. Same
+ * button, same icon, same size and place - only the icon colour and the
+ * tooltip say whether it is linked.
+ */
+export function loanLinkButtonState(linked: boolean): {
+    title: string;
+    className: string;
+} {
+    return {
+        title: linked ? "Linked to Loan EMI" : "Link to Loan EMI",
+        className: linked
+            ? "inline-flex h-8 w-8 items-center justify-center rounded-lg text-emerald-600 transition-colors hover:bg-slate-100 hover:text-emerald-700"
+            : "inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800",
+    };
 }
 
 function formatType(type: string): string {
@@ -67,6 +92,8 @@ export function TransactionTable({
     onView,
     onEdit,
     onDelete,
+    onLinkToLoan,
+    loanLinkedIds,
 }: TransactionTableProps) {
     const formatDate = useDateFormatter();
     return (
@@ -246,6 +273,39 @@ export function TransactionTable({
                                     >
                                         <Eye size={15} />
                                     </button>
+
+                                    {onLinkToLoan &&
+                                        transaction.type === "expense" && (
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    onLinkToLoan(transaction)
+                                                }
+                                                title={
+                                                    loanLinkButtonState(
+                                                        loanLinkedIds?.has(
+                                                            transaction.id
+                                                        ) ?? false
+                                                    ).title
+                                                }
+                                                aria-label={
+                                                    loanLinkedIds?.has(
+                                                        transaction.id
+                                                    )
+                                                        ? `${transaction.payee} is linked to a loan EMI`
+                                                        : `Link ${transaction.payee} to a loan EMI`
+                                                }
+                                                className={
+                                                    loanLinkButtonState(
+                                                        loanLinkedIds?.has(
+                                                            transaction.id
+                                                        ) ?? false
+                                                    ).className
+                                                }
+                                            >
+                                                <Landmark size={15} />
+                                            </button>
+                                        )}
 
                                     <button
                                         type="button"

@@ -2,6 +2,7 @@ import { TransactionService } from "@/modules/transactions/services/TransactionS
 import { TransactionRepository } from "@/modules/transactions/repositories/TransactionRepository";
 import type {
     PaymentMethod,
+    Transaction,
 } from "@/modules/transactions/types";
 
 import { LoanStatus } from "../types/LoanStatus";
@@ -49,6 +50,19 @@ export interface ProcessLoanPaymentResult {
     principalPaid: number;
     interestPaid: number;
     amountPaid: number;
+}
+
+// A validated, allocated payment that is ready to be written.
+interface PreparedPayment {
+    loan: Loan;
+    schedule: LoanPaymentSchedule;
+    paymentDate: string;
+    amountPaid: number;
+    principalPaid: number;
+    interestPaid: number;
+    cumulativePaidAfter: number;
+    isFullyPaid: boolean;
+    settlesInstallment: boolean;
 }
 
 export interface ReversePaymentResult {
@@ -126,6 +140,139 @@ export class LoanPaymentService {
     async processPayment(
         request: ProcessLoanPaymentRequest
     ): Promise<ProcessLoanPaymentResult> {
+        const prepared =
+            await this.preparePayment(request);
+
+        // The bank-side transaction row is built (and validated) exactly as
+        // TransactionService.create() builds it, but persisted together
+        // with everything else in one atomic write.
+        const transaction =
+            await this.transactionService.prepareCreate({
+                accountId:
+                    prepared.loan.accountId!,
+
+                payee:
+                    prepared.loan.name,
+
+                type:
+                    "expense",
+
+                amount:
+                    prepared.amountPaid,
+
+                transactionDate:
+                    request.paymentDate,
+
+                referenceNumber:
+                    request.referenceNumber ??
+                    null,
+
+                notes:
+                    request.notes ??
+                    `EMI payment - Installment ${prepared.schedule.installmentNumber}`,
+
+                status:
+                    "CLEARED",
+
+                paymentMethod:
+                    request.paymentMethod ??
+                    null,
+            });
+
+        return await this.writePayment(
+            prepared,
+            transaction.id,
+            transaction
+        );
+    }
+
+    /**
+     * Records an EMI payment whose bank-side record is an EXISTING
+     * transaction - a debit imported from a statement (see
+     * LoanImportPaymentService) or one the user links by hand from
+     * Transactions - instead of creating a new one. The payment is for
+     * exactly that transaction's amount, on its date, and goes through the
+     * very same validation, interest-first allocation, PARTIAL/PAID status
+     * and loan-balance rules as processPayment(); the transaction itself is
+     * never changed and keeps its id. Refused (nothing written) if the
+     * transaction is missing, not an outgoing expense, from another
+     * account than the loan's payment account, already records a loan
+     * payment, or is more than what remains on the instalment.
+     *
+     * `settlesInstallment`: the user's explicit statement that this
+     * amount - less than what remains - is the lender's full instalment
+     * (its actual debit differs from FinWea's calculated EMI). The
+     * instalment becomes PAID while its scheduled total stays as
+     * calculated, so the difference remains visible; nothing is rounded
+     * or written off silently. Without it, a smaller amount is PARTIAL.
+     */
+    async recordPaymentFromTransaction(request: {
+        loanId: string;
+        scheduleId: string;
+        transactionId: string;
+        settlesInstallment?: boolean;
+    }): Promise<ProcessLoanPaymentResult> {
+        const transaction =
+            await this.transactionRepository.getById(
+                request.transactionId
+            );
+
+        if (!transaction) {
+            throw new Error(
+                "The transaction was not found."
+            );
+        }
+
+        if (transaction.type !== "expense") {
+            throw new Error(
+                "Only an outgoing (expense) transaction can record a loan payment."
+            );
+        }
+
+        const alreadyLinked =
+            await this.paymentRepository.getByTransactionId(
+                transaction.id
+            );
+
+        if (alreadyLinked) {
+            throw new Error(
+                "This transaction is already recorded as a loan payment."
+            );
+        }
+
+        const prepared =
+            await this.preparePayment({
+                loanId: request.loanId,
+                scheduleId: request.scheduleId,
+                paymentDate: transaction.transactionDate,
+                amount: transaction.amount,
+                settlesInstallment: request.settlesInstallment,
+            });
+
+        if (transaction.accountId !== prepared.loan.accountId) {
+            throw new Error(
+                "The transaction is not from this loan's payment account."
+            );
+        }
+
+        return await this.writePayment(
+            prepared,
+            transaction.id,
+            null
+        );
+    }
+
+    // Everything a payment needs before it can be written: the loan and
+    // instalment (validated), the amount, and its interest-first
+    // allocation - shared by processPayment() and
+    // recordPaymentFromTransaction(), so both apply the same rules.
+    private async preparePayment(request: {
+        loanId: string;
+        scheduleId: string;
+        paymentDate: string;
+        amount?: number;
+        settlesInstallment?: boolean;
+    }): Promise<PreparedPayment> {
         if (!request.loanId) {
             throw new Error("Loan is required.");
         }
@@ -277,56 +424,61 @@ export class LoanPaymentService {
                 )
         );
 
+        // Settling is only meaningful for an amount that leaves something
+        // unpaid - an amount covering what remains is simply a full payment.
+        const settlesInstallment =
+            Boolean(request.settlesInstallment) &&
+            cumulativePaidAfter < scheduledAmount;
+
         const isFullyPaid =
-            cumulativePaidAfter >= scheduledAmount;
+            cumulativePaidAfter >= scheduledAmount ||
+            settlesInstallment;
 
-        // The bank-side transaction row is built (and validated) exactly as
-        // TransactionService.create() builds it, but persisted together
-        // with everything below in one atomic write.
-        const transaction =
-            await this.transactionService.prepareCreate({
-                accountId:
-                    loan.accountId,
+        return {
+            loan,
+            schedule,
+            paymentDate: request.paymentDate,
+            amountPaid,
+            principalPaid,
+            interestPaid,
+            cumulativePaidAfter,
+            isFullyPaid,
+            settlesInstallment,
+        };
+    }
 
-                payee:
-                    loan.name,
-
-                type:
-                    "expense",
-
-                amount:
-                    amountPaid,
-
-                transactionDate:
-                    request.paymentDate,
-
-                referenceNumber:
-                    request.referenceNumber ??
-                    null,
-
-                notes:
-                    request.notes ??
-                    `EMI payment - Installment ${schedule.installmentNumber}`,
-
-                status:
-                    "CLEARED",
-
-                paymentMethod:
-                    request.paymentMethod ??
-                    null,
-            });
-
-        const transactionId = transaction.id;
+    // Persists a prepared payment in one atomic write. `transaction` is
+    // the new bank transaction to create with it, or null when
+    // `transactionId` is an existing (imported) transaction to link.
+    private async writePayment(
+        prepared: PreparedPayment,
+        transactionId: string,
+        transaction: Transaction | null
+    ): Promise<ProcessLoanPaymentResult> {
+        const {
+            loan,
+            schedule,
+            amountPaid,
+            principalPaid,
+            interestPaid,
+            cumulativePaidAfter,
+            isFullyPaid,
+            paymentDate,
+            settlesInstallment,
+        } = prepared;
 
         const payment = {
             id: crypto.randomUUID(),
             loanId: loan.id,
             scheduleId: schedule.id,
             transactionId,
-            paymentDate: request.paymentDate,
+            paymentDate,
             amount: amountPaid,
             principalAmount: principalPaid,
             interestAmount: interestPaid,
+            // The atomic command decides this itself from `transaction`.
+            transactionLinked: transaction === null,
+            settlesInstallment,
         };
 
         const newOutstandingPrincipal =
@@ -361,7 +513,7 @@ export class LoanPaymentService {
                         : LoanPaymentStatus.PARTIAL,
 
                 paidDate:
-                    request.paymentDate,
+                    paymentDate,
 
                 // Running total across every payment recorded
                 // against this row, not just this one.
@@ -428,9 +580,10 @@ export class LoanPaymentService {
 
     /**
      * Reverses one specific loan_schedule_payments row (Loans Phase
-     * 6) - not the whole schedule. Soft-deletes its linked bank
-     * transaction (never hard-deleted; a no-op if it was already
-     * deleted independently), removes the payment from the ledger,
+     * 6) - not the whole schedule. Soft-deletes the bank transaction a
+     * manual payment created (never hard-deleted; a no-op if it was
+     * already deleted independently) - an imported statement
+     * transaction is kept and only unlinked - removes the payment from the ledger,
      * recomputes the owning schedule row from whatever payments
      * survive, restores the loan's outstanding balances by exactly
      * this payment's own stored principal/interest allocation (never
@@ -440,7 +593,10 @@ export class LoanPaymentService {
      * found (already reversed, or never existed).
      */
     async reversePayment(
-        paymentId: string
+        paymentId: string,
+        // Unlink from Transactions: the bank transaction is always kept,
+        // even one a manual payment created - only the association goes.
+        options: { keepTransaction?: boolean } = {}
     ): Promise<ReversePaymentResult> {
         if (!paymentId) {
             throw new Error("Payment is required.");
@@ -479,7 +635,8 @@ export class LoanPaymentService {
 
         // 1. The linked bank transaction is soft-deleted if it still
         // exists - never hard-deleted, and a no-op (not an error) if it
-        // was already removed independently.
+        // was already removed independently. An imported one is kept
+        // (see the atomic write below).
         const transaction =
             await this.transactionRepository.getById(
                 payment.transactionId
@@ -512,10 +669,15 @@ export class LoanPaymentService {
         const earliestSurviving =
             remainingPayments[0] ?? null;
 
+        // A surviving payment the user said settles the instalment keeps it
+        // PAID; reversing that payment itself takes the settlement away.
         const newStatus =
             remainingTotal <= 0
                 ? LoanPaymentStatus.UPCOMING
-                : remainingTotal >= scheduledAmount
+                : remainingTotal >= scheduledAmount ||
+                    remainingPayments.some(
+                        item => item.settlesInstallment
+                    )
                   ? LoanPaymentStatus.PAID
                   : LoanPaymentStatus.PARTIAL;
 
@@ -566,10 +728,21 @@ export class LoanPaymentService {
                 ? LoanStatus.ACTIVE
                 : loan.status;
 
-        // All of the above in one atomic write - all or nothing.
+        // All of the above in one atomic write - all or nothing. A
+        // linked transaction (a statement debit, or one the user linked by
+        // hand) is a real bank record that exists independently of the
+        // loan, so it is kept and only unlinked - only the transaction a
+        // manual payment created is soft-deleted (the atomic command
+        // re-checks this itself).
+        const deleteTransaction =
+            !options.keepTransaction &&
+            transaction !== null &&
+            !payment.transactionLinked &&
+            !Boolean(transaction.isImported);
+
         await this.atomicWriter.reversePayment({
             paymentId: payment.id,
-            transactionId: transaction
+            transactionId: deleteTransaction
                 ? payment.transactionId
                 : null,
             schedule: {

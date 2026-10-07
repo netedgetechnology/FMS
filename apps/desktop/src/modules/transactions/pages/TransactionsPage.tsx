@@ -23,6 +23,9 @@ import {
 
 import { useAccounts } from "@/modules/accounts/hooks";
 import { useCategories } from "@/modules/categories/hooks";
+import { LinkTransactionToEmiDialog } from "@/modules/loans/components/LinkTransactionToEmiDialog";
+import { LinkedEmiPaymentDialog } from "@/modules/loans/components/LinkedEmiPaymentDialog";
+import { LoanSchedulePaymentRepository } from "@/modules/loans/repositories/LoanSchedulePaymentRepository";
 
 import {
     AddTransactionDialog,
@@ -289,6 +292,18 @@ export function paginateTransactions(
     );
 }
 
+/**
+ * Whether the Link to Loan EMI action may open the link dialog - never
+ * for a transaction that is already a loan EMI payment (it opens the
+ * linked-payment popup, with Unlink, instead).
+ */
+export function canOpenLoanLinkDialog(
+    transaction: Pick<Transaction, "id">,
+    loanLinkedIds: ReadonlySet<string>
+): boolean {
+    return !loanLinkedIds.has(transaction.id);
+}
+
 export default function TransactionsPage() {
     const formatAmount = useMoneyFormatter();
     const {
@@ -365,6 +380,47 @@ export default function TransactionsPage() {
     const [deletingTransaction, setDeletingTransaction] =
         useState<import("../types").Transaction | null>(null);
 
+    const [linkingTransaction, setLinkingTransaction] =
+        useState<import("../types").Transaction | null>(null);
+
+    const [linkedTransaction, setLinkedTransaction] =
+        useState<import("../types").Transaction | null>(null);
+
+    // Transactions that are a loan EMI payment - drives the linked state
+    // of the Link to Loan EMI icon. Re-read whenever the list is.
+    const [loanLinkedIds, setLoanLinkedIds] = useState<ReadonlySet<string>>(
+        () => new Set()
+    );
+
+    useEffect(() => {
+        let cancelled = false;
+
+        new LoanSchedulePaymentRepository()
+            .getAll()
+            .then(payments => {
+                if (!cancelled) {
+                    setLoanLinkedIds(
+                        new Set(payments.map(payment => payment.transactionId))
+                    );
+                }
+            })
+            .catch(loadError => {
+                console.error("Failed to load loan-linked transactions:", loadError);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [transactions]);
+
+    const handleLinkToLoan = (transaction: Transaction) => {
+        if (canOpenLoanLinkDialog(transaction, loanLinkedIds)) {
+            setLinkingTransaction(transaction);
+            return;
+        }
+
+        setLinkedTransaction(transaction);
+    };
     const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
     const [isBulkCategoryOpen, setIsBulkCategoryOpen] = useState(false);
     const [isBulkMoveOpen, setIsBulkMoveOpen] = useState(false);
@@ -1090,6 +1146,8 @@ export default function TransactionsPage() {
                                 onView={setViewingTransaction}
                                 onEdit={setEditingTransaction}
                                 onDelete={setDeletingTransaction}
+                                onLinkToLoan={handleLinkToLoan}
+                                loanLinkedIds={loanLinkedIds}
                             />
                         </div>
                     )}
@@ -1138,6 +1196,28 @@ export default function TransactionsPage() {
                         }
                     }}
                     onSuccess={refresh}
+                />
+
+                <LinkTransactionToEmiDialog
+                    transaction={linkingTransaction}
+                    open={linkingTransaction !== null}
+                    onOpenChange={open => {
+                        if (!open) {
+                            setLinkingTransaction(null);
+                        }
+                    }}
+                    onSuccess={refresh}
+                />
+
+                <LinkedEmiPaymentDialog
+                    transaction={linkedTransaction}
+                    open={linkedTransaction !== null}
+                    onOpenChange={open => {
+                        if (!open) {
+                            setLinkedTransaction(null);
+                        }
+                    }}
+                    onUnlinked={refresh}
                 />
 
                 <BulkDeleteTransactionsDialog

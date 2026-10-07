@@ -17,6 +17,14 @@ export interface GenerateEMIScheduleRequest {
      * (no transaction is created); EMI / dates are unaffected.
      */
     paidInstallments?: number | null;
+    /**
+     * Optional broken-period (pre-EMI) interest collected as instalment 1,
+     * one month after the start date, before the regular EMIs. Interest
+     * only - it repays no principal. The `tenureMonths` regular EMIs then
+     * follow, starting one month later, so the schedule has
+     * tenureMonths + 1 instalments. Absent/0: unchanged behaviour.
+     */
+    firstInstallmentAmount?: number | null;
 }
 
 export class EMIScheduleGenerator {
@@ -56,15 +64,77 @@ export class EMIScheduleGenerator {
             throw new Error("EMI amount cannot be negative.");
         }
 
-        const schedule =
+        const firstInstallment = request.firstInstallmentAmount;
+
+        if (
+            firstInstallment !== undefined &&
+            firstInstallment !== null &&
+            (!Number.isFinite(firstInstallment) || firstInstallment < 0)
+        ) {
+            throw new Error("First instalment amount cannot be negative.");
+        }
+
+        const hasFirstInstallment =
+            typeof firstInstallment === "number" &&
+            firstInstallment > 0;
+
+        // With a first (broken-period) instalment, the regular schedule is
+        // exactly the one these terms always produce, shifted one month
+        // later; the first instalment is put in front of it.
+        const regularRequest = hasFirstInstallment
+            ? {
+                ...request,
+                startDate: this.addMonths(startDate, 1),
+            }
+            : request;
+
+        const regular =
             interestType === "FLAT"
-                ? this.generateFlatSchedule(request)
-                : this.generateReducingSchedule(request);
+                ? this.generateFlatSchedule(regularRequest)
+                : this.generateReducingSchedule(regularRequest);
+
+        const schedule = hasFirstInstallment
+            ? [
+                this.firstInstallmentRow(
+                    request,
+                    this.round(firstInstallment as number)
+                ),
+                ...regular.map(row => ({
+                    ...row,
+                    installmentNumber: row.installmentNumber + 1,
+                })),
+            ]
+            : regular;
 
         return this.markPaidInstallments(
             schedule,
             request.paidInstallments
         );
+    }
+
+    /**
+     * The broken-period (pre-EMI) first instalment: due one month after
+     * the start date, all interest, no principal - the full principal is
+     * still outstanding after it.
+     */
+    private firstInstallmentRow(
+        request: GenerateEMIScheduleRequest,
+        amount: number
+    ): LoanPaymentSchedule {
+        return {
+            id: crypto.randomUUID(),
+            loanId: request.loanId,
+            installmentNumber: 1,
+            dueDate: this.addMonths(request.startDate, 1),
+            principalAmount: 0,
+            interestAmount: amount,
+            totalAmount: amount,
+            outstandingPrincipal: this.round(request.principalAmount),
+            status: LoanPaymentStatus.UPCOMING,
+            paidDate: null,
+            paidAmount: null,
+            transactionId: null,
+        };
     }
 
     /**

@@ -2,11 +2,29 @@ import { Repository } from "@/core/database/engine/Repository";
 
 import { LoanSchedulePayment } from "../types";
 
+// SQLite returns the 0/1 flag columns as numbers.
+function fromRow(row: LoanSchedulePayment): LoanSchedulePayment {
+    return {
+        ...row,
+        transactionLinked: Boolean(row.transactionLinked),
+        settlesInstallment: Boolean(row.settlesInstallment),
+    };
+}
+
 export class LoanSchedulePaymentRepository extends Repository {
+    private async selectPayments(
+        sql: string,
+        params?: unknown[]
+    ): Promise<LoanSchedulePayment[]> {
+        return (
+            await this.select<LoanSchedulePayment>(sql, params)
+        ).map(fromRow);
+    }
+
     async getAllByScheduleId(
         scheduleId: string
     ): Promise<LoanSchedulePayment[]> {
-        return await this.select<LoanSchedulePayment>(
+        return await this.selectPayments(
             `
             SELECT
                 id,
@@ -17,6 +35,8 @@ export class LoanSchedulePaymentRepository extends Repository {
                 amount,
                 principal_amount AS principalAmount,
                 interest_amount AS interestAmount,
+                transaction_linked AS transactionLinked,
+                settles_installment AS settlesInstallment,
                 created_at AS createdAt
             FROM loan_schedule_payments
             WHERE schedule_id = ?
@@ -35,7 +55,7 @@ export class LoanSchedulePaymentRepository extends Repository {
     async getAllByLoanId(
         loanId: string
     ): Promise<LoanSchedulePayment[]> {
-        return await this.select<LoanSchedulePayment>(
+        return await this.selectPayments(
             `
             SELECT
                 id,
@@ -46,6 +66,8 @@ export class LoanSchedulePaymentRepository extends Repository {
                 amount,
                 principal_amount AS principalAmount,
                 interest_amount AS interestAmount,
+                transaction_linked AS transactionLinked,
+                settles_installment AS settlesInstallment,
                 created_at AS createdAt
             FROM loan_schedule_payments
             WHERE loan_id = ?
@@ -58,7 +80,7 @@ export class LoanSchedulePaymentRepository extends Repository {
     async getById(
         id: string
     ): Promise<LoanSchedulePayment | null> {
-        const rows = await this.select<LoanSchedulePayment>(
+        const rows = await this.selectPayments(
             `
             SELECT
                 id,
@@ -69,6 +91,8 @@ export class LoanSchedulePaymentRepository extends Repository {
                 amount,
                 principal_amount AS principalAmount,
                 interest_amount AS interestAmount,
+                transaction_linked AS transactionLinked,
+                settles_installment AS settlesInstallment,
                 created_at AS createdAt
             FROM loan_schedule_payments
             WHERE id = ?
@@ -88,7 +112,7 @@ export class LoanSchedulePaymentRepository extends Repository {
     async getByTransactionId(
         transactionId: string
     ): Promise<LoanSchedulePayment | null> {
-        const rows = await this.select<LoanSchedulePayment>(
+        const rows = await this.selectPayments(
             `
             SELECT
                 id,
@@ -99,6 +123,8 @@ export class LoanSchedulePaymentRepository extends Repository {
                 amount,
                 principal_amount AS principalAmount,
                 interest_amount AS interestAmount,
+                transaction_linked AS transactionLinked,
+                settles_installment AS settlesInstallment,
                 created_at AS createdAt
             FROM loan_schedule_payments
             WHERE transaction_id = ?
@@ -131,7 +157,7 @@ export class LoanSchedulePaymentRepository extends Repository {
             .map(() => "?")
             .join(", ");
 
-        return await this.select<LoanSchedulePayment>(
+        return await this.selectPayments(
             `
             SELECT
                 id,
@@ -142,6 +168,8 @@ export class LoanSchedulePaymentRepository extends Repository {
                 amount,
                 principal_amount AS principalAmount,
                 interest_amount AS interestAmount,
+                transaction_linked AS transactionLinked,
+                settles_installment AS settlesInstallment,
                 created_at AS createdAt
             FROM loan_schedule_payments
             WHERE transaction_id IN (${placeholders})
@@ -151,7 +179,7 @@ export class LoanSchedulePaymentRepository extends Repository {
     }
 
     async getAll(): Promise<LoanSchedulePayment[]> {
-        return await this.select<LoanSchedulePayment>(
+        return await this.selectPayments(
             `
             SELECT
                 id,
@@ -162,6 +190,8 @@ export class LoanSchedulePaymentRepository extends Repository {
                 amount,
                 principal_amount AS principalAmount,
                 interest_amount AS interestAmount,
+                transaction_linked AS transactionLinked,
+                settles_installment AS settlesInstallment,
                 created_at AS createdAt
             FROM loan_schedule_payments
             `

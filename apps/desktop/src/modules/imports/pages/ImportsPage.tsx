@@ -88,6 +88,9 @@ import {
 } from "@/core/accounting/transferClassification";
 import { ImportPreviewRow } from "./ImportPreviewRow";
 import { ImportProgressCounters } from "./ImportProgressCounters";
+import { describeLoanImportPayments } from "./importLoanPaymentMessage";
+import { ImportLoanPaymentReview } from "./ImportLoanPaymentReview";
+import type { LoanImportPaymentForReview } from "@/modules/loans/services/LoanImportPaymentService";
 import {
     NO_BALANCE_MISMATCHES,
     applyBalanceAmount,
@@ -1182,6 +1185,11 @@ export default function ImportsPage() {
     const [message, setMessage] =
         useState<string | null>(null);
 
+    // The last import's debits that looked like a loan EMI but were left
+    // for review - each can be linked to an EMI from the result panel.
+    const [loanReview, setLoanReview] =
+        useState<LoanImportPaymentForReview[]>([]);
+
     // Saved Mappings management list (see the "Saved Mappings" section
     // below) - every persisted mapping, independent of the currently
     // uploaded file's header structure (unlike matchedMapping above,
@@ -1524,6 +1532,7 @@ export default function ImportsPage() {
         setCategoryScope(null);
         setShowAffectedRowsOnly(false);
         setMessage(null);
+        setLoanReview([]);
         setError(null);
         // A new file was selected - forget any password prompt/attempt
         // for whatever was selected before.
@@ -1565,6 +1574,7 @@ export default function ImportsPage() {
             setPreviewing(true);
             setError(null);
             setMessage(null);
+            setLoanReview([]);
 
             const isPdf =
                 /\.pdf$/i.test(
@@ -2303,6 +2313,7 @@ export default function ImportsPage() {
             setImporting(true);
             setError(null);
             setMessage(null);
+            setLoanReview([]);
 
             // The same Mapping Name shown/edited in the "Detected Mapping"
             // panel and saved below via saveMapping - computed once and
@@ -2383,6 +2394,15 @@ export default function ImportsPage() {
                       } skipped.`
                     : "";
 
+            const loanPaymentNote =
+                describeLoanImportPayments(
+                    batch.loanPayments
+                );
+
+            setLoanReview(
+                batch.loanPayments?.needsReview ?? []
+            );
+
             try {
                 await service.saveMapping({
                     name: savedName,
@@ -2420,7 +2440,7 @@ export default function ImportsPage() {
                         batch.importedRows === 1
                             ? ""
                             : "s"
-                    } imported.${skippedNote}`
+                    } imported.${skippedNote}${loanPaymentNote}`
                 );
             } else if (
                 batch.status ===
@@ -2435,7 +2455,7 @@ export default function ImportsPage() {
                         batch.failedRows === 1
                             ? ""
                             : "s"
-                    }.${skippedNote}`
+                    }.${skippedNote}${loanPaymentNote}`
                 );
             } else {
                 setError(
@@ -3014,6 +3034,7 @@ export default function ImportsPage() {
                                     setPreview(null);
                                     setError(null);
                                     setMessage(null);
+                                    setLoanReview([]);
                                 }}
                                 disabled={
                                     importing ||
@@ -3061,6 +3082,7 @@ export default function ImportsPage() {
                                     setPreview(null);
                                     setError(null);
                                     setMessage(null);
+                                    setLoanReview([]);
                                 }}
                                 disabled={
                                     accountsLoading ||
@@ -3238,6 +3260,19 @@ export default function ImportsPage() {
                             {message}
                         </div>
                     )}
+
+                    <ImportLoanPaymentReview
+                        items={loanReview}
+                        onLinked={transactionId =>
+                            setLoanReview(items =>
+                                items.filter(
+                                    item =>
+                                        item.transactionId !==
+                                        transactionId
+                                )
+                            )
+                        }
+                    />
 
                     <div
                         data-testid="import-actions"

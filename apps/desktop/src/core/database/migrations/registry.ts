@@ -40,6 +40,8 @@ import { TransactionTransferDirectionMigration } from "./040_transaction_transfe
 import { ImportCustomRulesMigration } from "./041_import_custom_rules";
 import { ImportDraftsMigration } from "./042_import_drafts";
 import { PaymentTypesMigration } from "./044_payment_types";
+import { LoanFirstInstallmentMigration } from "./045_loan_first_installment";
+import { LoanPaymentLinkSettlementMigration } from "./046_loan_payment_link_settlement";
 
 // Version 43 is retired: a since-removed migration (transfer links) was
 // applied to some development databases, and MigrationEngine skips any
@@ -87,5 +89,7 @@ export const migrations = [
     ImportCustomRulesMigration,
     ImportDraftsMigration,
     PaymentTypesMigration,
+    LoanFirstInstallmentMigration,
+    LoanPaymentLinkSettlementMigration,
 ];
 

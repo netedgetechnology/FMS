@@ -10,6 +10,8 @@ export interface LoanEstimateInput {
     startDate: string;
     /** EMIs already paid (for an already-running / imported loan). */
     paidInstallments?: number;
+    /** Optional broken-period (pre-EMI) interest collected as instalment 1. */
+    firstInstallmentAmount?: number | null;
 }
 
 export interface LoanEstimate {
@@ -75,6 +77,7 @@ export function estimateLoan(
                 interestType === "FLAT" ? "FLAT" : "REDUCING",
             tenureMonths,
             emiAmount: null,
+            firstInstallmentAmount: input.firstInstallmentAmount ?? null,
             startDate,
         });
     } catch {
@@ -103,7 +106,15 @@ export function estimateLoan(
         // EMI and maturity always reflect the original loan terms - the paid
         // count never changes them (the final row may differ by a few cents
         // of rounding).
-        emiAmount: round2(schedule[0].totalAmount),
+        // The regular EMI - never the irregular first instalment.
+        emiAmount: round2(
+            schedule[
+                (input.firstInstallmentAmount ?? 0) > 0 &&
+                schedule.length > 1
+                    ? 1
+                    : 0
+            ].totalAmount
+        ),
         maturityDate: schedule[schedule.length - 1].dueDate,
         outstandingPrincipal: round2(outstandingPrincipal),
         outstandingInterest: round2(outstandingInterest),

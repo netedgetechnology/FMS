@@ -77,6 +77,9 @@ pub struct NewLoan {
     pub interest_type: String,
     pub tenure_months: Option<i64>,
     pub emi_amount: Option<f64>,
+    /// Optional broken-period (pre-EMI) first instalment - see migration 045.
+    #[serde(default)]
+    pub first_installment_amount: Option<f64>,
     pub start_date: String,
     pub maturity_date: Option<String>,
     pub outstanding_principal: f64,
@@ -193,6 +196,7 @@ async fn run_create(
                 interest_type,
                 tenure_months,
                 emi_amount,
+                first_installment_amount,
                 start_date,
                 maturity_date,
                 outstanding_principal,
@@ -204,7 +208,7 @@ async fn run_create(
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&loan.id)
@@ -217,6 +221,7 @@ async fn run_create(
         .bind(&loan.interest_type)
         .bind(loan.tenure_months)
         .bind(loan.emi_amount)
+        .bind(loan.first_installment_amount)
         .bind(&loan.start_date)
         .bind(&loan.maturity_date)
         .bind(loan.outstanding_principal)
@@ -391,6 +396,7 @@ mod tests {
                 interest_type TEXT NOT NULL DEFAULT 'REDUCING',
                 tenure_months INTEGER,
                 emi_amount REAL,
+                first_installment_amount REAL,
                 start_date TEXT NOT NULL,
                 maturity_date TEXT,
                 outstanding_principal REAL NOT NULL DEFAULT 0,
@@ -460,6 +466,7 @@ mod tests {
                 interest_type: "REDUCING".to_string(),
                 tenure_months: Some(12),
                 emi_amount: Some(888.49),
+                first_installment_amount: None,
                 start_date: "2026-09-20".to_string(),
                 maturity_date: Some("2027-09-20".to_string()),
                 outstanding_principal: 10000.0,

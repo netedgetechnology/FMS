@@ -51,6 +51,14 @@ export const loanSchema = z.object({
         .min(0, "EMI amount cannot be negative.")
         .optional(),
 
+    // Optional broken-period (pre-EMI) interest charged as instalment 1,
+    // before the regular EMIs. Empty/0 = the first EMI is the regular EMI.
+    firstInstallmentAmount: z.coerce
+        .number()
+        .finite()
+        .min(0, "First instalment cannot be negative.")
+        .optional(),
+
     paidInstallments: z.coerce
         .number()
         .int()

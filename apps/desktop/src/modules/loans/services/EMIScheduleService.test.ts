@@ -20,6 +20,8 @@ function payment(
         amount: 8800,
         principalAmount: 8000,
         interestAmount: 800,
+        transactionLinked: false,
+        settlesInstallment: false,
         createdAt: "2026-02-01T00:00:00.000Z",
         ...overrides,
     };

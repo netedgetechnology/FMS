@@ -147,6 +147,13 @@ export function buildLoanViewModel(
                         : formatMoney(loan.emiAmount),
             },
             {
+                label: "First Instalment",
+                value:
+                    loan.firstInstallmentAmount == null
+                        ? "Same as EMI"
+                        : `${formatMoney(loan.firstInstallmentAmount)} (broken-period interest)`,
+            },
+            {
                 label: "Number of Paid Installments",
                 value: String(loan.paidInstallments ?? 0),
             },

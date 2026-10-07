@@ -4,6 +4,7 @@ import type { Transaction } from "../types";
 
 import {
     ALL_MAPPING_NAMES,
+    canOpenLoanLinkDialog,
     computeAvailableMappingNames,
     computeFilteredTotals,
     filterTransactionsForList,
@@ -396,5 +397,17 @@ describe("paginateTransactions", () => {
         expect(paginateTransactions(filtered, 1, 10)).toEqual(
             filtered
         );
+    });
+});
+
+describe("Link to Loan EMI - an already-linked transaction", () => {
+    const linked = new Set(["t-linked"]);
+
+    it("an unlinked transaction opens the link dialog", () => {
+        expect(canOpenLoanLinkDialog({ id: "t-open" }, linked)).toBe(true);
+    });
+
+    it("a linked transaction never opens the link dialog again", () => {
+        expect(canOpenLoanLinkDialog({ id: "t-linked" }, linked)).toBe(false);
     });
 });

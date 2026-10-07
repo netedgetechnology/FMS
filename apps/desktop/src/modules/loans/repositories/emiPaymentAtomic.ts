@@ -30,7 +30,11 @@ export interface EmiLoanBalances {
 }
 
 export interface RecordEmiPaymentRequest {
-    transaction: Transaction;
+    // The bank transaction to create with the payment, or null to link
+    // the payment to the EXISTING transaction `payment.transactionId`
+    // (an imported statement debit) - which is never re-inserted or
+    // changed.
+    transaction: Transaction | null;
     payment: Omit<LoanSchedulePayment, "createdAt">;
     schedule: EmiScheduleState;
     loan: EmiLoanBalances;

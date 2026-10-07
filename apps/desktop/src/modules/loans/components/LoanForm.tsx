@@ -162,6 +162,7 @@ export function LoanForm({
             interestType: "REDUCING",
             tenureMonths: undefined,
             emiAmount: undefined,
+            firstInstallmentAmount: undefined,
             paidInstallments: 0,
             startDate: "",
             maturityDate: "",
@@ -222,6 +223,8 @@ export function LoanForm({
                 defaultValues.tenureMonths ?? undefined,
             emiAmount:
                 defaultValues.emiAmount ?? undefined,
+            firstInstallmentAmount:
+                defaultValues.firstInstallmentAmount ?? undefined,
             paidInstallments:
                 defaultValues.paidInstallments ?? 0,
             startDate:
@@ -269,6 +272,7 @@ export function LoanForm({
     const tenureMonths = watch("tenureMonths");
     const startDate = watch("startDate");
     const paidInstallments = watch("paidInstallments");
+    const firstInstallmentAmount = watch("firstInstallmentAmount");
 
     const loadedTermsSignature = useMemo(() => {
         if (!editMode || !defaultValues) {
@@ -283,6 +287,7 @@ export function LoanForm({
                 : "REDUCING",
             toNumberOrNull(defaultValues.tenureMonths),
             defaultValues.startDate ?? "",
+            toNumberOrNull(defaultValues.firstInstallmentAmount),
         ]);
     }, [editMode, defaultValues]);
 
@@ -293,6 +298,7 @@ export function LoanForm({
             interestType === "FLAT" ? "FLAT" : "REDUCING",
             toNumberOrNull(tenureMonths),
             typeof startDate === "string" ? startDate : "",
+            toNumberOrNull(firstInstallmentAmount),
         ]);
 
         // Editing: keep the loan's stored EMI / maturity / outstanding
@@ -314,6 +320,8 @@ export function LoanForm({
             startDate:
                 typeof startDate === "string" ? startDate : "",
             paidInstallments: toNumberOrNull(paidInstallments) ?? 0,
+            firstInstallmentAmount:
+                toNumberOrNull(firstInstallmentAmount),
         });
 
         if (!estimate) {
@@ -344,6 +352,7 @@ export function LoanForm({
         tenureMonths,
         startDate,
         paidInstallments,
+        firstInstallmentAmount,
         editMode,
         loadedTermsSignature,
         setValue,
@@ -626,6 +635,26 @@ export function LoanForm({
                                 setValueAs: optionalNumberValue,
                             })}
                         />
+                    </FormField>
+
+                    <FormField
+                        label="First Instalment (optional)"
+                        htmlFor="first-installment-amount"
+                        error={errors.firstInstallmentAmount?.message}
+                    >
+                        <Input
+                            id="first-installment-amount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Same as EMI"
+                            {...register("firstInstallmentAmount", {
+                                setValueAs: optionalNumberValue,
+                            })}
+                        />
+                        <p className="mt-1 text-xs text-slate-500">
+                            Broken-period (pre-EMI) interest charged as the first instalment, before the regular EMIs. Leave empty if the first EMI is the regular EMI.
+                        </p>
                     </FormField>
 
                     <FormField

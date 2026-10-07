@@ -101,6 +101,8 @@ export function EditLoanDialog({
                 interestType: values.interestType,
                 tenureMonths: values.tenureMonths,
                 emiAmount: values.emiAmount,
+                firstInstallmentAmount:
+                    values.firstInstallmentAmount ?? null,
                 paidInstallments: values.paidInstallments,
                 startDate: values.startDate,
                 maturityDate: values.maturityDate || undefined,
@@ -174,6 +176,8 @@ export function EditLoanDialog({
                                 loan.tenureMonths ?? undefined,
                             emiAmount:
                                 loan.emiAmount ?? undefined,
+                            firstInstallmentAmount:
+                                loan.firstInstallmentAmount ?? undefined,
                             paidInstallments:
                                 loan.paidInstallments ?? 0,
                             startDate: loan.startDate,
