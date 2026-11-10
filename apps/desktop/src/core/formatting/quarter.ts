@@ -1,6 +1,6 @@
 // Calendar-quarter and calendar-year helpers, mirroring month.ts. Every
 // function operates in local time - consistent with the YYYY-MM-DD
-// strings stored across FinanceOS date columns - and never mutates its
+// strings stored across FinWea date columns - and never mutates its
 // input.
 //
 // Quarters are fixed civil quarters, with NO fiscal-year offset:

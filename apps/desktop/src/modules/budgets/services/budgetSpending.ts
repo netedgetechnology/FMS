@@ -174,7 +174,7 @@ export interface CalculateBudgetSpendingInput {
     /**
      * Report currency. Only budgets denominated in this currency are
      * included - budgets in other currencies are left out entirely
-     * rather than summed across currencies (FinanceOS has no
+     * rather than summed across currencies (FinWea has no
      * exchange-rate model). Expense amounts are taken at face value,
      * consistent with the rest of the app, which performs no currency
      * conversion; callers that support multi-currency accounts should

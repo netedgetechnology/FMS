@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $desktop = Join-Path (Get-Location) "apps\desktop"
 if (!(Test-Path $desktop)) {
-    throw "Run this script from the FinanceOS project root."
+    throw "Run this script from the FinWea repository root."
 }
 
 $utf8 = [System.Text.UTF8Encoding]::new($false)

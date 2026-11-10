@@ -1,6 +1,6 @@
 // Calendar-month helpers, mirroring week.ts. Every function operates in
 // local time - consistent with the YYYY-MM-DD strings stored across
-// FinanceOS date columns and with DashboardService's own month math -
+// FinWea date columns and with DashboardService's own month math -
 // and never mutates its input.
 
 export const MONTH_LABELS: readonly string[] = [
@@ -72,7 +72,7 @@ export function isSameMonth(
 
 /**
  * Local YYYY-MM-DD string for `date` - matches the format stored in
- * every FinanceOS date column, so results can be compared directly
+ * every FinWea date column, so results can be compared directly
  * against `start_date` / `end_date` and transaction dates.
  */
 export function toISODateString(date: Date): string {

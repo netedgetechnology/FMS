@@ -1,7 +1,7 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
     "identifier": "default",
-    "description": "Default capability for FinanceOS",
+    "description": "Default capability for FinWea",
     "windows": ["main"],
     "permissions": [
         "core:default",

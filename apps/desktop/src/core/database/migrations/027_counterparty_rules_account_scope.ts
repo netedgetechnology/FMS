@@ -5,7 +5,7 @@ export const CounterpartyRulesAccountScopeMigration: IMigration = {
     name: "Counterparty Rules Account Scope",
     // Migration 026 shipped counterparty_rules as globally-unique on
     // pattern alone. Counterparty learning must instead be scoped to the
-    // destination FinanceOS account, so this rebuilds the table with an
+    // destination FinWea account, so this rebuilds the table with an
     // account_id column and a UNIQUE(account_id, pattern) constraint -
     // SQLite has no ALTER TABLE for changing a UNIQUE constraint, so the
     // standard rename/recreate/copy/drop rebuild is used instead.

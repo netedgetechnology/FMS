@@ -1,6 +1,6 @@
 export interface CounterpartyRule {
     id: string;
-    // Scoped to the destination FinanceOS account - the same narration
+    // Scoped to the destination FinWea account - the same narration
     // pattern is learned/matched independently per account.
     accountId: string;
     pattern: string;

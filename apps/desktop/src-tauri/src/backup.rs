@@ -3,6 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
+/// The "application" value in every backup's metadata.json. It is a
+/// format identifier, not the product name: it predates the FinWea name,
+/// existing backups carry it, and older builds only restore backups that
+/// have it - so it stays fixed.
+const BACKUP_APPLICATION_ID: &str = "FinanceOS";
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupResult {
@@ -90,7 +96,7 @@ pub fn create_backup(
         .format("%Y%m%d_%H%M%S")
         .to_string();
 
-    let backup_root = destination.join(format!("FinanceOS_Backup_{}", timestamp));
+    let backup_root = destination.join(format!("FinWea_Backup_{}", timestamp));
     let database_destination = backup_root.join("database");
     let documents_destination = backup_root.join("documents");
 
@@ -103,7 +109,7 @@ pub fn create_backup(
     let database_source = database_path(&app)?;
 
     if !database_source.is_file() {
-        return Err("FinanceOS database does not exist.".to_string());
+        return Err("FinWea database does not exist.".to_string());
     }
 
     let database_target = database_destination.join("financeos.db");
@@ -125,7 +131,9 @@ pub fn create_backup(
 
     let metadata = serde_json::json!({
         "formatVersion": 1,
-        "application": "FinanceOS",
+        // Fixed backup-format identifier, not display text: existing backups
+        // carry it and restore checks for it, so it never changes.
+        "application": BACKUP_APPLICATION_ID,
         "backupType": "MANUAL",
         "createdAt": chrono::Local::now().to_rfc3339(),
         "databaseFile": "database/financeos.db",
@@ -183,11 +191,11 @@ pub fn restore_backup(
     let documents_source = backup_root.join("documents");
 
     if !metadata_path.is_file() {
-        return Err("Invalid FinanceOS backup: metadata.json is missing.".to_string());
+        return Err("Invalid FinWea backup: metadata.json is missing.".to_string());
     }
 
     if !database_source.is_file() {
-        return Err("Invalid FinanceOS backup: database/financeos.db is missing.".to_string());
+        return Err("Invalid FinWea backup: database/financeos.db is missing.".to_string());
     }
 
     let metadata_data = fs::read(&metadata_path)
@@ -197,12 +205,12 @@ pub fn restore_backup(
         serde_json::from_slice(&metadata_data)
             .map_err(|error| format!("Invalid backup metadata: {}", error))?;
 
-    if metadata["application"].as_str() != Some("FinanceOS") {
-        return Err("This does not appear to be a FinanceOS backup.".to_string());
+    if metadata["application"].as_str() != Some(BACKUP_APPLICATION_ID) {
+        return Err("This does not appear to be a FinWea backup.".to_string());
     }
 
     if metadata["formatVersion"].as_u64() != Some(1) {
-        return Err("Unsupported FinanceOS backup format.".to_string());
+        return Err("Unsupported FinWea backup format.".to_string());
     }
 
     let expected_checksum = metadata["databaseChecksum"]
@@ -249,7 +257,7 @@ pub fn restore_backup(
         fs::remove_file(&database_destination)
             .map_err(|error| {
                 format!(
-                    "Unable to replace the FinanceOS database. Please close any open database operation and try again. {}",
+                    "Unable to replace the FinWea database. Please close any open database operation and try again. {}",
                     error
                 )
             })?;

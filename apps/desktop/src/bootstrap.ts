@@ -3,7 +3,7 @@ import { verifyDatabaseSchema } from "./core/database/engine/SchemaVerification"
 
 initializeDatabase()
     .then(async () => {
-        console.info("FinanceOS database initialized.");
+        console.info("FinWea database initialized.");
         await verifyDatabaseSchema();
     })
     .catch(error => {

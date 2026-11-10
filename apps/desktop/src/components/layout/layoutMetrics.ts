@@ -14,7 +14,7 @@ export const APP_SIDEBAR_WIDTH_PX = 220;
 export const APP_HEADER_HEIGHT_PX = 64;
 
 /**
- * Height of a single-line sonner toast as FinanceOS styles it: 16px
+ * Height of a single-line sonner toast as FinWea styles it: 16px
  * padding top and bottom, a 13px/~20px title line, and a 1px border.
  */
 export const TOAST_SINGLE_LINE_HEIGHT_PX = 54;

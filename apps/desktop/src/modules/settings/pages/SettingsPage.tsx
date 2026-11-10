@@ -118,7 +118,7 @@ export default function SettingsPage() {
             const backupPath = await open({
                 directory: true,
                 multiple: false,
-                title: "Select FinanceOS Backup",
+                title: "Select FinWea Backup",
             });
 
             if (!backupPath || Array.isArray(backupPath)) {
@@ -126,7 +126,7 @@ export default function SettingsPage() {
             }
 
             const confirmed = window.confirm(
-                "Restoring this backup will replace the current FinanceOS database and documents. Continue?",
+                "Restoring this backup will replace the current FinWea database and documents. Continue?",
             );
 
             if (!confirmed) {
@@ -139,7 +139,7 @@ export default function SettingsPage() {
             await backupService.restoreBackup(backupPath);
 
             setBackupMessage(
-                "Backup restored successfully. Restart FinanceOS to reload the restored data.",
+                "Backup restored successfully. Restart FinWea to reload the restored data.",
             );
 
             await refreshStorageInfo();
@@ -236,7 +236,7 @@ export default function SettingsPage() {
             <div>
                 <PageHeader
                     title="Settings"
-                    subtitle="Manage your FinanceOS preferences and application configuration."
+                    subtitle="Manage your FinWea preferences and application configuration."
                 />
 
                 <div className="flex min-h-[360px] items-center justify-center">
@@ -256,7 +256,7 @@ export default function SettingsPage() {
         <div>
             <PageHeader
                 title="Settings"
-                subtitle="Manage your FinanceOS preferences and application configuration."
+                subtitle="Manage your FinWea preferences and application configuration."
                 actions={
                     <>
                         <button
@@ -308,7 +308,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Workspace name"
-                            description="The name used for your personal FinanceOS workspace."
+                            description="The name used for your personal FinWea workspace."
                         >
                             <div className="w-[280px]">
                                 <Input
@@ -355,7 +355,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Date format"
-                            description="How dates are displayed throughout FinanceOS."
+                            description="How dates are displayed throughout FinWea."
                         >
                             <select
                                 value={settings.dateFormat}
@@ -410,7 +410,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Theme"
-                            description="Choose how FinanceOS should appear."
+                            description="Choose how FinWea should appear."
                         >
                             <select
                                 value={settings.theme}
@@ -485,7 +485,7 @@ export default function SettingsPage() {
                     <div className="divide-y divide-slate-200">
                         <SettingRow
                             title="Backup"
-                            description="Create a complete FinanceOS backup containing your database and Document Vault files."
+                            description="Create a complete FinWea backup containing your database and Document Vault files."
                         >
                             <Button
                                 type="button"
@@ -516,7 +516,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Restore"
-                            description="Restore your database and Document Vault from an existing FinanceOS backup."
+                            description="Restore your database and Document Vault from an existing FinWea backup."
                         >
                             <Button
                                 type="button"
@@ -566,7 +566,7 @@ export default function SettingsPage() {
                     <div className="divide-y divide-slate-200">
                         <SettingRow
                             title="Application Data"
-                            description="Location used by FinanceOS for application data."
+                            description="Location used by FinWea for application data."
                         >
                             <div className="flex items-center gap-3">
     <div className="max-w-[440px] truncate text-right text-sm text-slate-600">
@@ -587,7 +587,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Database"
-                            description="Location of the FinanceOS SQLite database."
+                            description="Location of the FinWea SQLite database."
                         >
                             <div className="flex items-center gap-3">
     <div className="max-w-[440px] truncate text-right text-sm text-slate-600">
@@ -608,7 +608,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Database Size"
-                            description="Current size of the FinanceOS database."
+                            description="Current size of the FinWea database."
                         >
                             <div className="text-right text-sm font-medium text-slate-700">
                                 {formatBytes(storageInfo?.databaseSize ?? 0)}
@@ -617,7 +617,7 @@ export default function SettingsPage() {
 
                         <SettingRow
                             title="Documents"
-                            description="Location used for stored FinanceOS documents."
+                            description="Location used for stored FinWea documents."
                         >
                             <div className="flex items-center gap-3">
     <div className="max-w-[440px] truncate text-right text-sm text-slate-600">
@@ -686,7 +686,7 @@ export default function SettingsPage() {
                             </div>
 
                             <div className="text-xs text-slate-500">
-                                Settings are stored locally in FinanceOS.
+                                Settings are stored locally in FinWea.
                             </div>
                         </div>
                     </div>

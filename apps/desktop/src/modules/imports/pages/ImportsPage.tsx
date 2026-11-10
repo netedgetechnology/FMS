@@ -958,7 +958,7 @@ export function classifyExcelPasswordError(
     };
 }
 
-// Which FinanceOS field (if any) a given source column is currently
+// Which FinWea field (if any) a given source column is currently
 // mapped to.
 function fieldForHeader(
     mapping: CsvColumnMapping,
@@ -3454,7 +3454,7 @@ export default function ImportsPage() {
                                         </div>
 
                                         <p className="mt-0.5 text-xs text-slate-400">
-                                            Source column → FinanceOS field. Change any mapping the detection got wrong.
+                                            Source column → FinWea field. Change any mapping the detection got wrong.
                                         </p>
                                     </div>
 

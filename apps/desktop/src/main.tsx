@@ -44,7 +44,7 @@ async function startApplication() {
             <div className="flex min-h-screen items-center justify-center bg-slate-50 p-8">
                 <div className="w-full max-w-2xl rounded-3xl bg-white p-8 shadow-lg">
                     <h1 className="text-xl font-semibold text-red-600">
-                        FinanceOS Database Startup Error
+                        FinWea Database Startup Error
                     </h1>
 
                     <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-slate-100 p-4 text-sm text-slate-700">
@@ -55,7 +55,7 @@ async function startApplication() {
         );
 
         console.error(
-            "FinanceOS startup failed:",
+            "FinWea startup failed:",
             error
         );
 

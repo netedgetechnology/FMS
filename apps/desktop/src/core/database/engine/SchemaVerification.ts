@@ -16,7 +16,7 @@ export async function verifyDatabaseSchema(): Promise<void> {
     );
 
     console.info(
-        "FinanceOS tables:",
+        "FinWea tables:",
         tables.map(table => table.name)
     );
 
@@ -31,7 +31,7 @@ export async function verifyDatabaseSchema(): Promise<void> {
     );
 
     console.info(
-        "FinanceOS migrations:",
+        "FinWea migrations:",
         versions.map(row => row.version)
     );
 }

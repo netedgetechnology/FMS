@@ -61,7 +61,7 @@ export default function AppSidebar() {
       <div className="border-b border-transparent px-9 py-9">
 
         <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-          FinanceOS
+          FinWea
         </h1>
 
         <p className="mt-2 text-sm text-slate-500">
@@ -112,7 +112,7 @@ export default function AppSidebar() {
           </h3>
 
           <p className="mt-1 text-sm text-slate-500">
-            FinanceOS Desktop
+            FinWea Desktop
           </p>
 
         </div>

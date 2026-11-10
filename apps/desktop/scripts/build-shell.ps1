@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-Write-Host "== FinanceOS Shell Scaffold =="
+Write-Host "== FinWea Shell Scaffold =="
 
 $dirs = @(
 "src/app",

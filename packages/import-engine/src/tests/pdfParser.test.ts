@@ -81,13 +81,13 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
     // balanceIndex the FIRST) - parseTransaction previously read them
     // literally, silently swapping every transaction's amount and
     // balance. Verified against a real Axis Bank statement export: a
-    // line reading "...Chrgs 100.00 DR 4502.92..." is amount=100.00
-    // (first number), balance=4502.92 (last number) - never the other
+    // line reading "...Chrgs 100.00 DR 3110.45..." is amount=100.00
+    // (first number), balance=3110.45 (last number) - never the other
     // way around.
     it("assigns amount (first number) and balance (last number) correctly for a DR line - not swapped", async () => {
         setPdfText([
             "Statement of Account",
-            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 4502.92 BOPAL, AHMEDABAD [GJ]",
+            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 3110.45 SAMPLE BRANCH [XX]",
         ]);
 
         const result = await parsePdf(
@@ -115,13 +115,13 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
             "",
             "100.00",
             "",
-            "4502.92",
+            "3110.45",
         ]);
     });
 
     it("assigns amount and balance correctly for a CR line too, and extracts an ECS reference", async () => {
         setPdfText([
-            "02-01-2026 02-01-2026 ECS/CS017663762184/BAJAJ FINANCE LTD 5300.00 CR 1119632.53 RAJPATH RANGOLI AHM GJ",
+            "02-01-2026 02-01-2026 ECS/CS000000000001/EXAMPLE FINANCE LTD 4750.00 CR 987654.21 SAMPLE BRANCH TWO XX",
         ]);
 
         const result = await parsePdf(
@@ -130,22 +130,22 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
 
         expect(result.document.rows[0].values).toEqual([
             "02-01-2026",
-            "ECS/CS017663762184/BAJAJ FINANCE LTD",
-            "5300.00",
+            "ECS/CS000000000001/EXAMPLE FINANCE LTD",
+            "4750.00",
             "CR",
-            "ECS/CS017663762184/BAJAJ",
+            "ECS/CS000000000001/EXAMPLE",
             "",
-            "5300.00",
-            "1119632.53",
+            "4750.00",
+            "987654.21",
         ]);
     });
 
     it("reconstructs a transaction whose date and description span multiple physical lines (real Axis PDF wrapping)", async () => {
         setPdfText([
             "26-12-2025 26-12-2025",
-            "NEFT/IN22536009266196/SME CARGO PRIVATE",
-            "LIMITED/ICICI BANK LIMITED/SME CARGO PRIVATE",
-            "LIMITED 10800.00 CR 15284.92 RTGS HUB",
+            "NEFT/IN00000000000002/EXAMPLE CARGO PRIVATE",
+            "LIMITED/ICICI BANK LIMITED/EXAMPLE CARGO PRIVATE",
+            "LIMITED 12450.00 CR 14820.30 RTGS HUB",
         ]);
 
         const result = await parsePdf(
@@ -167,26 +167,26 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
 
         expect(date).toBe("26-12-2025");
         expect(description).toBe(
-            "NEFT/IN22536009266196/SME CARGO PRIVATE LIMITED/ICICI BANK LIMITED/SME CARGO PRIVATE LIMITED",
+            "NEFT/IN00000000000002/EXAMPLE CARGO PRIVATE LIMITED/ICICI BANK LIMITED/EXAMPLE CARGO PRIVATE LIMITED",
         );
-        expect(amount).toBe("10800.00");
+        expect(amount).toBe("12450.00");
         expect(type).toBe("CR");
         expect(reference).toBe(
-            "NEFT/IN22536009266196/SME",
+            "NEFT/IN00000000000002/EXAMPLE",
         );
         expect(debit).toBe("");
-        expect(credit).toBe("10800.00");
-        expect(balance).toBe("15284.92");
+        expect(credit).toBe("12450.00");
+        expect(balance).toBe("14820.30");
     });
 
     it("extracts multiple consecutive transactions with running balance, in order", async () => {
         setPdfText([
             "Tran Date Value Date Transaction Particulars Chq No Amount(INR) DR/CR Balance(INR) Branch Name",
-            "OPENING BALANCE 4602.92",
-            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 4502.92 BOPAL, AHMEDABAD [GJ]",
-            "20-12-2025 20-12-2025 GST @18% on Monthly Service Chrgs 18.00 DR 4484.92 BOPAL, AHMEDABAD [GJ]",
-            "31-12-2025 31-12-2025 IMPS/P2A/536596482103/NETEDGET/YesBankL/Transfer/9198",
-            "240288767217000 500000.00 CR 1010831.53 BOPAL, AHMEDABAD [GJ]",
+            "OPENING BALANCE 3210.45",
+            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 3110.45 SAMPLE BRANCH [XX]",
+            "20-12-2025 20-12-2025 GST @18% on Monthly Service Chrgs 18.00 DR 3092.45 SAMPLE BRANCH [XX]",
+            "31-12-2025 31-12-2025 IMPS/P2A/100000000006/NETEDGET/YesBankL/Transfer/0001",
+            "200000000000001 500000.00 CR 876543.10 SAMPLE BRANCH [XX]",
         ]);
 
         const result = await parsePdf(
@@ -202,14 +202,14 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
             "100.00",
         );
         expect(result.document.rows[0].values[7]).toBe(
-            "4502.92",
+            "3110.45",
         );
 
         expect(result.document.rows[1].values[2]).toBe(
             "18.00",
         );
         expect(result.document.rows[1].values[7]).toBe(
-            "4484.92",
+            "3092.45",
         );
 
         expect(result.document.rows[2].values[2]).toBe(
@@ -219,7 +219,7 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
             "CR",
         );
         expect(result.document.rows[2].values[7]).toBe(
-            "1010831.53",
+            "876543.10",
         );
     });
 
@@ -256,10 +256,10 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
     it("never turns non-transaction preamble/header/opening-balance lines into rows", async () => {
         setPdfText([
             "NETEDGE TECHNOLOGY",
-            "Statement of Axis Account No :912020020993999 for the period (From : 20-12-2025 To : 19-06-2026)",
+            "Statement of Axis Account No :900000000000001 for the period (From : 20-12-2025 To : 19-06-2026)",
             "Tran Date Value Date Transaction Particulars Chq No Amount(INR) DR/CR Balance(INR) Branch Name",
-            "OPENING BALANCE 4602.92",
-            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 4502.92 BOPAL, AHMEDABAD [GJ]",
+            "OPENING BALANCE 3210.45",
+            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 3110.45 SAMPLE BRANCH [XX]",
         ]);
 
         const result = await parsePdf(
@@ -303,7 +303,7 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
     // falling back to the one-column-per-line shape that path required.
     it("does not crash and returns a fully correct row when a transaction line has no trailing branch text", async () => {
         setPdfText([
-            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 4502.92",
+            "20-12-2025 20-12-2025 Monthly Service Chrgs 100.00 DR 3110.45",
         ]);
 
         const result = await parsePdf(
@@ -320,7 +320,7 @@ describe("PDF parser - bank statement extraction (realistic text)", () => {
             "",
             "100.00",
             "",
-            "4502.92",
+            "3110.45",
         ]);
     });
 });
@@ -337,19 +337,19 @@ describe("PDF parser - universal structural extraction (amount+balance, amount-o
     // the balance-delta chain valid to check against their real amounts.
     it("infers debit/credit from balance deltas for an unmarked amount+balance layout with month-name dates, oldest entry left undetermined with no anchor", async () => {
         setPdfText([
-            "30 May 2026 30 May 2026 YBS6150574779130 UPI/109908507961/",
-            "From:726d92a56c1943bc862ff40e46175cb2@ptyes/",
-            "To:tataplayltd.bdsi@icici/MandateRequest",
-            "649.00 856.07",
-            "28 May 2026 28 May 2026 10000171220260528002200021172 CMS-TPT-BT26052858269621 -MOR000701069115 -",
+            "30 May 2026 30 May 2026 YBS0000000000001 UPI/100000000001/",
+            "From:examplepayer0001@ptyes/",
+            "To:examplemerchant@icici/MandateRequest",
+            "512.40 1,003.35",
+            "28 May 2026 28 May 2026 10000000000000000000000000001 CMS-TPT-BT00000000000001 -MOR000000000001 -",
             "RETAIL ASSET BULK LO",
-            "1,486.95 1,505.07",
-            "21 Apr 2026 21 Apr 2026 YBS6111236887022 UPI/301187200738/From:9824028876@ptyes/",
-            "To:9638423637@axl/Sent using Paytm UPI",
-            "100.00 18.12",
-            "05 Apr 2026 05 Apr 2026 YBS6095096002934 UPI/203368660141/From:9824028876@ptyes/",
-            "To:paytmqr181r0yqaip@paytm/NA",
-            "20.00 118.12",
+            "1,375.25 1,515.75",
+            "21 Apr 2026 21 Apr 2026 YBS0000000000002 UPI/100000000002/From:9000000001@ptyes/",
+            "To:9000000002@axl/Sent using Paytm UPI",
+            "100.00 140.50",
+            "05 Apr 2026 05 Apr 2026 YBS0000000000003 UPI/100000000003/From:9000000001@ptyes/",
+            "To:paytmqrexample01@paytm/NA",
+            "35.00 240.50",
         ]);
 
         const result = await parsePdf(
@@ -367,22 +367,22 @@ describe("PDF parser - universal structural extraction (amount+balance, amount-o
             (row) => row.values,
         );
 
-        // 30 May 2026: balance fell 1,505.07 -> 856.07, a fall of
-        // exactly the transaction's own amount (649.00) - a debit.
+        // 30 May 2026: balance fell 1,515.75 -> 1,003.35, a fall of
+        // exactly the transaction's own amount (512.40) - a debit.
         expect(newest?.[0]).toBe("30 May 2026");
-        expect(newest?.[2]).toBe("649.00");
+        expect(newest?.[2]).toBe("512.40");
         expect(newest?.[3]).toBe("DR");
-        expect(newest?.[5]).toBe("649.00");
+        expect(newest?.[5]).toBe("512.40");
         expect(newest?.[6]).toBe("");
-        expect(newest?.[7]).toBe("856.07");
+        expect(newest?.[7]).toBe("1003.35");
 
-        // 28 May 2026: balance rose 18.12 -> 1,505.07, a rise of
-        // exactly 1,486.95 - a credit.
-        expect(secondNewest?.[2]).toBe("1486.95");
+        // 28 May 2026: balance rose 140.50 -> 1,515.75, a rise of
+        // exactly 1,375.25 - a credit.
+        expect(secondNewest?.[2]).toBe("1375.25");
         expect(secondNewest?.[3]).toBe("CR");
-        expect(secondNewest?.[6]).toBe("1486.95");
+        expect(secondNewest?.[6]).toBe("1375.25");
 
-        // 21 Apr 2026: balance fell 118.12 -> 18.12, a fall of
+        // 21 Apr 2026: balance fell 240.50 -> 140.50, a fall of
         // exactly 100.00 - a debit.
         expect(thirdNewest?.[2]).toBe("100.00");
         expect(thirdNewest?.[3]).toBe("DR");
@@ -393,11 +393,11 @@ describe("PDF parser - universal structural extraction (amount+balance, amount-o
         // compare against, so direction is left undetermined rather
         // than guessed.
         expect(oldest?.[0]).toBe("05 Apr 2026");
-        expect(oldest?.[2]).toBe("20.00");
+        expect(oldest?.[2]).toBe("35.00");
         expect(oldest?.[3]).toBe("");
         expect(oldest?.[5]).toBe("");
         expect(oldest?.[6]).toBe("");
-        expect(oldest?.[7]).toBe("118.12");
+        expect(oldest?.[7]).toBe("240.50");
     });
 
     // A statement's own "Opening Balance" line (present, in different
@@ -471,21 +471,21 @@ describe("PDF parser - universal structural extraction (amount+balance, amount-o
     // must not leak into either neighboring transaction's description.
     it("excludes repeated multi-page headers/footers and page markers without leaking into either neighboring transaction", async () => {
         setPdfText([
-            "03 Apr 2026 03 Apr 2026 YBS6093077461441 UPI/203226128787/From:9824028876@ptyes/",
-            "To:vilposguj@ptybl/Payment for UPI Autopay",
-            "827.18 580.12",
+            "03 Apr 2026 03 Apr 2026 YBS0000000000004 UPI/100000000004/From:9000000001@ptyes/",
+            "To:examplemerchant2@ptybl/Payment for UPI Autopay",
+            "742.60 610.40",
             "-- 1 of 5 --",
-            "Customer Id: 10626372",
-            "Primary Account Holder Name: ACHARYA HARDIK",
-            "Transaction details for your account number 000763400002790 (CURRENT) (Currency - INR)",
-            "Primary Holder: ACHARYA HARDIK A/C Opening Date: 23/03/2021 Account Variant/ Description: FREEDOM FLEXI 25",
+            "Customer Id: 10000001",
+            "Primary Account Holder Name: EXAMPLE CUSTOMER",
+            "Transaction details for your account number 000000000000001 (CURRENT) (Currency - INR)",
+            "Primary Holder: EXAMPLE CUSTOMER A/C Opening Date: 01/01/2020 Account Variant/ Description: FREEDOM FLEXI 25",
             "Nominee Details: Registered Account Status: ACTIVE Joint Holder's names:",
             "Transaction",
             "Date Value Date Cheque No/Reference No Description Withdrawals Deposits Running Balance",
-            "03 Apr 2026 03 Apr 2026 YBS6093077449081 UPI/203226005678/From:9824028876@ptyes/",
-            "To:airtel-billpayment.paytm@ptybl/Airtel Postpaid Bill",
+            "03 Apr 2026 03 Apr 2026 YBS0000000000005 UPI/100000000005/From:9000000001@ptyes/",
+            "To:examplebiller.paytm@ptybl/Postpaid Bill",
             "Payment",
-            "1,826.64 1,407.30",
+            "1,315.20 1,353.00",
         ]);
 
         const result = await parsePdf(
@@ -495,20 +495,20 @@ describe("PDF parser - universal structural extraction (amount+balance, amount-o
         expect(result.document.rows).toHaveLength(2);
 
         expect(result.document.rows[0].values[2]).toBe(
-            "827.18",
+            "742.60",
         );
         expect(result.document.rows[0].values[7]).toBe(
-            "580.12",
+            "610.40",
         );
         expect(
             result.document.rows[0].values[1],
         ).not.toMatch(/Customer Id|Transaction details|Nominee Details|of 5/);
 
         expect(result.document.rows[1].values[2]).toBe(
-            "1826.64",
+            "1315.20",
         );
         expect(result.document.rows[1].values[7]).toBe(
-            "1407.30",
+            "1353.00",
         );
         expect(
             result.document.rows[1].values[1],

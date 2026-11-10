@@ -103,7 +103,7 @@ export function ReconciliationDialog({
 
                     <DialogDescription className="mt-1 text-sm text-slate-500">
                         Compare your account statement balance
-                        with the FinanceOS system balance.
+                        with the FinWea system balance.
                     </DialogDescription>
                 </DialogHeader>
 

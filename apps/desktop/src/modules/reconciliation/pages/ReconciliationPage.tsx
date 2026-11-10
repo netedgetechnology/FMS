@@ -203,7 +203,7 @@ export default function ReconciliationPage() {
         <div className="space-y-6">
             <PageHeader
                 title="Reconciliation"
-                subtitle="Compare your account statements with FinanceOS balances."
+                subtitle="Compare your account statements with FinWea balances."
                 actions={
                     <button
                         type="button"
@@ -314,7 +314,7 @@ export default function ReconciliationPage() {
                         <div className="px-6 py-12">
                             <EmptyState
                                 title="No reconciliations yet"
-                                description="Create a reconciliation to compare your statement balance with the FinanceOS account balance."
+                                description="Create a reconciliation to compare your statement balance with the FinWea account balance."
                             />
                         </div>
                     )}

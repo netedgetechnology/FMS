@@ -100,7 +100,7 @@ export default function ReportsPage() {
             setCurrentPage(1);
         } catch (err) {
             console.error(
-                "FinanceOS Reports error:",
+                "FinWea Reports error:",
                 err
             );
 

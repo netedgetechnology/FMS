@@ -240,7 +240,7 @@ export class InvestmentService {
             /*
              * The initial quantity/cost entered while creating
              * an investment represents the position that already
-             * existed before FinanceOS started tracking transactions.
+             * existed before FinWea started tracking transactions.
              *
              * Store that position as an OPENING_BALANCE transaction
              * so all future portfolio calculations are transaction-driven.

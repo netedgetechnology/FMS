@@ -2005,7 +2005,7 @@ describe("ImportService.clearAllLearnedRules (Import Preview 'clear all self-lea
 
     it("3. after clearing, a row that previously matched (GREEN) no longer matches - the existing, unmodified matching logic simply finds nothing", async () => {
         const store = createFakeRuleStoreWithDeleteAll();
-        const description = "ECS/TCFLA0272000014487022/Tata Capital  Limited";
+        const description = "ECS/TXLNA0999000000000017/Tata Capital  Limited";
 
         await store.upsert(
             "account-1",

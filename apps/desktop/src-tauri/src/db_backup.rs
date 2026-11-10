@@ -60,7 +60,7 @@ pub struct BeginBackupPlan {
 /// `FinWea_2026-09-10_2100` (exactly `FinWea_YYYY-MM-DD_HHMM`).
 ///
 /// Deliberately strict so the daily check and retention never match a
-/// manual backup (`FinanceOS_Backup_*`), a `.partial` attempt, a stray
+/// manual backup (`FinWea_Backup_*`, or `FinanceOS_Backup_*` from older builds), a `.partial` attempt, a stray
 /// file, or any other unrelated entry.
 fn is_automatic_backup_dir_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix(BACKUP_PREFIX) else {
@@ -439,6 +439,11 @@ mod tests {
         assert!(!is_automatic_backup_dir_name(
             "FinanceOS_Backup_20260910_210000"
         ));
+        // Manual backups are named FinWea_Backup_* now: the shared
+        // "FinWea_" prefix must never make one look automatic.
+        assert!(!is_automatic_backup_dir_name(
+            "FinWea_Backup_20260910_210000"
+        ));
         assert!(!is_automatic_backup_dir_name("anything-else"));
     }
 
@@ -450,6 +455,7 @@ mod tests {
             "FinWea_2026-09-03_1000".to_string(),
             "FinWea_2026-09-04_1000".to_string(),
             "FinanceOS_Backup_20260905_100000".to_string(),
+            "FinWea_Backup_20260905_110000".to_string(),
             "notes.txt".to_string(),
             "FinWea_2026-09-05_1000.partial".to_string(),
         ];
@@ -482,6 +488,7 @@ mod tests {
             "FinWea_2026-09-02_1000",
             "FinWea_2026-09-03_1000",
             "FinanceOS_Backup_20260904_120000",
+            "FinWea_Backup_20260904_130000",
         ] {
             fs::create_dir_all(dest.join(name)).unwrap();
         }
@@ -495,6 +502,7 @@ mod tests {
         assert!(dest
             .join("FinanceOS_Backup_20260904_120000")
             .exists());
+        assert!(dest.join("FinWea_Backup_20260904_130000").exists());
         assert!(dest.join("keep-me.txt").exists());
 
         let _ = fs::remove_dir_all(&dest);

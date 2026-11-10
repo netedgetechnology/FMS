@@ -170,7 +170,7 @@ export default function ProfilePage() {
                                     onChange={(event) =>
                                         updateField("displayName", event.target.value)
                                     }
-                                    placeholder="Name shown across FinanceOS"
+                                    placeholder="Name shown across FinWea"
                                 />
                             </FormField>
 
