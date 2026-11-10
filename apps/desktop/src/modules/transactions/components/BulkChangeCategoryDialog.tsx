@@ -76,9 +76,15 @@ export function BulkChangeCategoryDialog({
         [categories, transactions, mappings, accounts]
     );
 
-    const hiddenCount =
-        categories.filter(category => category.isActive).length -
-        options.length;
+    // Active categories a lock hides - named, so it is never a silent omission.
+    const hiddenNames = categories
+        .filter(
+            category =>
+                category.isActive &&
+                !options.some(option => option.id === category.id)
+        )
+        .map(category => category.name);
+    const hiddenCount = hiddenNames.length;
 
     const selectedCategory =
         options.find(category => category.id === categoryId) ?? null;
@@ -193,7 +199,7 @@ export function BulkChangeCategoryDialog({
                             {hiddenCount === 1 ? "category is" : "categories are"}{" "}
                             not shown: mapped to a different transaction type
                             for the account or business entity of some
-                            selected transactions.
+                            selected transactions ({hiddenNames.join(", ")}).
                         </p>
                     )}
                 </div>

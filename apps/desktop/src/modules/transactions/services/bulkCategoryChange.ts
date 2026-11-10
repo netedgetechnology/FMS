@@ -1,3 +1,7 @@
+import {
+    balanceSide,
+    debitCreditTypeForDirection,
+} from "@/core/accounting/transferClassification";
 import { getErrorMessage } from "@/core/errors";
 import type {
     Category,
@@ -9,6 +13,8 @@ import {
 } from "@/modules/categories/utils";
 
 import type { Transaction } from "../types";
+
+import { categoryTransferDirection } from "./transactionTyping";
 
 // ---------------------------------------------------------------------
 // Transactions - bulk "Change Category".
@@ -31,7 +37,38 @@ import type { Transaction } from "../types";
 export type BulkCategoryTransaction = Pick<
     Transaction,
     "id" | "accountId" | "type"
->;
+> &
+    Partial<Pick<Transaction, "categoryId" | "transferDirection">>;
+
+// The type a transaction will have once `category` is applied - the same
+// rule as TransactionService.changeCategory: a TRANSFER category makes it
+// a transfer; a normal category replacing a TRANSFER category turns a
+// transfer back into Income/Expense from its direction; otherwise the
+// type is unchanged. Locks are checked against THIS type, so the dropdown
+// offers exactly what Apply accepts.
+export function typeAfterCategoryChange(
+    transaction: BulkCategoryTransaction,
+    category: Pick<Category, "id" | "categoryType">,
+    categoryTypeById: ReadonlyMap<string, string>
+): Transaction["type"] {
+    if (category.categoryType === "TRANSFER") {
+        return "transfer";
+    }
+
+    if (
+        transaction.type === "transfer" &&
+        !!transaction.categoryId &&
+        transaction.categoryId !== category.id &&
+        categoryTypeById.get(transaction.categoryId) === "TRANSFER"
+    ) {
+        return (
+            debitCreditTypeForDirection(transaction.transferDirection) ??
+            transaction.type
+        );
+    }
+
+    return transaction.type;
+}
 
 // The selected transactions `category` can't be applied to (locked to
 // the other type for their account / business entity).
@@ -72,23 +109,72 @@ export function incompatibleTransactionIds(
 }
 
 // The dropdown's options: every active category valid for ALL selected
-// transactions, in the given order.
+// transactions - each checked with the type it will have after the
+// change, as Apply checks it - in the given order.
 export function categoriesForBulkChange(
     categories: readonly Category[],
     transactions: readonly BulkCategoryTransaction[],
     mappings: readonly CategoryContextMapping[],
     businessEntityIdByAccountId: ReadonlyMap<string, string | null>
 ): Category[] {
+    const categoryTypeById = new Map(
+        categories.map(category => [category.id, category.categoryType])
+    );
+
     return categories.filter(
         category =>
             category.isActive &&
+            bulkDirectionConflictIds(category, transactions).length === 0 &&
             incompatibleTransactionIds(
                 category,
-                transactions,
+                transactions.map(transaction => ({
+                    ...transaction,
+                    type: typeAfterCategoryChange(
+                        transaction,
+                        category,
+                        categoryTypeById
+                    ),
+                })),
                 mappings,
                 businessEntityIdByAccountId
             ).length === 0
     );
+}
+
+// The selected transactions a Transfer category with a configured
+// direction can't be applied to in bulk: those whose money moves the
+// other way - by their current Debit/Credit side, or (when known) by
+// their bank statement's side. Bulk Change Category never changes a
+// transaction's sign; a row that needs one is corrected on its own in
+// Edit Transaction, where the change is shown and checked against the
+// statement. An either-way or non-Transfer category refuses none.
+export function bulkDirectionConflictIds(
+    category: Pick<Category, "categoryType" | "transferDirection">,
+    transactions: readonly BulkCategoryTransaction[],
+    statementSideById: ReadonlyMap<string, "income" | "expense"> = new Map()
+): string[] {
+    const categorySide = debitCreditTypeForDirection(
+        categoryTransferDirection(category)
+    );
+
+    if (!categorySide) {
+        return [];
+    }
+
+    return transactions
+        .filter(transaction => {
+            const side = balanceSide({
+                type: transaction.type,
+                transferDirection: transaction.transferDirection ?? null,
+            });
+            const statementSide = statementSideById.get(transaction.id);
+
+            return (
+                side !== categorySide ||
+                (statementSide !== undefined && statementSide !== categorySide)
+            );
+        })
+        .map(transaction => transaction.id);
 }
 
 function transactionsLabel(count: number): string {

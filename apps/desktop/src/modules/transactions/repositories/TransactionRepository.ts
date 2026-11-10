@@ -120,6 +120,37 @@ export class TransactionRepository extends Repository {
         return rows[0] ?? null;
     }
 
+    /**
+     * The Debit/Credit side the bank statement gave an imported
+     * transaction ("expense" = Debit, "income" = Credit), as the importer
+     * recorded it - or null for a manual transaction, or one no longer on
+     * the account whose statement it came from (its side would be another
+     * account's). Read-only; used to derive a transfer's direction.
+     */
+    async getStatementSide(
+        id: string
+    ): Promise<"income" | "expense" | null> {
+        const rows = await this.select<{ side: string | null }>(
+            `
+            SELECT json_extract(import_rows.normalized_data, '$.type') AS side
+            FROM import_rows
+            JOIN import_batches
+                ON import_batches.id = import_rows.import_batch_id
+            JOIN transactions
+                ON transactions.id = import_rows.transaction_id
+            WHERE import_rows.transaction_id = ?
+              AND import_batches.account_id = transactions.account_id
+            ORDER BY import_rows.created_at DESC
+            LIMIT 1
+            `,
+            [id]
+        );
+
+        const side = rows[0]?.side;
+
+        return side === "income" || side === "expense" ? side : null;
+    }
+
     async create(transaction: Transaction): Promise<void> {
         await this.execute(
             `

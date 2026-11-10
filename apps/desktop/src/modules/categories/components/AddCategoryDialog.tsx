@@ -45,6 +45,7 @@ export function AddCategoryDialog({
                 parentId: values.parentId || null,
                 name: values.name,
                 categoryType: values.categoryType,
+                transferDirection: values.transferDirection || null,
                 // New categories start Personal (the previous default);
                 // scopes are changed from the Scopes screen.
                 financeScope: "PERSONAL",

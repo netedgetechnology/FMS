@@ -9,6 +9,10 @@ import { AccountRepository } from "@/modules/accounts/repositories/AccountReposi
 import { ImportService } from "@/modules/imports/services/ImportService";
 import { describeLoanImportPayments } from "@/modules/imports/pages/importLoanPaymentMessage";
 import { TransactionService } from "@/modules/transactions/services/TransactionService";
+import { TransactionRepository } from "@/modules/transactions/repositories/TransactionRepository";
+import { derivationSideFor, finalTyping } from "@/modules/transactions/services/transactionTyping";
+import { balanceSide } from "@/core/accounting/transferClassification";
+import { signedTransactionAmount } from "@/core/formatting/signedTransactionAmount";
 
 import { LoanRepository } from "../repositories/LoanRepository";
 import { OverdraftEntryKind, LoanKind } from "../types";
@@ -418,6 +422,31 @@ describe("Overdraft - edits, deletes, restores and links all recalculate from th
         await new TransactionService().update({ id: repayment, amount: 150_000 });
 
         expect(await position(id)).toMatchObject({ used: 1_850_000, available: 3_150_000, totalRepayments: 150_000, status: "PARTLY_USED" });
+    });
+
+    it("a corrected principal direction takes its link with it: a Repayment edited to money in becomes a Drawdown", async () => {
+        // (Previously the link was left as Repayment, excluded and flagged
+        // for review. A principal link now follows the saved direction so
+        // the OD counts the money the way it actually moved.)
+        const id = await createOverdraft();
+        const repayment = addTransaction({ type: "expense", amount: 200_000, date: "2026-07-05" });
+        await link(repayment, id, REPAYMENT);
+
+        await new TransactionService().update({ id: repayment, type: "income" });
+
+        const p = await position(id);
+        expect(p).toMatchObject({ used: 2_200_000, totalRepayments: 0, totalDrawdowns: 200_000, status: "PARTLY_USED" });
+        expect(p.reviewReasons).toEqual([]);
+    });
+
+    it("an Interest / Charge link can't become money in: the edit is refused and nothing changes", async () => {
+        const id = await createOverdraft();
+        const charge = addTransaction({ type: "expense", amount: 17_500, date: "2026-07-05" });
+        await link(charge, id, INTEREST_CHARGE);
+
+        await expect(new TransactionService().update({ id: charge, type: "income" })).rejects.toThrow("unlink it first");
+
+        expect(await position(id)).toMatchObject({ used: 2_000_000, totalInterestCharges: 17_500 });
     });
 
     it("an edited account no longer qualifies: excluded and flagged for review", async () => {
@@ -1063,7 +1092,7 @@ describe("Loan linking - strict category gate", () => {
 
         const batch = await importStatement([
             { transactionDate: "2026-09-23", amount: 732, payee: "Tata Play", description: "UPI/110742500149/To:tataplayltd.bdsi@icici/MandateRequest", categoryId: TELECOM },
-            { transactionDate: "2026-09-24", amount: 100_000, payee: "TATA CAPITAL (OD)", description: "NBSM/150747964/TATA CAPITAL LTD/", categoryId: BANK_TRANSFER },
+            { transactionDate: "2026-09-24", amount: 100_000, payee: "TATA CAPITAL (OD)", description: "NBSM/100000001/TATA CAPITAL LTD/", categoryId: BANK_TRANSFER },
         ]);
 
         expect(batch.loanPayments?.needsReview ?? []).toEqual([]);
@@ -1075,7 +1104,7 @@ describe("Loan linking - strict category gate", () => {
         const id = await createOverdraft({ name: "TATA Capital", lenderInstitutionName: "TATA Capital" });
 
         const batch = await importStatement([
-            { transactionDate: "2026-09-24", amount: 100_000, payee: "TATA CAPITAL (OD)", description: "NBSM/150747964/TATA CAPITAL LTD/" },
+            { transactionDate: "2026-09-24", amount: 100_000, payee: "TATA CAPITAL (OD)", description: "NBSM/100000001/TATA CAPITAL LTD/" },
         ]);
 
         expect(batch.loanPayments?.needsReview).toEqual([expect.objectContaining({ loanNames: ["TATA Capital"], overdraft: true })]);
@@ -1298,7 +1327,7 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
     it("opening-date flow: refused while Opening Used As Of is 2026-10-08; linkable once the USER saves 2026-01-31 and reopens", async () => {
         addAccounts();
         const id = await createOverdraft({ ...TATA, openingUsedAsOf: "2026-10-08" });
-        const debit = addTransaction({ type: "expense", amount: 250_000, date: "2026-09-16", accountId: ACCT_3999, narration: "RTGS/ICICR42026091600579106/TATA CAPITAL LIMITED/ICICI BANK LIMITED//URGENT/700020278710234077R01" });
+        const debit = addTransaction({ type: "expense", amount: 250_000, date: "2026-09-16", accountId: ACCT_3999, narration: "RTGS/ICICR00000000000000001/TATA CAPITAL LIMITED/ICICI BANK LIMITED//URGENT/700000000000000001R01" });
         const onStart = addTransaction({ type: "expense", amount: 1_000, date: "2026-01-31", accountId: ACCT_3999 });
         const dayAfter = addTransaction({ type: "expense", amount: 1_000, date: "2026-02-01", accountId: ACCT_3999 });
 
@@ -1335,6 +1364,113 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
 
         // Only the user's explicit choice links it - and as what they chose.
         await link(debit, id, REPAYMENT);
+        expect(linksOf(id)).toEqual([{ transaction_id: debit, entry_kind: "REPAYMENT", link_source: "MANUAL" }]);
+    });
+});
+
+// ---------------------------------------------------------------------
+// Regression (2026-10-12): three TATA Capital credits were re-categorised
+// to Loan Principal Drawdown but stayed Transfer Out, still linked as
+// REPAYMENT - so each REDUCED the OD's Used instead of increasing it.
+// Root cause: on an either-way Transfer category the form kept the saved
+// transfer's direction instead of re-deriving it from the bank statement,
+// the save check tolerated the statement mismatch because the side was
+// unchanged, and editing never touched the OD link. These run the exact
+// shape: an imported statement CREDIT, stored Transfer Out, category Loan
+// Principal Repayment, linked REPAYMENT.
+// ---------------------------------------------------------------------
+
+describe("Correcting an OD drawdown that was saved as money out", () => {
+    const DRAWDOWN_CATEGORY = "cat-drawdown";
+    const REPAYMENT_CATEGORY = "cat-repayment";
+
+    function principalCategories(drawdownDirection: "IN" | null, repaymentDirection: "OUT" | null) {
+        insert("categories", { id: DRAWDOWN_CATEGORY, name: "Loan Principal Drawdown", category_type: "TRANSFER", transfer_direction: drawdownDirection, finance_scope: "BOTH" });
+        insert("categories", { id: REPAYMENT_CATEGORY, name: "Loan Principal Repayment", category_type: "TRANSFER", transfer_direction: repaymentDirection, finance_scope: "BOTH" });
+    }
+
+    // The statement row the importer recorded for a transaction on BANK.
+    function statementRow(transactionId: string, side: "income" | "expense") {
+        const batchId = `batch-${transactionId}`;
+        insert("import_batches", { id: batchId, account_id: BANK, import_type: "CSV", source_file_name: "statement.xls" });
+        insert("import_rows", { id: `row-${transactionId}`, import_batch_id: batchId, row_number: 1, raw_data: "{}", normalized_data: JSON.stringify({ type: side }), transaction_id: transactionId });
+    }
+
+    // What the Edit form submits after the user picks `categoryId` - the
+    // same functions, in the same order, as TransactionForm (a new
+    // category clears a manual pick; its configured direction, else the
+    // statement's side, decides).
+    function formSubmission(categoryId: string, drawdownDirection: "IN" | null, statementSide: "income" | "expense") {
+        const categoryDirection = categoryId === DRAWDOWN_CATEGORY ? drawdownDirection : null;
+        const side = derivationSideFor({ manualSide: null, categoryDirection, statementSide, shownSide: null });
+        return finalTyping({
+            type: "transfer",
+            transferDirection: categoryDirection ?? (side === "income" ? "IN" : "OUT"),
+            isTransferCategory: true,
+            derivationSide: side,
+        });
+    }
+
+    async function wrongWayDrawdown(amount: number) {
+        const id = await createOverdraft();
+        const before = await position(id);
+        const credit = addTransaction({ type: "transfer", transferDirection: "OUT", amount, date: "2026-09-15", categoryId: REPAYMENT_CATEGORY, narration: "RTGS/ICICR00000000000000002/TATA CAPITAL LIMITED/ICICI BANK LIMITED" });
+        statementRow(credit, "income");
+        await link(credit, id, REPAYMENT);
+        return { id, credit, before };
+    }
+
+    for (const drawdownDirection of [null, "IN"] as const) {
+        it(`Drawdown (${drawdownDirection ?? "either way"}) on a statement credit saved Out: the normal edit makes it Transfer In, the link DRAWDOWN, and Used goes UP`, async () => {
+            principalCategories(drawdownDirection, drawdownDirection ? "OUT" : null);
+            const { id, credit, before } = await wrongWayDrawdown(500_000);
+
+            // As it was: counted as a repayment.
+            expect(await position(id)).toMatchObject({ used: before.used - 500_000, totalRepayments: 500_000 });
+
+            const submitted = formSubmission(DRAWDOWN_CATEGORY, drawdownDirection, "income");
+            expect(submitted).toEqual({ type: "transfer", transferDirection: "IN" });
+
+            await new TransactionService().update({ id: credit, categoryId: DRAWDOWN_CATEGORY, ...submitted });
+
+            const saved = (await new TransactionRepository().getById(credit))!;
+            expect(saved).toMatchObject({ type: "transfer", transferDirection: "IN", categoryId: DRAWDOWN_CATEGORY, amount: 500_000 });
+            expect(signedTransactionAmount(saved.amount, balanceSide(saved))).toBe(500_000);
+            expect(linksOf(id)).toEqual([{ transaction_id: credit, entry_kind: "DRAWDOWN", link_source: "MANUAL" }]);
+            expect(await position(id)).toMatchObject({ used: before.used + 500_000, totalDrawdowns: 500_000, totalRepayments: 0, status: "PARTLY_USED" });
+            expect((await position(id)).reviewReasons).toEqual([]);
+        });
+    }
+
+    it("what used to be saved (Drawdown kept as Transfer Out) is now refused, changing nothing", async () => {
+        principalCategories(null, null);
+        const { id, credit } = await wrongWayDrawdown(25_000);
+
+        await expect(
+            new TransactionService().update({ id: credit, categoryId: DRAWDOWN_CATEGORY, type: "transfer", transferDirection: "OUT" })
+        ).rejects.toThrow("The bank statement shows this as money in");
+
+        expect((await new TransactionRepository().getById(credit))!).toMatchObject({ transferDirection: "OUT", categoryId: REPAYMENT_CATEGORY });
+        expect(linksOf(id)).toEqual([{ transaction_id: credit, entry_kind: "REPAYMENT", link_source: "MANUAL" }]);
+    });
+
+    it("Repayment (Out) on a statement credit is refused; Repayment on a statement debit stays Transfer Out / REPAYMENT", async () => {
+        principalCategories("IN", "OUT");
+        const { credit } = await wrongWayDrawdown(50_000);
+
+        await expect(
+            new TransactionService().update({ id: credit, categoryId: REPAYMENT_CATEGORY, type: "transfer", transferDirection: "OUT", notes: "x" })
+        ).rejects.toThrow('"Loan Principal Repayment" is for Transfer Out (money out), but the bank statement shows this transaction as money in');
+
+        const id = await createOverdraft({ name: "Second OD" } as never);
+        const debit = addTransaction({ type: "expense", amount: 150_000, date: "2026-09-10", categoryId: REPAYMENT_CATEGORY, narration: "NBSM/100000002/TATA CAPITAL LTD/" });
+        statementRow(debit, "expense");
+        await link(debit, id, REPAYMENT);
+
+        const submitted = formSubmission(REPAYMENT_CATEGORY, "IN", "expense");
+        await new TransactionService().update({ id: debit, categoryId: REPAYMENT_CATEGORY, ...submitted });
+
+        expect((await new TransactionRepository().getById(debit))!).toMatchObject({ type: "transfer", transferDirection: "OUT" });
         expect(linksOf(id)).toEqual([{ transaction_id: debit, entry_kind: "REPAYMENT", link_source: "MANUAL" }]);
     });
 });

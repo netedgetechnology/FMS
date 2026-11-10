@@ -18,6 +18,7 @@ export class CategoryRepository extends Repository {
                 parent_id AS parentId,
                 name,
                 category_type AS categoryType,
+                transfer_direction AS transferDirection,
                 finance_scope AS financeScope,
                 business_entity_id AS businessEntityId,
                 description,
@@ -51,6 +52,7 @@ export class CategoryRepository extends Repository {
                     parent_id AS parentId,
                     name,
                     category_type AS categoryType,
+                    transfer_direction AS transferDirection,
                     finance_scope AS financeScope,
                     business_entity_id AS businessEntityId,
                     description,
@@ -89,6 +91,7 @@ export class CategoryRepository extends Repository {
                           parent_id AS parentId,
                           name,
                           category_type AS categoryType,
+                          transfer_direction AS transferDirection,
                           finance_scope AS financeScope,
                           business_entity_id AS businessEntityId,
                           description,
@@ -108,6 +111,7 @@ export class CategoryRepository extends Repository {
                           parent_id AS parentId,
                           name,
                           category_type AS categoryType,
+                          transfer_direction AS transferDirection,
                           finance_scope AS financeScope,
                           business_entity_id AS businessEntityId,
                           description,
@@ -142,6 +146,7 @@ export class CategoryRepository extends Repository {
                 parent_id,
                 name,
                 category_type,
+                transfer_direction,
                 finance_scope,
                 business_entity_id,
                 description,
@@ -150,13 +155,14 @@ export class CategoryRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 category.id,
                 category.parentId,
                 category.name,
                 category.categoryType,
+                category.transferDirection ?? null,
                 category.financeScope,
                 category.businessEntityId,
                 category.description,
@@ -211,6 +217,13 @@ export class CategoryRepository extends Repository {
                 parent_id = ?,
                 name = ?,
                 category_type = ?,
+                -- Only a TRANSFER category has a direction; a request
+                -- without one (undefined) keeps the stored direction.
+                transfer_direction = CASE
+                    WHEN ? <> 'TRANSFER' THEN NULL
+                    WHEN ? = 1 THEN ?
+                    ELSE transfer_direction
+                END,
                 business_entity_id = ?,
                 description = ?,
                 is_active = ?,
@@ -222,6 +235,9 @@ export class CategoryRepository extends Repository {
                 request.parentId ?? null,
                 request.name,
                 request.categoryType,
+                request.categoryType,
+                request.transferDirection === undefined ? 0 : 1,
+                request.transferDirection ?? null,
                 request.businessEntityId ?? null,
                 request.description ?? null,
                 request.isActive ? 1 : 0,

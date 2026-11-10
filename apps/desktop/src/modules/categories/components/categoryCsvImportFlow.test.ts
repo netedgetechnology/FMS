@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FinanceFoundationMigration } from "@/core/database/migrations/004_finance_foundation";
+import { CategoryTransferDirectionMigration } from "@/core/database/migrations/049_category_transfer_direction";
 
 import { CategoryService, parseCategoryCsv } from "../services";
 
@@ -164,6 +165,7 @@ function createDatabase(): DatabaseSync {
     const db = new DatabaseSync(":memory:");
 
     db.exec(FinanceFoundationMigration.sql);
+    db.exec(CategoryTransferDirectionMigration.sql);
     db.exec(`
         INSERT INTO categories (id, name, category_type, finance_scope, description, created_at, updated_at)
             VALUES ('existing-1', 'Bank Charges', 'EXPENSE', 'BUSINESS', 'Original', 'orig', 'orig');

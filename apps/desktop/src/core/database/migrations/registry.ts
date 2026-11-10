@@ -44,6 +44,7 @@ import { LoanFirstInstallmentMigration } from "./045_loan_first_installment";
 import { LoanPaymentLinkSettlementMigration } from "./046_loan_payment_link_settlement";
 import { LoanOverdraftMigration } from "./047_loan_overdraft";
 import { OverdraftAccountsMigration } from "./048_overdraft_accounts";
+import { CategoryTransferDirectionMigration } from "./049_category_transfer_direction";
 import { LoanAccountNumberMigration } from "./050_loan_account_number";
 import { LoanSetupMigration } from "./051_loan_setup";
 import { HistoricalInstalmentSettlementMigration } from "./052_historical_instalment_settlement";
@@ -99,6 +100,7 @@ export const migrations = [
     LoanPaymentLinkSettlementMigration,
     LoanOverdraftMigration,
     OverdraftAccountsMigration,
+    CategoryTransferDirectionMigration,
     LoanAccountNumberMigration,
     LoanSetupMigration,
     HistoricalInstalmentSettlementMigration,

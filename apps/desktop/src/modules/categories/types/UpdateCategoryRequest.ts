@@ -1,4 +1,5 @@
 import {
+    CategoryTransferDirection,
     CategoryType,
 } from ".";
 
@@ -12,6 +13,8 @@ export interface UpdateCategoryRequest {
     name: string;
 
     categoryType: CategoryType;
+
+    transferDirection?: CategoryTransferDirection | null;
 
     businessEntityId?: string | null;
 

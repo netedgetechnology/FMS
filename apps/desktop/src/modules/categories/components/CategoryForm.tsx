@@ -38,6 +38,14 @@ import {
     FinanceScope,
 } from "../types";
 
+// The Transfer Direction choices (categories.transfer_direction); ""
+// = the category is used both ways.
+const TRANSFER_DIRECTION_LABELS: Record<string, string> = {
+    "": "Either way",
+    IN: "In - money into the account",
+    OUT: "Out - money out of the account",
+};
+
 import {
     addMappingRow as addMappingRowToList,
     CategoryMappingRowInput,
@@ -148,6 +156,7 @@ export function CategoryForm({
             parentId: "",
             name: "",
             categoryType: "EXPENSE",
+            transferDirection: "",
             businessEntityId: "",
             description: "",
             isActive: true,
@@ -163,6 +172,7 @@ export function CategoryForm({
                 parentId: defaultValues.parentId ?? "",
                 name: defaultValues.name ?? "",
                 categoryType: defaultValues.categoryType ?? "EXPENSE",
+                transferDirection: defaultValues.transferDirection ?? "",
                 businessEntityId: defaultValues.businessEntityId ?? "",
                 description: defaultValues.description ?? "",
                 isActive: defaultValues.isActive ?? true,
@@ -232,6 +242,48 @@ export function CategoryForm({
                             )}
                         />
                     </FormField>
+
+                    {categoryType === "TRANSFER" && (
+                        // Which way a transfer in this category goes. Set
+                        // here - never inferred from the category's name.
+                        <FormField
+                            label="Transfer Direction"
+                            htmlFor="transferDirection"
+                        >
+                            <Controller
+                                control={control}
+                                name="transferDirection"
+                                render={({ field }) => (
+                                    <Select
+                                        value={field.value || "__either"}
+                                        onValueChange={value =>
+                                            field.onChange(
+                                                value === "__either" ? "" : value
+                                            )
+                                        }
+                                    >
+                                        <SelectTrigger id="transferDirection">
+                                            <SelectValue placeholder="Either way">
+                                                {TRANSFER_DIRECTION_LABELS[field.value || ""]}
+                                            </SelectValue>
+                                        </SelectTrigger>
+
+                                        <SelectContent>
+                                            <SelectItem value="__either" label={TRANSFER_DIRECTION_LABELS[""]}>
+                                                {TRANSFER_DIRECTION_LABELS[""]}
+                                            </SelectItem>
+                                            <SelectItem value="IN" label={TRANSFER_DIRECTION_LABELS.IN}>
+                                                {TRANSFER_DIRECTION_LABELS.IN}
+                                            </SelectItem>
+                                            <SelectItem value="OUT" label={TRANSFER_DIRECTION_LABELS.OUT}>
+                                                {TRANSFER_DIRECTION_LABELS.OUT}
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            />
+                        </FormField>
+                    )}
 
                     <FormField
                         label="Parent Category"

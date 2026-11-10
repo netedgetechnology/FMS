@@ -9,11 +9,14 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 
+import { OverdraftService } from "@/modules/loans/services/OverdraftService";
+
 import { TransactionService } from "../services";
 import type { Transaction } from "../types";
 import type { TransactionFormValues } from "../validation";
 
 import { TransactionForm } from "./TransactionForm";
+import { sideOf } from "./transactionFormTyping";
 
 export interface EditTransactionDialogProps {
     transaction: Transaction | null;
@@ -57,11 +60,65 @@ export function EditTransactionDialog({
 
     const [loading, setLoading] = useState(false);
 
+    // Facts about the transaction being edited, read when it opens: the
+    // bank statement's Debit/Credit side of an imported transaction (the
+    // form derives a Transfer's direction from it) and the overdraft
+    // movement it is linked as. Kept WITH the id they were read for, so a
+    // value read for a previously edited transaction is never applied to
+    // this one. Read-only; a failure only means the form falls back to
+    // the stored side / shows no link warning.
+    const [facts, setFacts] = useState<{
+        transactionId: string;
+        statementSide: "income" | "expense" | null;
+        linkedMovementKind: string | null;
+    } | null>(null);
+
     useEffect(() => {
         if (!open) {
             setLoading(false);
         }
     }, [open]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        if (!open || !transaction) {
+            return;
+        }
+
+        const transactionId = transaction.id;
+
+        Promise.all([
+            service.getStatementSide(transactionId).catch(error => {
+                console.error("Failed to read the statement side:", error);
+                return null;
+            }),
+            new OverdraftService()
+                .getLinkByTransactionId(transactionId)
+                .catch(error => {
+                    console.error("Failed to read the overdraft link:", error);
+                    return null;
+                }),
+        ]).then(([statementSide, link]) => {
+            if (!cancelled) {
+                setFacts({
+                    transactionId,
+                    statementSide,
+                    linkedMovementKind: link?.entryKind ?? null,
+                });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, transaction?.id]);
+
+    const currentFacts =
+        facts && transaction && facts.transactionId === transaction.id
+            ? facts
+            : null;
 
     async function handleSubmit(values: TransactionFormValues) {
         if (!transaction) {
@@ -144,11 +201,20 @@ export function EditTransactionDialog({
 
                 <div className="min-h-0 flex-1 overflow-y-auto border-t border-slate-100 px-7 py-4">
                     <TransactionForm
+                        // A fresh form per transaction - nothing carries
+                        // over from the previous one.
+                        key={transaction.id}
                         defaultValues={getDefaultValues(transaction)}
                         loading={loading}
                         submitLabel="Save Changes"
                         onSubmit={handleSubmit}
                         onCancel={() => onOpenChange(false)}
+                        statementSide={currentFacts?.statementSide ?? null}
+                        linkedMovementKind={currentFacts?.linkedMovementKind ?? null}
+                        originalSide={sideOf(
+                            transaction.type,
+                            transaction.transferDirection ?? null
+                        )}
                     />
                 </div>
             </DialogContent>

@@ -86,6 +86,7 @@ export function EditCategoryDialog({
                 parentId: values.parentId || null,
                 name: values.name,
                 categoryType: values.categoryType,
+                transferDirection: values.transferDirection || null,
                 businessEntityId: values.businessEntityId || null,
                 description: values.description || null,
                 isActive: values.isActive,
@@ -174,6 +175,8 @@ export function EditCategoryDialog({
                             parentId: category.parentId ?? "",
                             name: category.name,
                             categoryType: category.categoryType,
+                            transferDirection:
+                                category.transferDirection ?? "",
                             businessEntityId:
                                 category.businessEntityId ?? "",
                             description: category.description ?? "",

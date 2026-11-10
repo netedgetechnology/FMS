@@ -11,6 +11,27 @@ import {
 
 import type { CategoryCsvRow } from "./categoryCsvImport";
 
+// A category's transfer direction as stored: only a TRANSFER category
+// has one ("IN" / "OUT", or null = used both ways); any other type null.
+// `undefined` (not given) stays undefined, so an update keeps the
+// stored direction.
+export function transferDirectionFor(
+    categoryType: Category["categoryType"],
+    transferDirection: Category["transferDirection"] | undefined
+): Category["transferDirection"] | undefined {
+    if (categoryType !== "TRANSFER") {
+        return null;
+    }
+
+    if (transferDirection === undefined) {
+        return undefined;
+    }
+
+    return transferDirection === "IN" || transferDirection === "OUT"
+        ? transferDirection
+        : null;
+}
+
 // The one place a new Category record (id, trimming, defaults,
 // timestamps) is built - shared by create() and the CSV import so both
 // generate categories identically.
@@ -31,6 +52,9 @@ export function buildCategoryRecord(
 
         categoryType:
             request.categoryType,
+
+        transferDirection:
+            transferDirectionFor(request.categoryType, request.transferDirection),
 
         financeScope:
             request.financeScope,
@@ -166,6 +190,12 @@ export class CategoryService {
 
         await this.repository.update({
             ...request,
+
+            transferDirection:
+                transferDirectionFor(
+                    request.categoryType,
+                    request.transferDirection
+                ),
 
             parentId:
                 request.parentId?.trim() || null,

@@ -3,7 +3,9 @@ import type {
     TransactionChannel,
 } from "@financeos/import-engine";
 
-import type { CategoryContextMapping } from "@/modules/categories/types";
+import { debitCreditTypeForDirection } from "@/core/accounting/transferClassification";
+import type { Category, CategoryContextMapping } from "@/modules/categories/types";
+import { categoryTransferDirection } from "@/modules/transactions/services/transactionTyping";
 import {
     isLockedResolution,
     resolveCategoryTransactionType,
@@ -75,9 +77,24 @@ export type CategoryDirectionLocks = Readonly<
 
 export function categoryDirectionLocksFor(
     mappings: readonly CategoryContextMapping[],
-    account: { id: string; businessEntityId: string | null } | null
+    account: { id: string; businessEntityId: string | null } | null,
+    // A Transfer category with a configured direction (In / Out) is
+    // locked to the statement side it means: In = Credit, Out = Debit - so
+    // no rule, learned pattern or option ever puts a repayment category on
+    // a credit, or a drawdown category on a debit.
+    categories: readonly Pick<Category, "id" | "categoryType" | "transferDirection">[] = []
 ): Record<string, "income" | "expense"> {
     const locks: Record<string, "income" | "expense"> = {};
+
+    for (const category of categories) {
+        const side = debitCreditTypeForDirection(
+            categoryTransferDirection(category)
+        );
+
+        if (side) {
+            locks[category.id] = side;
+        }
+    }
 
     if (!account) {
         return locks;
@@ -103,6 +120,24 @@ export function categoryDirectionLocksFor(
     }
 
     return locks;
+}
+
+/**
+ * The candidates with every learned category that is locked to the other
+ * direction removed (left Uncategorized for the user to pick) - learned
+ * patterns get the same direction check as custom rules, so a pattern
+ * taught under the wrong side never categorises a row against its
+ * statement.
+ */
+export function withoutLockedCategories<
+    T extends Pick<NormalizedTransactionCandidate, "categoryId" | "type">,
+>(candidates: readonly T[], locks: CategoryDirectionLocks | undefined): T[] {
+    return candidates.map(candidate =>
+        candidate.categoryId &&
+        !isRuleCategoryAllowed(candidate.categoryId, candidate.type, locks)
+            ? { ...candidate, categoryId: null }
+            : candidate
+    );
 }
 
 // Whether a rule's category may be applied to a row of this direction:

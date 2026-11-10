@@ -20,7 +20,10 @@ import {
     uncheckedLoanImportSummary,
     type LoanImportPaymentSummary,
 } from "@/modules/loans/services/LoanImportPaymentService";
-import { CategoryContextMappingRepository } from "@/modules/categories/repositories";
+import {
+    CategoryContextMappingRepository,
+    CategoryRepository,
+} from "@/modules/categories/repositories";
 
 import {
     processCsv,
@@ -47,6 +50,7 @@ import {
 import {
     applyCustomImportRules,
     categoryDirectionLocksFor,
+    withoutLockedCategories,
     customRuleFieldsForDescription,
     normalizeRuleText,
     type CategoryDirectionLocks,
@@ -544,6 +548,9 @@ export class ImportService {
     // loadCategoryDirectionLocks.
     private readonly accountRepository =
         new AccountRepository();
+
+    // Transfer categories' configured directions (direction locks).
+    private readonly categoryRepository = new CategoryRepository();
 
     private readonly categoryContextMappingRepository =
         new CategoryContextMappingRepository();
@@ -1102,10 +1109,17 @@ export class ImportService {
                 this.counterpartyRuleRepository
             );
 
+        const locks = await this.loadCategoryDirectionLocks(accountId);
+
+        // A learned category is checked against the row's Credit/Debit
+        // side exactly like a custom rule's (withoutLockedCategories).
         return withCustomImportRules(
-            learned,
+            {
+                ...learned,
+                candidates: withoutLockedCategories(learned.candidates, locks),
+            },
             await this.loadCustomRules(accountId),
-            await this.loadCategoryDirectionLocks(accountId)
+            locks
         );
     }
 
@@ -1117,9 +1131,19 @@ export class ImportService {
         accountId: string
     ): Promise<CategoryDirectionLocks> {
         try {
-            const [account, mappings] = await Promise.all([
+            const [account, mappings, categories] = await Promise.all([
                 this.accountRepository.getById(accountId),
                 this.categoryContextMappingRepository.getAll(),
+                // Transfer categories' configured directions. A read
+                // failure here only drops those locks, never the
+                // account's mapping locks.
+                this.categoryRepository.getAll().catch(error => {
+                    console.error(
+                        "Failed to load categories for direction locks:",
+                        error
+                    );
+                    return [];
+                }),
             ]);
 
             return categoryDirectionLocksFor(
@@ -1130,7 +1154,8 @@ export class ImportService {
                           businessEntityId:
                               account.businessEntityId ?? null,
                       }
-                    : null
+                    : null,
+                categories
             );
         } catch (error) {
             console.error(

@@ -10,6 +10,8 @@ import {
     isLockedResolution,
     resolveCategoryTransactionType,
 } from "@/modules/categories/utils";
+import { debitCreditTypeForDirection } from "@/core/accounting/transferClassification";
+import { categoryTransferDirection } from "@/modules/transactions/services/transactionTyping";
 
 // ---------------------------------------------------------------------
 // Import Preview - Category column options
@@ -81,6 +83,16 @@ export function resolveImportCategoryOptions(params: {
         .filter(category => {
             if (!direction) {
                 return true;
+            }
+
+            // A Transfer category with a configured direction only fits
+            // rows of that side (In = Credit, Out = Debit).
+            const transferSide = debitCreditTypeForDirection(
+                categoryTransferDirection(category)
+            );
+
+            if (transferSide && transferSide !== direction) {
+                return false;
             }
 
             const resolution = resolveCategoryTransactionType({

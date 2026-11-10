@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FinanceFoundationMigration } from "@/core/database/migrations/004_finance_foundation";
+import { CategoryTransferDirectionMigration } from "@/core/database/migrations/049_category_transfer_direction";
 
 import { CategoryService } from "../services";
 import type { Category } from "../types";
@@ -254,6 +255,7 @@ describe("runBulkCategoryDelete", () => {
         const db = new DatabaseSync(":memory:");
 
         db.exec(FinanceFoundationMigration.sql);
+        db.exec(CategoryTransferDirectionMigration.sql);
         db.exec(`
             INSERT INTO categories (id, name, category_type) VALUES ('rent', 'Rent', 'EXPENSE');
             INSERT INTO categories (id, name, category_type) VALUES ('salary', 'Salary', 'INCOME');
@@ -289,6 +291,7 @@ describe("runBulkCategoryDelete", () => {
         const db = new DatabaseSync(":memory:");
 
         db.exec(FinanceFoundationMigration.sql);
+        db.exec(CategoryTransferDirectionMigration.sql);
         db.exec(`
             INSERT INTO categories (id, name, category_type) VALUES ('rent', 'Rent', 'EXPENSE');
             INSERT INTO categories (id, name, category_type) VALUES ('fuel', 'Fuel', 'EXPENSE');

@@ -21,6 +21,15 @@ export const categorySchema = z.object({
             "TRANSFER",
         ]),
 
+    // TRANSFER categories only: "IN" / "OUT", or "" = used both ways.
+    transferDirection:
+        z.enum([
+            "",
+            "IN",
+            "OUT",
+        ])
+            .optional(),
+
     // No financeScope: a category's scope is managed only from the
     // Scopes screen (CategoryScopesDialog), never from Create/Edit.
 

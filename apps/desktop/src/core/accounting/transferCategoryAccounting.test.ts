@@ -192,6 +192,11 @@ beforeEach(() => {
         db.exec(migration.sql);
     }
 
+    // TransactionService.update reads a transaction's overdraft link.
+    db.exec(
+        "CREATE TABLE overdraft_transaction_links (id TEXT PRIMARY KEY, loan_id TEXT, transaction_id TEXT UNIQUE, entry_kind TEXT, link_source TEXT, created_at TEXT);"
+    );
+
     sqlite.db = db;
 });
 

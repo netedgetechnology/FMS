@@ -67,10 +67,10 @@ vi.mock("@/core/database/engine/SQLiteProvider", () => ({
 const NETEDGE = "acct-netedge";
 const OTHER = "acct-other";
 
-const KELIKA_DEBIT = "NEFT/MB/AXOMB25902135240/KELIKA SPORTS/ICICI BANK LIMITED/Others-Transfer";
+const KELIKA_DEBIT = "NEFT/MB/AXOMB10000000001/KELIKA SPORTS/ICICI BANK LIMITED/Others-Transfer";
 const KELIKA_DEBIT_REIMPORT = "NEFT/MB/AXOMB26011223344/KELIKA SPORTS/ICICI BANK LIMITED/Others-Transfer";
 const MKS_CREDIT = "RTGS/MAHBR52026080324679176/MKS CONSTRO VENTURE PR/BANK OF MAHARASHTRA//URGENT///.//.";
-const PAYPAL_CREDIT = "NEFT/CITIN26733891285/PAYPAL PAYMENTS PVT L PACB I/CITI BANK/P0802BUQKTSD75C6U6       -AFN";
+const PAYPAL_CREDIT = "NEFT/CITIN10000000001/PAYPAL PAYMENTS PVT L PACB I/CITI BANK/P0001ABCDEFG01X1Y1       -AFN";
 
 function category(id: string, name: string, isActive = true): Category {
     return {
@@ -136,6 +136,13 @@ beforeEach(() => {
     ]) {
         db.exec(migration.sql);
     }
+    // TransactionService.update reads the bank statement's side through
+    // these (empty here: no transaction came from an import).
+    db.exec(`
+        CREATE TABLE import_batches (id TEXT PRIMARY KEY, account_id TEXT);
+        CREATE TABLE import_rows (id TEXT PRIMARY KEY, import_batch_id TEXT, transaction_id TEXT, normalized_data TEXT, created_at TEXT);
+        CREATE TABLE overdraft_transaction_links (id TEXT PRIMARY KEY, loan_id TEXT, transaction_id TEXT UNIQUE, entry_kind TEXT, link_source TEXT, created_at TEXT);
+    `);
     sqlite.db = db;
 });
 

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FinanceFoundationMigration } from "@/core/database/migrations/004_finance_foundation";
+import { CategoryTransferDirectionMigration } from "@/core/database/migrations/049_category_transfer_direction";
 import { resolveImportCategoryOptions } from "@/modules/imports/pages/importCategoryOptions";
 
 import { CategoryService, parseCategoryCsv, CATEGORY_CSV_TEMPLATE } from "../services";
@@ -96,6 +97,7 @@ function seed(db: DatabaseSync) {
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("CREATE TABLE currencies (id TEXT PRIMARY KEY)");
     db.exec(FinanceFoundationMigration.sql);
+    db.exec(CategoryTransferDirectionMigration.sql);
     db.exec(`
         CREATE TABLE transactions (
             id TEXT PRIMARY KEY,

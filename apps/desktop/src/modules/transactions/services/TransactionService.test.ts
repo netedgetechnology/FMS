@@ -8,6 +8,16 @@ import type {
 
 import { TransactionService } from "./TransactionService";
 
+// These tests stub the repositories (no database): a transaction here
+// is never linked to an overdraft.
+function withoutOverdraftLinks(service: TransactionService): TransactionService {
+    Object.defineProperty(service, "overdraftLinkRepository", {
+        value: { getByTransactionId: async () => null },
+    });
+
+    return service;
+}
+
 // TransactionRepository talks to a live Tauri SQLite connection,
 // unavailable in this test environment (see TransactionRepository.test.ts).
 // Following that same established pattern, these tests inject a fake
@@ -23,13 +33,17 @@ function createServiceWithFakeRepository(): {
     created: Array<Transaction>;
     updated: Array<UpdateTransactionRequest>;
 } {
-    const service = new TransactionService();
+    const service = withoutOverdraftLinks(new TransactionService());
 
     const created: Array<Transaction> = [];
     const updated: Array<UpdateTransactionRequest> = [];
 
     Object.defineProperty(service, "repository", {
         value: {
+            // Not imported: no bank statement side.
+            async getStatementSide() {
+                return null;
+            },
             async create(transaction: Transaction) {
                 created.push(transaction);
             },
@@ -311,13 +325,17 @@ describe("TransactionService - category context mapping validation", () => {
             type: string;
         };
     }): Fakes {
-        const service = new TransactionService();
+        const service = withoutOverdraftLinks(new TransactionService());
 
         const created: Array<Transaction> = [];
         const updated: Array<UpdateTransactionRequest> = [];
 
         Object.defineProperty(service, "repository", {
             value: {
+                // Not imported: no bank statement side.
+                async getStatementSide() {
+                    return null;
+                },
                 async create(transaction: Transaction) {
                     created.push(transaction);
                 },
@@ -589,11 +607,15 @@ describe("TransactionService.delete - EMI-linked transaction guard", () => {
         service: TransactionService;
         deleted: string[];
     } {
-        const service = new TransactionService();
+        const service = withoutOverdraftLinks(new TransactionService());
         const deleted: string[] = [];
 
         Object.defineProperty(service, "repository", {
             value: {
+                // Not imported: no bank statement side.
+                async getStatementSide() {
+                    return null;
+                },
                 async delete(id: string) {
                     deleted.push(id);
                 },
@@ -650,7 +672,7 @@ describe("TransactionService.findEmiLinkedTransactionIds", () => {
         service: TransactionService;
         requestedIds: string[][];
     } {
-        const service = new TransactionService();
+        const service = withoutOverdraftLinks(new TransactionService());
         const requestedIds: string[][] = [];
 
         Object.defineProperty(

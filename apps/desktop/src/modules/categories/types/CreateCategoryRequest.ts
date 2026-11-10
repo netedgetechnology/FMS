@@ -1,4 +1,5 @@
 import {
+    CategoryTransferDirection,
     CategoryType,
     FinanceScope,
 } from ".";
@@ -9,6 +10,8 @@ export interface CreateCategoryRequest {
     name: string;
 
     categoryType: CategoryType;
+
+    transferDirection?: CategoryTransferDirection | null;
 
     financeScope: FinanceScope;
 

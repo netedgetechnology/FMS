@@ -11,6 +11,7 @@ import {
 } from "../repositories";
 
 import { LoanSchedulePaymentRepository } from "@/modules/loans/repositories/LoanSchedulePaymentRepository";
+import { OverdraftTransactionLinkRepository } from "@/modules/loans/repositories/OverdraftTransactionLinkRepository";
 import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
 
 import {
@@ -23,7 +24,16 @@ import {
     resolveCategoryTransactionType,
 } from "@/modules/categories/utils";
 
-import { incompatibleTransactionIds } from "./bulkCategoryChange";
+import {
+    bulkDirectionConflictIds,
+    incompatibleTransactionIds,
+} from "./bulkCategoryChange";
+import {
+    categoryTransferDirection,
+    directionChecks,
+    relinkedMovementKind,
+    type DebitCreditSide,
+} from "./transactionTyping";
 import { bulkMoveBlockReason } from "./bulkAccountMove";
 
 import {
@@ -67,6 +77,10 @@ export class TransactionService {
     // performs the matching loan-side correction.
     private readonly loanSchedulePaymentRepository =
         new LoanSchedulePaymentRepository();
+
+    // Overdraft links follow a corrected principal direction (update()).
+    private readonly overdraftLinkRepository =
+        new OverdraftTransactionLinkRepository();
 
     private readonly accountRepository =
         new AccountRepository();
@@ -142,6 +156,39 @@ export class TransactionService {
         }
     }
 
+    // The same direction rules the Add / Edit form enforces before saving
+    // (see transactionTyping.directionChecks), checked again here so no
+    // caller can save a transaction whose direction contradicts its
+    // category's configured Transfer direction, or whose side THIS save
+    // turns against the bank statement. Only blocking problems throw;
+    // nothing is changed for the caller.
+    private async assertDirectionConsistent(params: {
+        categoryId: string | null;
+        typing: { type: TransactionType; transferDirection: TransferDirection | null };
+        statementSide: DebitCreditSide | null;
+        originalSide: DebitCreditSide | null;
+        typingUnchanged?: boolean;
+        linkedMovementKind?: string | null;
+    }): Promise<void> {
+        const category = params.categoryId
+            ? await this.categoryRepository.getById(params.categoryId)
+            : null;
+
+        const checks = directionChecks({
+            savedSide: balanceSide(params.typing),
+            statementSide: params.statementSide,
+            categoryName: category?.name ?? null,
+            categoryDirection: categoryTransferDirection(category),
+            linkedMovementKind: params.linkedMovementKind ?? null,
+            originalSide: params.originalSide,
+            typingUnchanged: params.typingUnchanged ?? true,
+        });
+
+        if (checks.blocking.length > 0) {
+            throw new Error(checks.blocking[0]);
+        }
+    }
+
     // The one place a saved transaction's type is reconciled with its
     // category (see applyTransferCategoryRule): a TRANSFER category makes
     // it a transfer, keeping its money direction - from `direction` when
@@ -185,6 +232,14 @@ export class TransactionService {
         id: string
     ): Promise<Transaction | null> {
         return await this.repository.getById(id);
+    }
+
+    // The bank statement's Debit/Credit side of an imported transaction
+    // (see TransactionRepository.getStatementSide), or null.
+    async getStatementSide(
+        id: string
+    ): Promise<"income" | "expense" | null> {
+        return await this.repository.getStatementSide(id);
     }
 
     async findDuplicate(
@@ -260,6 +315,13 @@ export class TransactionService {
             request.accountId,
             typing.type
         );
+
+        await this.assertDirectionConsistent({
+            categoryId: request.categoryId?.trim() || null,
+            typing,
+            statementSide: null,
+            originalSide: null,
+        });
 
         const now =
             new Date().toISOString();
@@ -401,6 +463,37 @@ export class TransactionService {
             typing.type
         );
 
+        // The bank statement only speaks for the account it came from: a
+        // move to another account leaves it out.
+        const statementSide =
+            (request.accountId ?? existing.accountId) === existing.accountId
+                ? await this.repository.getStatementSide(existing.id)
+                : null;
+
+        const savedCategoryId =
+            (request.categoryId !== undefined
+                ? request.categoryId?.trim()
+                : existing.categoryId) || null;
+
+        const overdraftLink =
+            await this.overdraftLinkRepository.getByTransactionId(existing.id);
+
+        await this.assertDirectionConsistent({
+            categoryId: savedCategoryId,
+            typing,
+            statementSide,
+            originalSide: balanceSide(existing),
+            // An existing mismatch with the statement is only tolerated
+            // when this save leaves the category, Type and direction as
+            // they were.
+            typingUnchanged:
+                savedCategoryId === (existing.categoryId ?? null) &&
+                typing.type === existing.type &&
+                (typing.transferDirection ?? null) ===
+                    (existing.transferDirection ?? null),
+            linkedMovementKind: overdraftLink?.entryKind ?? null,
+        });
+
         // A partial update merged over the stored row: every field the
         // request omits keeps its stored value. The Edit form only carries
         // the fields it shows, so without this an edit silently erased
@@ -484,6 +577,30 @@ export class TransactionService {
                 merged.originalNarration?.trim() || null,
         });
 
+        // An overdraft principal link follows the corrected direction
+        // (Repayment <-> Drawdown), so the OD counts it the way the money
+        // actually moved. Never an Interest / Charge link (refused above).
+        const relinked = overdraftLink
+            ? relinkedMovementKind(overdraftLink.entryKind, balanceSide(typing))
+            : "keep";
+
+        if (overdraftLink && (relinked === "DRAWDOWN" || relinked === "REPAYMENT")) {
+            try {
+                await this.overdraftLinkRepository.updateEntryKind(
+                    existing.id,
+                    overdraftLink.entryKind,
+                    relinked
+                );
+            } catch (error) {
+                // The transaction is saved; the link no longer fits it, so
+                // the OD shows it as Needs Review until it is re-linked.
+                console.error("Failed to update the overdraft link:", error);
+                throw new Error(
+                    `The transaction was saved, but its overdraft link could not be changed to ${relinked === "DRAWDOWN" ? "Drawdown" : "Repayment"}. The overdraft shows it under Needs Review - unlink and link it again.`
+                );
+            }
+        }
+
         await this.learnFromEdit(existing, {
             accountId: request.accountId ?? existing.accountId,
             payee: request.payee?.trim() || "",
@@ -494,6 +611,7 @@ export class TransactionService {
             transactionType: request.transactionType ?? null,
             type: typing.type,
             transferDirection: typing.transferDirection,
+            statementSide,
         });
     }
 
@@ -521,6 +639,7 @@ export class TransactionService {
             transactionType: Transaction["transactionType"];
             type: TransactionType;
             transferDirection: TransferDirection | null;
+            statementSide?: DebitCreditSide | null;
         }
     ): Promise<void> {
         const changed =
@@ -535,6 +654,13 @@ export class TransactionService {
         const side = balanceSide(saved);
 
         if (!side) {
+            return;
+        }
+
+        // Never teach a pattern under a Debit/Credit side the bank
+        // statement contradicts - the next import of that narration would
+        // be keyed (and categorised) on the wrong side.
+        if (saved.statementSide && saved.statementSide !== side) {
             return;
         }
 
@@ -645,6 +771,40 @@ export class TransactionService {
                     categoryId
                 ),
             ]);
+
+        // A Transfer category with a configured direction never changes a
+        // transaction's sign in bulk - checked against each row's current
+        // side and its bank statement's side.
+        if (categoryTransferDirection(category)) {
+            const statementSideById = new Map<string, "income" | "expense">();
+
+            for (const transaction of transactions) {
+                const side = await this.repository.getStatementSide(
+                    transaction.id
+                );
+
+                if (side) {
+                    statementSideById.set(transaction.id, side);
+                }
+            }
+
+            const conflicts = bulkDirectionConflictIds(
+                category,
+                transactions,
+                statementSideById
+            );
+
+            if (conflicts.length > 0) {
+                const direction =
+                    categoryTransferDirection(category) === "IN"
+                        ? "money in (Transfer In)"
+                        : "money out (Transfer Out)";
+
+                throw new Error(
+                    `"${category.name}" is for ${direction}, but ${conflicts.length} of the selected transactions move money the other way (by their current amount or their bank statement). Correct those one at a time in Edit Transaction.`
+                );
+            }
+        }
 
         if (transactions.length === 0) {
             throw new Error(

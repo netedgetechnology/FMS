@@ -464,3 +464,132 @@ describe("page and dialog wiring", () => {
         }
     });
 });
+
+describe("the five loan categories in the bulk dropdown", () => {
+    // The live shape (fictional ids): Netedge 3999 belongs to a business
+    // entity on which "Loan Installment" and "Loan Principal Drawdown" are
+    // locked to EXPENSE; OD movements were imported as "Bank Transfer"
+    // (a TRANSFER category) transfers.
+    const ENTITY = "be-netedge";
+    const ACCT = "acct-3999";
+    const loanCategories: Category[] = [
+        category("lc-1", "Loan Installment", "EXPENSE"),
+        category("lc-2", "Loan Interest", "EXPENSE"),
+        category("lc-3", "Loan Interest Recovered", "INCOME"),
+        category("lc-4", "Loan Principal Repayment", "EXPENSE"),
+        category("lc-5", "Loan Principal Drawdown", "EXPENSE"),
+        category("lc-bank", "Bank Transfer", "TRANSFER"),
+        category("lc-hosting", "Hosting Expense", "EXPENSE"),
+        category("lc-gateway", "Payment Gateway", "INCOME"),
+    ];
+    const FIVE = ["Loan Installment", "Loan Interest", "Loan Interest Recovered", "Loan Principal Repayment", "Loan Principal Drawdown"];
+    const lock = (categoryId: string, categoryType: "INCOME" | "EXPENSE"): CategoryContextMapping => ({
+        id: `map-${categoryId}`, categoryId, accountId: null, businessEntityId: ENTITY,
+        categoryType, isActive: true, createdAt: "", updatedAt: "",
+    });
+    const loanMappings = [lock("lc-1", "EXPENSE"), lock("lc-5", "EXPENSE"), lock("lc-hosting", "EXPENSE"), lock("lc-gateway", "INCOME")];
+    const entities = new Map<string, string | null>([[ACCT, ENTITY]]);
+
+    type Spec = { id: string; type: Transaction["type"]; categoryId: string | null; transferDirection?: "IN" | "OUT" | null };
+    const tx = (spec: Spec) => ({ accountId: ACCT, transferDirection: null, ...spec });
+    const options = (selection: Spec[]) =>
+        categoriesForBulkChange(loanCategories, selection.map(tx), loanMappings, entities).map(c => c.name);
+
+    const bankOut: Spec = { id: "o1", type: "transfer", transferDirection: "OUT", categoryId: "lc-bank" };
+    const bankIn: Spec = { id: "i1", type: "transfer", transferDirection: "IN", categoryId: "lc-bank" };
+    const expense: Spec = { id: "e1", type: "expense", categoryId: "lc-4" };
+
+    function loanService(): TransactionService {
+        const s = new TransactionService();
+        Object.defineProperty(s, "accountRepository", {
+            value: { getAll: async () => [{ id: ACCT, businessEntityId: ENTITY }], getById: async () => ({ id: ACCT, businessEntityId: ENTITY }) },
+        });
+        Object.defineProperty(s, "categoryRepository", {
+            value: { getById: async (id: string) => loanCategories.find(c => c.id === id) ?? null, getAll: async () => loanCategories },
+        });
+        Object.defineProperty(s, "categoryContextMappingRepository", {
+            value: { getByCategoryId: async (id: string) => loanMappings.filter(m => m.categoryId === id) },
+        });
+        return s;
+    }
+
+    function seedRows(selection: Spec[]) {
+        sqlite.db!.exec(`INSERT INTO accounts (id) VALUES ('${ACCT}')`);
+        const insert = sqlite.db!.prepare(
+            "INSERT INTO transactions (id, account_id, category_id, payee, type, transfer_direction, amount, transaction_date) VALUES (?, ?, ?, 'TATA CAPITAL', ?, ?, 1000, '2026-09-16')"
+        );
+        for (const row of selection) insert.run(row.id, ACCT, row.categoryId, row.type, row.transferDirection ?? null);
+    }
+
+    it("REGRESSION: Bank Transfer OUT rows were missing Loan Installment and Loan Principal Drawdown; all five are offered now", () => {
+        // What the old filter did - the lock checked against the CURRENT type (transfer):
+        expect(incompatibleTransactionIds(loanCategories[0]!, [tx(bankOut)], loanMappings, entities)).toEqual(["o1"]);
+        expect(incompatibleTransactionIds(loanCategories[4]!, [tx(bankOut)], loanMappings, entities)).toEqual(["o1"]);
+
+        // Apply turns them back into expenses first, so both are valid.
+        expect(options([bankOut])).toEqual(expect.arrayContaining(FIVE));
+    });
+
+    it("expense rows on the locked entity's account: all five", () => {
+        expect(options([expense])).toEqual(expect.arrayContaining(FIVE));
+        expect(options([expense, bankOut])).toEqual(expect.arrayContaining(FIVE));
+    });
+
+    it("the existing rules for other categories are unchanged", () => {
+        expect(options([expense])).toContain("Hosting Expense");
+        expect(options([expense])).not.toContain("Payment Gateway");
+        expect(options([bankIn])).toContain("Payment Gateway");
+        expect(options([bankIn])).not.toContain("Hosting Expense");
+        // A TRANSFER category is still checked as a transfer.
+        expect(options([expense, bankIn])).toContain("Bank Transfer");
+    });
+
+    it("money IN (Bank Transfer IN) becomes income: a category locked to Expense for that entity stays hidden - the lock is kept", () => {
+        const names = options([bankIn]);
+
+        expect(names).toEqual(expect.arrayContaining(["Loan Interest", "Loan Interest Recovered", "Loan Principal Repayment"]));
+        expect(names).not.toContain("Loan Installment");
+        expect(names).not.toContain("Loan Principal Drawdown");
+    });
+
+    it("an inactive loan category is never offered", () => {
+        const inactive = loanCategories.map(c => (c.id === "lc-3" ? { ...c, isActive: false } : c));
+        expect(categoriesForBulkChange(inactive, [tx(expense)], loanMappings, entities).map(c => c.name)).not.toContain("Loan Interest Recovered");
+    });
+
+    it.each([
+        ["Bank Transfer OUT", [bankOut]],
+        ["Bank Transfer IN", [bankIn]],
+        ["expense + Bank Transfer OUT", [expense, bankOut]],
+        ["expense + Bank Transfer IN", [expense, bankIn]],
+    ] as const)("the dropdown offers exactly what Apply accepts: %s", async (_label, selection) => {
+        const offered = options([...selection]);
+
+        for (const target of loanCategories) {
+            sqlite.db = new DatabaseSync(":memory:");
+            seed(sqlite.db);
+            seedRows([...selection]);
+
+            const accepted = await loanService()
+                .changeCategory(selection.map(row => row.id), target.id)
+                .then(() => true, () => false);
+
+            expect([target.name, accepted]).toEqual([target.name, offered.includes(target.name)]);
+        }
+    });
+
+    it("applying a loan category only sets the category - no loan / OD link is created or removed", async () => {
+        seedRows([bankOut]);
+        sqlLog.length = 0;
+
+        await loanService().changeCategory(["o1"], "lc-4");
+
+        expect(rows().get("o1")).toMatchObject({ category_id: "lc-4", type: "expense" });
+        expect(sqlLog.join("\n")).not.toMatch(/loan|overdraft/i);
+    });
+
+    it("the dialog names the categories a lock hides instead of dropping them silently", () => {
+        const dialog = readFileSync(path.resolve(__dirname, "../components/BulkChangeCategoryDialog.tsx"), "utf8");
+        expect(dialog).toContain("({hiddenNames.join(\", \")})");
+    });
+});

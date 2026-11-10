@@ -133,6 +133,13 @@ beforeEach(() => {
     ]) {
         db.exec(migration.sql);
     }
+    // TransactionService.update reads the bank statement's side through
+    // these (empty here: no transaction came from an import).
+    db.exec(`
+        CREATE TABLE import_batches (id TEXT PRIMARY KEY, account_id TEXT);
+        CREATE TABLE import_rows (id TEXT PRIMARY KEY, import_batch_id TEXT, transaction_id TEXT, normalized_data TEXT, created_at TEXT);
+        CREATE TABLE overdraft_transaction_links (id TEXT PRIMARY KEY, loan_id TEXT, transaction_id TEXT UNIQUE, entry_kind TEXT, link_source TEXT, created_at TEXT);
+    `);
     sqlite.db = db;
 });
 
@@ -197,9 +204,11 @@ describe("Add Transaction", () => {
         expect(form).not.toContain("Money into this account");
         expect(form).not.toMatch(/label="Direction"/);
         expect(form).not.toMatch(/name="transferDirection"/);
-        // Derived: remembered Income/Expense -> OUT/IN when Type becomes Transfer.
-        expect(form).toMatch(/lastDebitCreditRef\.current = transactionType;/);
-        expect(form).toMatch(/transferDirectionForType\(lastDebitCreditRef\.current\)/);
+        // Derived: remembered Income/Expense (a manual pick, else the bank
+        // statement's side, else the side shown) -> OUT/IN when Type
+        // becomes Transfer - see transactionFormTyping.test.ts.
+        expect(form).toMatch(/shownSideRef\.current = transactionType;/);
+        expect(form).toMatch(/setValue\("transferDirection", transferDirectionForType\(side\)\);/);
         // Income/Expense never carries a transfer direction.
         expect(form).toMatch(/if \(getValues\("transferDirection"\) != null\) \{\s+setValue\("transferDirection", null\);/);
     });
@@ -260,19 +269,17 @@ describe("Edit Transaction", () => {
         expect(await load(id)).toMatchObject({ type: "transfer", transferDirection: "OUT", notes: "moved to savings", payee: "To Savings" });
     });
 
-    it("the form keeps a standalone Transfer when a normal category is picked (unless a mapping locks the type)", () => {
-        const form = readFileSync(path.resolve(__dirname, "../../modules/transactions/components/TransactionForm.tsx"), "utf8");
+    it("the form sets the Type to the selected category's type - Transfer included, both ways", () => {
+        const form = readFileSync(path.resolve(__dirname, "../../modules/transactions/components/TransactionForm.tsx"), "utf8").replace(/\r\n/g, "\n");
 
-        expect(form).toMatch(
-            /currentType === "transfer" &&\s+suggestedType !== "transfer" &&\s+!isLockedResolution\(typeResolution\)\s+\) \{\s+return;/
-        );
-    });
-
-    it("the form restores Income/Expense from the direction when leaving a Transfer category (by type, not name)", () => {
-        const form = readFileSync(path.resolve(__dirname, "../../modules/transactions/components/TransactionForm.tsx"), "utf8");
-
-        expect(form).toMatch(/previousCategory\?\.categoryType === "TRANSFER" &&\s+typeResolution\.categoryType !== "TRANSFER"/);
-        expect(form).toMatch(/debitCreditTypeForDirection\(\s+getValues\("transferDirection"\)\s+\)/);
+        // (Replaces the old form rules "a Transfer stays a Transfer on a
+        // normal category" and "leaving a Transfer category restores
+        // Income/Expense from the direction": the selected category's
+        // type is now the default - see transactionFormTyping.ts.)
+        expect(form).toMatch(/const selectedType = typeForSelectedCategory\(\s+typeResolution\.categoryType\s+\);/);
+        expect(form).not.toMatch(/currentType === "transfer" &&\s+suggestedType !== "transfer"/);
+        // Only a real change of category / account - never opening the form.
+        expect(form).toMatch(/previous\.accountId === \(accountId \?\? ""\) &&\s+previous\.categoryId === \(categoryId \?\? ""\)\)\s+\) \{\s+return;/);
     });
 });
 
