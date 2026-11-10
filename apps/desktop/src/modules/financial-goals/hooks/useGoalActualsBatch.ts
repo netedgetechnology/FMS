@@ -1,8 +1,11 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react";
+
+import { InitialLoadTracker } from "@/core/async/InitialLoadTracker";
 
 import { GoalActualsService } from "../services";
 import type { GoalCalcResult } from "../services";
@@ -28,19 +31,29 @@ export function useGoalActualsBatch(
         string | null
     >(null);
 
+    // Only the first calculation shows the loading state; a refresh after
+    // a mutation keeps the current figures on screen until the new ones
+    // arrive (InitialLoadTracker). A failed calculation still clears them
+    // and shows the error, exactly as before - figures that could not be
+    // recalculated are never shown as current.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const load = useCallback(async () => {
         if (!enabled) {
             setResultsByGoalId(new Map());
             return;
         }
 
-        setLoading(true);
+        if (loadTracker.current.showsLoading()) {
+            setLoading(true);
+        }
         setError(null);
 
         try {
             setResultsByGoalId(
                 await service.getAllGoalActuals()
             );
+            loadTracker.current.markLoaded();
         } catch (err) {
             console.error(
                 "Failed to calculate goal actuals:",

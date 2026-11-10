@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDateFormatter } from "@/core/formatting";
 import { getErrorMessage } from "@/core/errors";
+import { InitialLoadTracker } from "@/core/async/InitialLoadTracker";
 import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 import {
     FileArchive,
@@ -100,6 +101,11 @@ export function DocumentsPage() {
     // delete - has already resolved and shown the correct list.
     const requestGuard = useRef(new LatestRequestGuard());
 
+    // Only the first load replaces the list with "Loading..."; a refresh
+    // after upload / edit / delete keeps it on screen (InitialLoadTracker).
+    // A failed refresh shows the error banner above the list, as before.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     async function handleOpen(document: Document) {
         if (!document.filePath) {
             setError("This document has no stored file.");
@@ -123,7 +129,9 @@ export function DocumentsPage() {
         const requestId = requestGuard.current.start();
 
         try {
-            setLoading(true);
+            if (loadTracker.current.showsLoading()) {
+                setLoading(true);
+            }
             setError(null);
 
             const result = await documentService.getAll();
@@ -133,6 +141,7 @@ export function DocumentsPage() {
             }
 
             setDocuments(result);
+            loadTracker.current.markLoaded();
         } catch (error) {
             if (requestGuard.current.isStale(requestId)) {
                 return;

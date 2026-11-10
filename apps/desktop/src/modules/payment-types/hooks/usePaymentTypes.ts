@@ -7,6 +7,10 @@ import {
 } from "react";
 
 import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
 
 import { PaymentTypeService } from "../services";
 import type { PaymentType } from "../types";
@@ -50,12 +54,17 @@ export function usePaymentTypes() {
     // newer one.
     const requestGuard = useRef(new LatestRequestGuard());
 
+    // Only the first load blanks the page - see InitialLoadTracker.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const loadPaymentTypes =
         useCallback(async () => {
             const requestId = requestGuard.current.start();
 
             try {
-                setLoading(true);
+                if (loadTracker.current.showsLoading()) {
+                    setLoading(true);
+                }
                 setError(null);
 
                 const data =
@@ -66,6 +75,7 @@ export function usePaymentTypes() {
                 }
 
                 setPaymentTypes(data);
+                loadTracker.current.markLoaded();
 
             } catch (err) {
 
@@ -78,11 +88,16 @@ export function usePaymentTypes() {
                     err
                 );
 
-                setError(
-                    err instanceof Error
-                        ? `${err.name}: ${err.message}`
-                        : String(err)
-                );
+                // Rows already shown stay; only a failed first load shows the error.
+                if (loadTracker.current.hasLoaded) {
+                    reportBackgroundRefreshFailure("payment types", err);
+                } else {
+                    setError(
+                        err instanceof Error
+                            ? `${err.name}: ${err.message}`
+                            : String(err)
+                    );
+                }
 
             } finally {
                 if (!requestGuard.current.isStale(requestId)) {

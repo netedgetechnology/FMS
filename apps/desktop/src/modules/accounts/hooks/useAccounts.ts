@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
 import { AccountService } from "../services";
 import { Account } from "../types";
 
@@ -17,12 +21,17 @@ export function useAccounts() {
     // after a delete - has already resolved and shown the correct list.
     const requestGuard = useRef(new LatestRequestGuard());
 
+    // Only the first load blanks the page - see InitialLoadTracker.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const loadAccounts = useCallback(async () => {
         const requestId = requestGuard.current.start();
 
         try {
 
-            setLoading(true);
+            if (loadTracker.current.showsLoading()) {
+                setLoading(true);
+            }
             setError(null);
 
             const data = await service.getAll();
@@ -32,6 +41,7 @@ export function useAccounts() {
             }
 
             setAccounts(data);
+            loadTracker.current.markLoaded();
 
         } catch (err) {
 
@@ -46,7 +56,12 @@ export function useAccounts() {
                     ? `${err.name}: ${err.message}`
                     : String(err);
 
-            setError(message);
+            // Rows already shown stay; only a failed first load shows the error.
+            if (loadTracker.current.hasLoaded) {
+                reportBackgroundRefreshFailure("accounts", err);
+            } else {
+                setError(message);
+            }
 
         } finally {
 

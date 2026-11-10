@@ -22,7 +22,41 @@ export interface EditTransactionDialogProps {
     transaction: Transaction | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onSuccess?: () => Promise<void> | void;
+    /**
+     * Called after a successful save with the transaction as now stored
+     * (type, transfer direction and every other field resolved by
+     * TransactionService), or null if it could not be read back.
+     */
+    onSuccess?: (updated: Transaction | null) => Promise<void> | void;
+}
+
+/**
+ * Saves the edit through TransactionService.update() and reads the
+ * stored row back - the service may change what was submitted (a
+ * TRANSFER category makes it a transfer with a direction, leaving one
+ * restores Income / Expense), so the list must show the stored row, not
+ * the form values. Throws, reading nothing back, when the save fails.
+ */
+export async function saveTransactionEdit(
+    service: Pick<TransactionService, "update" | "getById">,
+    transaction: Transaction,
+    values: TransactionFormValues
+): Promise<Transaction | null> {
+    const { description, ...rest } = values;
+
+    await service.update({
+        id: transaction.id,
+        ...rest,
+        originalNarration: description,
+        // Not a form field - never user-editable on the manual
+        // Edit dialog. TransactionService.update now preserves
+        // every field this request omits, so this is redundant,
+        // but carried through explicitly to keep the imported
+        // transaction's Mapping Name (sourceStatement) obvious.
+        sourceStatement: transaction.sourceStatement,
+    });
+
+    return await service.getById(transaction.id);
 }
 
 export function getDefaultValues(
@@ -128,21 +162,13 @@ export function EditTransactionDialog({
         try {
             setLoading(true);
 
-            const { description, ...rest } = values;
+            const updated = await saveTransactionEdit(
+                service,
+                transaction,
+                values
+            );
 
-            await service.update({
-                id: transaction.id,
-                ...rest,
-                originalNarration: description,
-                // Not a form field - never user-editable on the manual
-                // Edit dialog. TransactionService.update now preserves
-                // every field this request omits, so this is redundant,
-                // but carried through explicitly to keep the imported
-                // transaction's Mapping Name (sourceStatement) obvious.
-                sourceStatement: transaction.sourceStatement,
-            });
-
-            await onSuccess?.();
+            await onSuccess?.(updated);
 
             toast.success("Transaction updated successfully.");
 

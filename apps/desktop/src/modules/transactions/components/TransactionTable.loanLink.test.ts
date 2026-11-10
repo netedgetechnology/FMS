@@ -40,7 +40,7 @@ function transaction(id: string): Transaction {
         counterparty: null,
         branch: null,
         type: "expense",
-        amount: 151167,
+        amount: 148250,
         transactionDate: "2026-09-05",
         referenceNumber: null,
         notes: null,
@@ -199,8 +199,9 @@ describe("Transactions page - gray icon opens the link dialog, green icon opens 
     });
 
     it("9. after Unlink the list is re-read, and with it which transactions are linked - the icon turns gray again", () => {
-        expect(page).toContain("onUnlinked={refresh}");
-        // The linked set is reloaded whenever the transactions are.
+        // The unlinked row is re-read in place (no page-wide reload) ...
+        expect(page).toMatch(/onUnlinked=\{\(\) =>\s+linkedTransaction\s+\? applySaved\(\[linkedTransaction\.id\]\)\s+: refresh\(\)/);
+        // ... and the linked set is reloaded whenever the transactions are.
         expect(page).toMatch(/new LoanSchedulePaymentRepository\(\)\s*\.getAll\(\)[\s\S]*?\}, \[transactions\]\);/);
     });
 });
@@ -214,14 +215,14 @@ describe("Linked-payment popup", () => {
     it("4. shows the linked loan, the EMI and the payment amount", () => {
         const html = renderToStaticMarkup(
             createElement(LinkedEmiDetails, {
-                details: { loanName: "Northwind Capital", installmentNumber: 6, amount: 151167 },
+                details: { loanName: "Northwind Capital", installmentNumber: 6, amount: 148250 },
                 currency: "INR",
             })
         );
 
         expect(html).toContain("Linked to Northwind Capital");
         expect(html).toContain("EMI #6");
-        expect(html).toMatch(/Payment: .*1,51,167\.00/);
+        expect(html).toMatch(/Payment: .*1,48,250\.00/);
     });
 
     it("5. has an Unlink action that unlinks this transaction, guarded against a double click", () => {

@@ -17,7 +17,8 @@ export interface DeleteTransactionDialogProps {
     transaction: Transaction | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onSuccess?: () => Promise<void> | void;
+    /** Called with the deleted transaction's id. */
+    onSuccess?: (deletedId: string) => Promise<void> | void;
 }
 
 export function DeleteTransactionDialog({
@@ -41,7 +42,7 @@ export function DeleteTransactionDialog({
 
             await service.delete(transaction.id);
 
-            await onSuccess?.();
+            await onSuccess?.(transaction.id);
 
             toast.success("Transaction deleted successfully.");
 

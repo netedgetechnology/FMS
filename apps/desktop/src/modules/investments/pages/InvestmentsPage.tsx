@@ -3,8 +3,15 @@ import {
     useCallback,
     useEffect,
     useMemo,
+    useRef,
     useState,
 } from "react";
+
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
+import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
 
 import {
     EmptyState,
@@ -81,10 +88,23 @@ export default function InvestmentsPage() {
     const [transactionsError, setTransactionsError] =
         useState<string | null>(null);
 
+    // Which investment's transactions are on screen: reloading the same
+    // one (after add / edit / delete) keeps them visible and only spins
+    // the panel's refresh icon; opening another one shows "Loading...".
+    const shownTransactionsFor = useRef<string | null>(null);
+    const [transactionsRefreshing, setTransactionsRefreshing] =
+        useState(false);
+
     const loadTransactions = useCallback(
         async (investmentId: string) => {
+            const isRefresh =
+                shownTransactionsFor.current === investmentId;
+
             try {
-                setTransactionsLoading(true);
+                if (!isRefresh) {
+                    setTransactionsLoading(true);
+                }
+                setTransactionsRefreshing(true);
                 setTransactionsError(null);
 
                 const service =
@@ -96,7 +116,16 @@ export default function InvestmentsPage() {
                     );
 
                 setTransactions(result);
+                shownTransactionsFor.current = investmentId;
             } catch (error) {
+                if (isRefresh) {
+                    reportBackgroundRefreshFailure(
+                        "investment transactions",
+                        error
+                    );
+                    return;
+                }
+
                 console.error(
                     "Failed to load investment transactions:",
                     error
@@ -109,6 +138,7 @@ export default function InvestmentsPage() {
                 );
             } finally {
                 setTransactionsLoading(false);
+                setTransactionsRefreshing(false);
             }
         },
         []
@@ -117,6 +147,7 @@ export default function InvestmentsPage() {
         async (investmentId: string) => {
             if (selectedInvestmentId === investmentId) {
                 setSelectedInvestmentId(null);
+                shownTransactionsFor.current = null;
                 setTransactions([]);
                 setTransactionsError(null);
                 return;
@@ -178,17 +209,27 @@ export default function InvestmentsPage() {
                     )
                 );
 
-            setPortfolioCalculations(
-                Object.fromEntries(results)
-            );
+            return Object.fromEntries(results);
         },
         []
     );
 
+    // Only the first load replaces the table with "Loading..."; a refresh
+    // after a mutation keeps it on screen and only spins the refresh icon
+    // (InitialLoadTracker). A stale load never wins (LatestRequestGuard).
+    const [refreshing, setRefreshing] = useState(false);
+    const loadTracker = useRef(new InitialLoadTracker());
+    const requestGuard = useRef(new LatestRequestGuard());
+
     const loadInvestments = useCallback(
         async () => {
+            const requestId = requestGuard.current.start();
+
             try {
-                setLoading(true);
+                if (loadTracker.current.showsLoading()) {
+                    setLoading(true);
+                }
+                setRefreshing(true);
                 setError(null);
 
                 const service =
@@ -197,14 +238,32 @@ export default function InvestmentsPage() {
                 const result =
                     await service.getAll();
 
+                const calculations =
+                    await loadPortfolioCalculations(
+                        result
+                    );
+
+                if (requestGuard.current.isStale(requestId)) {
+                    return;
+                }
+
+                // Together, so rows and their figures never disagree.
                 setInvestments(result);
-
-                await loadPortfolioCalculations(
-                    result
-                );
-
-
+                setPortfolioCalculations(calculations);
+                loadTracker.current.markLoaded();
             } catch (error) {
+                if (requestGuard.current.isStale(requestId)) {
+                    return;
+                }
+
+                if (loadTracker.current.hasLoaded) {
+                    reportBackgroundRefreshFailure(
+                        "investments",
+                        error
+                    );
+                    return;
+                }
+
                 console.error(
                     "Failed to load investments:",
                     error
@@ -218,7 +277,10 @@ export default function InvestmentsPage() {
 
                 setPortfolioCalculations({});
             } finally {
-                setLoading(false);
+                if (!requestGuard.current.isStale(requestId)) {
+                    setLoading(false);
+                    setRefreshing(false);
+                }
             }
         },
         [
@@ -459,14 +521,14 @@ export default function InvestmentsPage() {
                             onClick={() =>
                                 void loadInvestments()
                             }
-                            disabled={loading}
+                            disabled={refreshing}
                             title="Refresh investments"
                             aria-label="Refresh investments"
                             className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             <RefreshCw
                                 className={`h-3.5 w-3.5 ${
-                                    loading ? "animate-spin" : ""
+                                    refreshing ? "animate-spin" : ""
                                 }`}
                             />
                         </button>
@@ -768,6 +830,7 @@ export default function InvestmentsPage() {
                         <TransactionHistory
                             transactions={transactions}
                             loading={transactionsLoading}
+                            refreshing={transactionsRefreshing}
                             error={transactionsError}
                             onRefresh={async () => {
                                 await loadInvestments();
@@ -786,11 +849,13 @@ export default function InvestmentsPage() {
 function TransactionHistory({
     transactions,
     loading,
+    refreshing,
     error,
     onRefresh,
 }: {
     transactions: InvestmentTransaction[];
     loading: boolean;
+    refreshing: boolean;
     error: string | null;
     onRefresh(): void | Promise<void>;
 }) {
@@ -811,14 +876,14 @@ function TransactionHistory({
                 <button
                     type="button"
                     onClick={() => void onRefresh()}
-                    disabled={loading}
+                    disabled={refreshing}
                     title="Refresh transactions"
                     aria-label="Refresh transactions"
                     className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <RefreshCw
                         className={`h-3.5 w-3.5 ${
-                            loading ? "animate-spin" : ""
+                            refreshing ? "animate-spin" : ""
                         }`}
                     />
                 </button>

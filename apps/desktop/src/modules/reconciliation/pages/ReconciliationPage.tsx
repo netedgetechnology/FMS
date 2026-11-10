@@ -7,10 +7,14 @@ import {
     X,
 } from "lucide-react";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { EmptyState, PageHeader } from "@/components/common";
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
 import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
 import { Account } from "@/modules/accounts/types";
 
@@ -56,8 +60,15 @@ export default function ReconciliationPage() {
         []
     );
 
+    // Only the first load replaces the page with "Loading..."; a refresh
+    // after a reconciliation is saved / deleted keeps it on screen
+    // (InitialLoadTracker).
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const loadData = useCallback(async () => {
-        setLoading(true);
+        if (loadTracker.current.showsLoading()) {
+            setLoading(true);
+        }
         setError(null);
 
         try {
@@ -83,6 +94,7 @@ export default function ReconciliationPage() {
             );
 
             setAccounts(accountResult);
+            loadTracker.current.markLoaded();
 
             if (
                 !selectedAccountId &&
@@ -93,6 +105,16 @@ export default function ReconciliationPage() {
                 );
             }
         } catch (loadError) {
+            // What is already shown stays; only a failed first load
+            // shows the error.
+            if (loadTracker.current.hasLoaded) {
+                reportBackgroundRefreshFailure(
+                    "reconciliations",
+                    loadError
+                );
+                return;
+            }
+
             console.error(
                 "Failed to load reconciliation data:",
                 loadError

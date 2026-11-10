@@ -1,8 +1,11 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react";
+
+import { InitialLoadTracker } from "@/core/async/InitialLoadTracker";
 
 import { EMIScheduleService } from "@/modules/loans/services/EMIScheduleService";
 
@@ -21,8 +24,17 @@ export function useEmiInterestByTransactionId() {
 
     const [loading, setLoading] = useState(true);
 
+    // Only the first calculation shows the loading state; a refresh after
+    // a mutation keeps the current figures on screen until the new ones
+    // arrive (InitialLoadTracker). A failed calculation still clears them
+    // and shows the error, exactly as before - figures that could not be
+    // recalculated are never shown as current.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const load = useCallback(async () => {
-        setLoading(true);
+        if (loadTracker.current.showsLoading()) {
+            setLoading(true);
+        }
 
         try {
             const service = new EMIScheduleService();
@@ -30,6 +42,7 @@ export function useEmiInterestByTransactionId() {
             setEmiInterestByTransactionId(
                 await service.getInterestByTransactionId()
             );
+            loadTracker.current.markLoaded();
         } catch (error) {
             console.error(
                 "Failed to load EMI interest map:",

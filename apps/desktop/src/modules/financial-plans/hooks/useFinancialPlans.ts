@@ -1,8 +1,14 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react";
+
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
 
 import {
     FinancialPlanService,
@@ -24,14 +30,26 @@ export function useFinancialPlans() {
     const [error, setError] =
         useState<string | null>(null);
 
+    // Only the first load blanks the page - see InitialLoadTracker.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const loadPlans = useCallback(async () => {
-        setLoading(true);
+        if (loadTracker.current.showsLoading()) {
+            setLoading(true);
+        }
         setError(null);
 
         try {
             const data = await service.getAll();
             setPlans(data);
+            loadTracker.current.markLoaded();
         } catch (error) {
+            // Plans already shown stay; only a failed first load shows the error.
+            if (loadTracker.current.hasLoaded) {
+                reportBackgroundRefreshFailure("financial plans", error);
+                return;
+            }
+
             console.error(
                 "Failed to load financial plans:",
                 error

@@ -242,6 +242,13 @@ export class TransactionService {
         return await this.repository.getStatementSide(id);
     }
 
+    // Live transactions with these ids (deleted ones are left out).
+    async getByIds(
+        ids: readonly string[]
+    ): Promise<Transaction[]> {
+        return await this.repository.getByIds(ids);
+    }
+
     async findDuplicate(
         accountId: string,
         transactionDate: string,

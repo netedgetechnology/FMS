@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { EmptyState, PageHeader } from "@/components/common";
+import { InitialLoadTracker } from "@/core/async/InitialLoadTracker";
 import { useAccounts } from "@/modules/accounts/hooks";
 import {
     useCategories,
@@ -1287,15 +1288,24 @@ export default function ImportsPage() {
     // currently selected file (e.g. before an Excel password retry).
     const draftReplacementConfirmedRef = useRef(false);
 
+    // Only the first load of Import History / Saved Mappings shows its
+    // "Loading..." placeholder; the reloads after an import, a delete or
+    // a mapping change keep the current list on screen (InitialLoadTracker).
+    const batchesLoadTracker = useRef(new InitialLoadTracker());
+    const mappingsLoadTracker = useRef(new InitialLoadTracker());
+
     const loadBatches = async () => {
         try {
-            setLoading(true);
+            if (batchesLoadTracker.current.showsLoading()) {
+                setLoading(true);
+            }
             setError(null);
 
             const data =
                 await service.getBatches();
 
             setBatches(data);
+            batchesLoadTracker.current.markLoaded();
         } catch (err) {
             console.error(
                 "IMPORT BATCH LOAD ERROR:",
@@ -1318,13 +1328,16 @@ export default function ImportsPage() {
 
     const loadMappings = async () => {
         try {
-            setMappingsLoading(true);
+            if (mappingsLoadTracker.current.showsLoading()) {
+                setMappingsLoading(true);
+            }
             setError(null);
 
             const data =
                 await service.listMappings();
 
             setMappings(data);
+            mappingsLoadTracker.current.markLoaded();
         } catch (err) {
             console.error(
                 "SAVED MAPPINGS LOAD ERROR:",

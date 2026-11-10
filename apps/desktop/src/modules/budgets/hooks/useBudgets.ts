@@ -1,8 +1,14 @@
 import {
     useCallback,
     useEffect,
+    useRef,
     useState,
 } from "react";
+
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
 
 import {
     BudgetService,
@@ -24,9 +30,14 @@ export function useBudgets() {
     const [error, setError] =
         useState<string | null>(null);
 
+    // Only the first load blanks the page - see InitialLoadTracker.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const loadBudgets = useCallback(
         async () => {
-            setLoading(true);
+            if (loadTracker.current.showsLoading()) {
+                setLoading(true);
+            }
             setError(null);
 
             try {
@@ -34,7 +45,14 @@ export function useBudgets() {
                     await service.getAll();
 
                 setBudgets(data);
+                loadTracker.current.markLoaded();
             } catch (err) {
+                // Rows already shown stay; only a failed first load shows the error.
+                if (loadTracker.current.hasLoaded) {
+                    reportBackgroundRefreshFailure("budgets", err);
+                    return;
+                }
+
                 console.error(
                     "Failed to load budgets:",
                     err

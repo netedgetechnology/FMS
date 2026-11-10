@@ -30,7 +30,8 @@ import type { Transaction } from "../types";
 import { TransactionFormValues } from "../validation";
 
 export interface AddTransactionDialogProps {
-    onSuccess?: () => Promise<void> | void;
+    /** Called with the new transaction's id once it is saved. */
+    onSuccess?: (createdId: string) => Promise<void> | void;
     defaultValues?: Partial<TransactionFormValues>;
     trigger?: ReactElement;
 }
@@ -70,11 +71,11 @@ export function AddTransactionDialog({
 
             const { description, ...rest } = values;
 
-            await service.create({
+            const createdId = await service.create({
                 ...rest,
                 originalNarration: description,
             });
-            await onSuccess?.();
+            await onSuccess?.(createdId);
 
             toast.success("Transaction created successfully.");
             setOpen(false);

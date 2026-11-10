@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LatestRequestGuard } from "@/core/async/LatestRequestGuard";
+import {
+    InitialLoadTracker,
+    reportBackgroundRefreshFailure,
+} from "@/core/async/InitialLoadTracker";
 import { CategoryService } from "../services";
 import { Category } from "../types";
 
@@ -16,11 +20,16 @@ export function useCategories() {
     // LatestRequestGuard.
     const requestGuard = useRef(new LatestRequestGuard());
 
+    // Only the first load blanks the page - see InitialLoadTracker.
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const loadCategories = useCallback(async () => {
         const requestId = requestGuard.current.start();
 
         try {
-            setLoading(true);
+            if (loadTracker.current.showsLoading()) {
+                setLoading(true);
+            }
             setError(null);
 
             const data = await service.getAll();
@@ -30,6 +39,7 @@ export function useCategories() {
             }
 
             setCategories(data);
+            loadTracker.current.markLoaded();
         } catch (err) {
             if (requestGuard.current.isStale(requestId)) {
                 return;
@@ -42,7 +52,12 @@ export function useCategories() {
                     ? `${err.name}: ${err.message}`
                     : String(err);
 
-            setError(message);
+            // Rows already shown stay; only a failed first load shows the error.
+            if (loadTracker.current.hasLoaded) {
+                reportBackgroundRefreshFailure("categories", err);
+            } else {
+                setError(message);
+            }
         } finally {
             if (!requestGuard.current.isStale(requestId)) {
                 setLoading(false);

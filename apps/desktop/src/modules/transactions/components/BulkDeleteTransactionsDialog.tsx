@@ -18,7 +18,8 @@ export interface BulkDeleteTransactionsDialogProps {
     transactionIds: string[];
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onSuccess?: () => Promise<void> | void;
+    /** Called with the deleted transactions' ids. */
+    onSuccess?: (deletedIds: string[]) => Promise<void> | void;
 }
 
 export function BulkDeleteTransactionsDialog({
@@ -64,7 +65,7 @@ export function BulkDeleteTransactionsDialog({
                 await service.delete(id);
             }
 
-            await onSuccess?.();
+            await onSuccess?.([...transactionIds]);
 
             toast.success(
                 `${count} transaction${count === 1 ? "" : "s"} deleted successfully.`

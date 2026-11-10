@@ -1,5 +1,8 @@
 import { useDateFormatter } from "@/core/formatting";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+
+import { reportBackgroundRefreshFailure } from "@/core/async/InitialLoadTracker";
 
 import type { Transaction } from "@/modules/transactions/types";
 
@@ -47,8 +50,19 @@ export function ReconciliationTransactionReview({
     const service =
         new ReconciliationService();
 
+    // The account + statement date whose transactions are on screen.
+    // Reloading the same list (after each Reconcile toggle) keeps it on
+    // screen, so the list and its scroll position never reset; another
+    // account / date shows "Loading..." (see InitialLoadTracker).
+    const shownFor = useRef<string | null>(null);
+
     const loadTransactions = async () => {
-        setLoading(true);
+        const key = `${accountId}|${statementDate}`;
+        const isRefresh = shownFor.current === key;
+
+        if (!isRefresh) {
+            setLoading(true);
+        }
         setError(null);
 
         try {
@@ -59,7 +73,15 @@ export function ReconciliationTransactionReview({
                 );
 
             setTransactions(result);
+            shownFor.current = key;
         } catch (err) {
+            // The list already shown stays; only a failed first load
+            // shows the error in its place.
+            if (isRefresh) {
+                reportBackgroundRefreshFailure("reconciliation transactions", err);
+                return;
+            }
+
             setError(
                 err instanceof Error
                     ? err.message
@@ -88,7 +110,9 @@ export function ReconciliationTransactionReview({
 
             await loadTransactions();
         } catch (err) {
-            setError(
+            // A failed toggle changes nothing: the list stays as it is
+            // and the error is shown as a notification, not in its place.
+            toast.error(
                 err instanceof Error
                     ? err.message
                     : "Unable to update transaction."

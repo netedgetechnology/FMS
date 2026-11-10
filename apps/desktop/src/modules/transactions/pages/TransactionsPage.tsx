@@ -41,6 +41,8 @@ import {
 } from "../components";
 
 import { useTransactions } from "../hooks";
+import { applySavedTransactions } from "../hooks/useTransactions";
+import { TransactionService } from "../services";
 import type { Transaction } from "../types";
 
 const ROWS_PER_PAGE_OPTIONS: Array<number | "All"> = [
@@ -306,6 +308,20 @@ export function canOpenLoanLinkDialog(
     return !loanLinkedIds.has(transaction.id);
 }
 
+/** The selection without these (deleted) ids - unchanged if none were selected. */
+export function withoutIds(
+    selected: ReadonlySet<string>,
+    ids: readonly string[]
+): Set<string> {
+    const next = new Set(selected);
+
+    for (const id of ids) {
+        next.delete(id);
+    }
+
+    return next;
+}
+
 export default function TransactionsPage() {
     const formatAmount = useMoneyFormatter();
     const {
@@ -313,7 +329,21 @@ export default function TransactionsPage() {
         loading,
         error,
         refresh,
+        replaceTransaction,
+        upsertTransactions,
+        removeTransactions,
     } = useTransactions();
+
+    // After a successful create / bulk change / move / link: the saved
+    // rows are read back and updated in place - the list, search, filters,
+    // page and scroll position stay as they are (no page-wide reload).
+    const applySaved = (ids: readonly string[]) =>
+        applySavedTransactions(
+            new TransactionService(),
+            ids,
+            upsertTransactions,
+            refresh
+        );
 
     const { accounts } = useAccounts();
     const { categories } = useCategories();
@@ -645,7 +675,7 @@ export default function TransactionsPage() {
                     subtitle="Record and manage your income, expenses and transfers."
                     actions={
                         <AddTransactionDialog
-                            onSuccess={refresh}
+                            onSuccess={createdId => applySaved([createdId])}
                             trigger={
                                 <button
                                     type="button"
@@ -1214,7 +1244,12 @@ export default function TransactionsPage() {
                             setEditingTransaction(null);
                         }
                     }}
-                    onSuccess={refresh}
+                    // Only the edited row changes - a full refresh() would
+                    // unmount the list and lose the scroll position. Search,
+                    // filters and page are untouched page state.
+                    onSuccess={updated =>
+                        updated ? replaceTransaction(updated) : refresh()
+                    }
                 />
 
                 <DeleteTransactionDialog
@@ -1225,7 +1260,10 @@ export default function TransactionsPage() {
                             setDeletingTransaction(null);
                         }
                     }}
-                    onSuccess={refresh}
+                    onSuccess={deletedId => {
+                        removeTransactions([deletedId]);
+                        setSelectedIds(previous => withoutIds(previous, [deletedId]));
+                    }}
                 />
 
                 <LinkTransactionToEmiDialog
@@ -1236,7 +1274,13 @@ export default function TransactionsPage() {
                             setLinkingTransaction(null);
                         }
                     }}
-                    onSuccess={refresh}
+                    // Re-reading the row also re-reads the link indicators
+                    // (the effect above runs whenever the list changes).
+                    onSuccess={() =>
+                        linkingTransaction
+                            ? applySaved([linkingTransaction.id])
+                            : refresh()
+                    }
                 />
 
                 <LinkedEmiPaymentDialog
@@ -1247,16 +1291,20 @@ export default function TransactionsPage() {
                             setLinkedTransaction(null);
                         }
                     }}
-                    onUnlinked={refresh}
+                    onUnlinked={() =>
+                        linkedTransaction
+                            ? applySaved([linkedTransaction.id])
+                            : refresh()
+                    }
                 />
 
                 <BulkDeleteTransactionsDialog
                     transactionIds={Array.from(selectedIds)}
                     open={isBulkDeleteOpen}
                     onOpenChange={setIsBulkDeleteOpen}
-                    onSuccess={async () => {
+                    onSuccess={deletedIds => {
                         setSelectedIds(new Set());
-                        await refresh();
+                        removeTransactions(deletedIds);
                     }}
                 />
 
@@ -1267,8 +1315,9 @@ export default function TransactionsPage() {
                     open={isBulkCategoryOpen}
                     onOpenChange={setIsBulkCategoryOpen}
                     onSuccess={async () => {
+                        const changedIds = selectedTransactions.map(item => item.id);
                         setSelectedIds(new Set());
-                        await refresh();
+                        await applySaved(changedIds);
                     }}
                 />
 
@@ -1278,8 +1327,9 @@ export default function TransactionsPage() {
                     open={isBulkMoveOpen}
                     onOpenChange={setIsBulkMoveOpen}
                     onSuccess={async () => {
+                        const movedIds = selectedTransactions.map(item => item.id);
                         setSelectedIds(new Set());
-                        await refresh();
+                        await applySaved(movedIds);
                     }}
                 />
 

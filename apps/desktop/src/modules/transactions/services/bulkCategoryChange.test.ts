@@ -435,9 +435,9 @@ describe("page and dialog wiring", () => {
         expect(page).toMatch(/transactions\.filter\(transaction =>\s+selectedIds\.has\(transaction\.id\)\s+\)/);
     });
 
-    it("clears the selection and refreshes after success; bulk Delete is unchanged", () => {
+    it("clears the selection and updates the changed rows in place after success; bulk Delete is unchanged", () => {
         expect(page).toMatch(
-            /<BulkChangeCategoryDialog\s+transactions=\{selectedTransactions\}[\s\S]*?onSuccess=\{async \(\) => \{\s+setSelectedIds\(new Set\(\)\);\s+await refresh\(\);/
+            /<BulkChangeCategoryDialog\s+transactions=\{selectedTransactions\}[\s\S]*?onSuccess=\{async \(\) => \{\s+const changedIds = selectedTransactions\.map\(item => item\.id\);\s+setSelectedIds\(new Set\(\)\);\s+await applySaved\(changedIds\);/
         );
         expect(page).toMatch(
             /<BulkDeleteTransactionsDialog\s+transactionIds=\{Array\.from\(selectedIds\)\}\s+open=\{isBulkDeleteOpen\}\s+onOpenChange=\{setIsBulkDeleteOpen\}/

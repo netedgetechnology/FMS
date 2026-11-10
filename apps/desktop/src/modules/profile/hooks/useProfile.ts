@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { InitialLoadTracker } from "@/core/async/InitialLoadTracker";
 
 import { SettingsService } from "@/modules/settings/services";
 import { DEFAULT_SETTINGS, SETTING_KEYS } from "@/modules/settings/constants";
@@ -61,9 +63,16 @@ export function useProfile() {
     const [saved, setSaved] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    // Only the first load shows the full-page loading state; the reloads
+    // after Save (and on "financeos-settings-changed") keep the form on
+    // screen (InitialLoadTracker).
+    const loadTracker = useRef(new InitialLoadTracker());
+
     const load = useCallback(async () => {
         try {
-            setLoading(true);
+            if (loadTracker.current.showsLoading()) {
+                setLoading(true);
+            }
             setError(null);
 
             const rows = await settingsService.getAll();
@@ -143,6 +152,7 @@ export function useProfile() {
             });
 
             setSaved(true);
+            loadTracker.current.markLoaded();
         } catch (err) {
             setError(
                 err instanceof Error
