@@ -19,3 +19,10 @@ coverage
 *.phase1-backup
 *.broken
 q.mjs
+
+# Real bank / lender statements kept locally for manual testing - never
+# commit (repo root only; test fixtures in source folders stay tracked)
+/*.pdf
+/*.xls
+/*.xlsx
+/*.csv

@@ -1,5 +1,10 @@
 import { Repository } from "@/core/database/engine/Repository";
 import {
+    OVERDRAFT_POSITIONS_SQL,
+    outstandingInterestSql,
+    outstandingPrincipalSql,
+} from "@/modules/loans/repositories/overdraftPositionSql";
+import {
     Account,
     UpdateAccountRequest,
 } from "../types";
@@ -20,8 +25,8 @@ export class AccountRepository extends Repository {
                 CASE
                     WHEN accounts.account_type = 'LOAN' THEN
                         -(
-                            COALESCE(loan_link.outstanding_principal, 0)
-                            + COALESCE(loan_link.outstanding_interest, 0)
+                            COALESCE(${outstandingPrincipalSql("loan_link", "loan_od")}, 0)
+                            + COALESCE(${outstandingInterestSql("loan_link")}, 0)
                         )
                     ELSE accounts.opening_balance
                 END AS openingBalance,
@@ -42,6 +47,8 @@ export class AccountRepository extends Repository {
             LEFT JOIN loans AS loan_link
                 ON loan_link.loan_account_id = accounts.id
                 AND loan_link.deleted_at IS NULL
+            LEFT JOIN (${OVERDRAFT_POSITIONS_SQL}) AS loan_od
+                ON loan_od.loan_id = loan_link.id
             WHERE accounts.deleted_at IS NULL
             ORDER BY accounts.name
             `
@@ -68,8 +75,8 @@ export class AccountRepository extends Repository {
                 CASE
                     WHEN accounts.account_type = 'LOAN' THEN
                         -(
-                            COALESCE(loan_link.outstanding_principal, 0)
-                            + COALESCE(loan_link.outstanding_interest, 0)
+                            COALESCE(${outstandingPrincipalSql("loan_link", "loan_od")}, 0)
+                            + COALESCE(${outstandingInterestSql("loan_link")}, 0)
                         )
                     ELSE accounts.opening_balance
                 END AS openingBalance,
@@ -90,6 +97,8 @@ export class AccountRepository extends Repository {
             LEFT JOIN loans AS loan_link
                 ON loan_link.loan_account_id = accounts.id
                 AND loan_link.deleted_at IS NULL
+            LEFT JOIN (${OVERDRAFT_POSITIONS_SQL}) AS loan_od
+                ON loan_od.loan_id = loan_link.id
             WHERE accounts.id = ?
               AND accounts.deleted_at IS NULL
             `,

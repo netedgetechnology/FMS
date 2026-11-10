@@ -116,10 +116,25 @@ function formatStatus(
 function StatusBadge({
     status,
     overdue,
+    settledBeforeFinwea = false,
 }: {
     status: LoanPaymentSchedule["status"];
     overdue: boolean;
+    settledBeforeFinwea?: boolean;
 }) {
+    // Declared paid when the loan was added - no bank transaction and no
+    // payment record behind it (migration 052). Never shown as a payment.
+    if (status === "PAID" && settledBeforeFinwea) {
+        return (
+            <span
+                className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800"
+                title="Declared paid when the loan was added to FinWea. There is no bank transaction or payment record for it."
+            >
+                Settled before FinWea
+            </span>
+        );
+    }
+
     const className =
         status === "PAID"
             ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -260,11 +275,19 @@ export function EMIScheduleDialog({
         setSchedule(result);
     }
 
-    async function loadPayments(scheduleId: string) {
+    // `background`: reloading the panel already on screen (after a
+    // reversal) keeps its rows visible until the new ones arrive, instead
+    // of blanking it to "Loading payments...".
+    async function loadPayments(
+        scheduleId: string,
+        background = false
+    ) {
         const service = new EMIScheduleService();
 
         try {
-            setPaymentsLoading(true);
+            if (!background) {
+                setPaymentsLoading(true);
+            }
 
             const result =
                 await service.getPaymentsForSchedule(
@@ -343,7 +366,8 @@ export function EMIScheduleDialog({
 
                 if (viewingPaymentsFor) {
                     await loadPayments(
-                        viewingPaymentsFor.id
+                        viewingPaymentsFor.id,
+                        true
                     );
                 }
 
@@ -1170,6 +1194,10 @@ export function EMIScheduleDialog({
                                                         overdue={isScheduleOverdue(
                                                             item
                                                         )}
+                                                        settledBeforeFinwea={
+                                                            item.settledBeforeFinwea ===
+                                                            true
+                                                        }
                                                     />
                                                 </td>
 

@@ -139,6 +139,9 @@ const all = <T = Record<string, any>>(sql: string, ...binds: unknown[]) =>
     sqlite.db!.prepare(sql).all(...(binds as never[])) as T[];
 
 const BANK = "acct-bank";
+// Only a transaction in a loan category can be linked to a loan (see
+// loanLinkEligibility.ts) - the statement debits here are loan EMIs.
+const LOAN_CATEGORY = "cat-loan-installment";
 const OTHER_BANK = "acct-other";
 
 interface SeedLoan {
@@ -209,6 +212,7 @@ function candidate(rowNumber: number, overrides: Partial<NormalizedTransactionCa
         rowNumber, transactionDate: "2026-06-05", payee: "", description: `ROW ${rowNumber}`,
         amount: 100, type: "expense", referenceNumber: null, externalTransactionId: null,
         balance: null, branch: null, transactionType: null, counterparty: null, notes: null, rawData: {},
+        categoryId: LOAN_CATEGORY,
         ...overrides,
     };
 }
@@ -272,6 +276,7 @@ beforeEach(() => {
     sqlite.db = db;
     insert("accounts", { id: BANK, name: "Operating Account", account_type: "CURRENT", opening_balance: 0 });
     insert("accounts", { id: OTHER_BANK, name: "Savings", account_type: "SAVINGS", opening_balance: 0 });
+    insert("categories", { id: LOAN_CATEGORY, name: "Loan Installment", category_type: "EXPENSE", finance_scope: "BOTH" });
     invoke.mockClear();
     vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -774,7 +779,7 @@ describe("Link Existing Transaction to EMI, and learning from it", () => {
         const transaction = { id: "entered-by-hand" };
         insert("transactions", {
             id: transaction.id, account_id: BANK, payee: "Contoso", type: "expense", amount: 22842.47,
-            transaction_date: "2026-02-10", status: "CLEARED", is_imported: 0,
+            transaction_date: "2026-02-10", status: "CLEARED", is_imported: 0, category_id: LOAN_CATEGORY,
         });
 
         await linkByHand(transaction.id, REGULAR.id, 1, "full");

@@ -26,8 +26,10 @@ import type { Transaction } from "@/modules/transactions/types";
 import {
     LoanTransactionLinkService,
     type LoanLinkMode,
+    type LoanLinkTarget,
     type TransactionLinkOptions,
 } from "../services/LoanTransactionLinkService";
+import { OVERDRAFT_ENTRY_KIND_LABELS, OverdraftEntryKind } from "../types";
 import { emiPaymentErrorMessage } from "./emiPaymentErrorMessage";
 
 // ---------------------------------------------------------------------
@@ -36,7 +38,141 @@ import { emiPaymentErrorMessage } from "./emiPaymentErrorMessage";
 // kept exactly as it is - no new one is created. Whether its amount is a
 // full payment, a partial one, or the lender's full instalment for less
 // than the calculated EMI is always the user's explicit choice.
+//
+// The same dialog links a transaction to an Overdraft (Link to Overdraft):
+// there the user says only what it is - a Drawdown, a Repayment or an
+// Interest / Charge. No EMI, no instalment.
 // ---------------------------------------------------------------------
+
+/**
+ * Which workflow the dialog shows - the user's choice when made, else the
+ * transaction's account (see LoanLinkTarget). An Overdraft transaction is
+ * never shown as a Term Loan EMI.
+ */
+export function linkDialogWorkflow(
+    target: LoanLinkTarget | null,
+    selected: "loan" | "overdraft" | null
+): LoanLinkTarget {
+    if (selected === "overdraft") {
+        return "OVERDRAFT";
+    }
+
+    if (selected === "loan") {
+        return "EMI";
+    }
+
+    return target ?? "ANY";
+}
+
+export const LINK_DIALOG_TITLES: Record<LoanLinkTarget, string> = {
+    EMI: "Link to Loan EMI",
+    OVERDRAFT: "Link to Overdraft",
+    ANY: "Link to Loan",
+};
+
+/**
+ * Whether Link is enabled for an Overdraft: nothing refuses the
+ * transaction (already linked, category, account, direction, the Opening
+ * Used As Of date ...) and the user has chosen a kind its direction
+ * allows. Never chosen for them.
+ */
+export function canLinkOverdraftChoice(state: {
+    saving: boolean;
+    options: Pick<TransactionLinkOptions, "refusal"> | null;
+    overdraft: { refusal: string | null; kinds: readonly OverdraftEntryKind[] } | null;
+    entryKind: OverdraftEntryKind | null;
+}): boolean {
+    return (
+        !state.saving &&
+        !!state.options &&
+        !state.options.refusal &&
+        !!state.overdraft &&
+        !state.overdraft.refusal &&
+        !!state.entryKind &&
+        state.overdraft.kinds.includes(state.entryKind)
+    );
+}
+
+/** Whether Link Payment is enabled for a Term Loan EMI instalment. */
+export function canLinkEmiChoice(state: {
+    saving: boolean;
+    options: Pick<TransactionLinkOptions, "refusal"> | null;
+    loanSelected: boolean;
+    installment: { modes: readonly LoanLinkMode[] } | null;
+    mode: LoanLinkMode | null;
+    needsDuplicateConfirmation: boolean;
+    confirmedNotDuplicate: boolean;
+}): boolean {
+    return (
+        !state.saving &&
+        !!state.options &&
+        !state.options.refusal &&
+        state.loanSelected &&
+        !!state.installment &&
+        !!state.mode &&
+        state.installment.modes.includes(state.mode) &&
+        (!state.needsDuplicateConfirmation || state.confirmedNotDuplicate)
+    );
+}
+
+/**
+ * The dialog's layout. A flex column bounded by the viewport: header and
+ * buttons stay put, only the body scrolls - vertically, never sideways.
+ * Every row is min-w-0 and long text (a bank narration is often one
+ * unbroken 100-character token) wraps anywhere, so nothing can widen the
+ * dialog past its own width.
+ */
+export const LINK_DIALOG_LAYOUT = {
+    content:
+        "flex w-[560px] max-w-[calc(100vw-48px)] max-h-[calc(100vh-48px)] flex-col gap-0 overflow-hidden rounded-[24px] border border-slate-100 bg-white p-0 shadow-lg",
+    header: "min-w-0 shrink-0 px-7 pb-4 pr-14 pt-6",
+    body: "min-h-0 min-w-0 flex-1 space-y-5 overflow-y-auto overflow-x-hidden px-7 pb-6",
+    footer: "flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-slate-100 px-7 py-5",
+    notice: "min-w-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 [overflow-wrap:anywhere]",
+    selectTrigger: "w-full min-w-0",
+    selectText: "min-w-0 truncate",
+} as const;
+
+/** The transaction being linked - stays inside the dialog whatever its text. */
+export function LinkTransactionSummary({
+    payee,
+    narration,
+    amount,
+    date,
+}: {
+    payee: string;
+    narration: string | null;
+    amount: string;
+    date: string;
+}) {
+    return (
+        <div className="min-w-0 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+            <div className="flex min-w-0 items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-slate-800 [overflow-wrap:anywhere]">
+                        {payee || "�"}
+                    </div>
+                    {narration && (
+                        <div
+                            className="mt-0.5 line-clamp-3 text-[11px] leading-4 text-slate-400 [overflow-wrap:anywhere]"
+                            title={narration}
+                        >
+                            {narration}
+                        </div>
+                    )}
+                </div>
+                <div className="shrink-0 text-right">
+                    <div className="whitespace-nowrap text-sm font-semibold text-slate-900">
+                        {amount}
+                    </div>
+                    <div className="whitespace-nowrap text-xs text-slate-500">
+                        {date}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
 
 export interface LinkTransactionToEmiDialogProps {
     transaction: Transaction | null;
@@ -68,6 +204,7 @@ export function LinkTransactionToEmiDialog({
     const [loanId, setLoanId] = useState("");
     const [scheduleId, setScheduleId] = useState("");
     const [mode, setMode] = useState<LoanLinkMode | null>(null);
+    const [entryKind, setEntryKind] = useState<OverdraftEntryKind | null>(null);
     const [confirmedNotDuplicate, setConfirmedNotDuplicate] = useState(false);
     const [saving, setSaving] = useState(false);
 
@@ -86,6 +223,7 @@ export function LinkTransactionToEmiDialog({
         setLoanId("");
         setScheduleId("");
         setMode(null);
+        setEntryKind(null);
         setConfirmedNotDuplicate(false);
 
         new LoanTransactionLinkService()
@@ -97,9 +235,10 @@ export function LinkTransactionToEmiDialog({
 
                 setOptions(loaded);
 
+                const choices = [...loaded.loans, ...loaded.overdrafts];
                 const initialLoan =
-                    loaded.loans.find(loan => loan.loanId === loaded.suggestedLoanId) ??
-                    (loaded.loans.length === 1 ? loaded.loans[0] : undefined);
+                    choices.find(loan => loan.loanId === loaded.suggestedLoanId) ??
+                    (choices.length === 1 ? choices[0] : undefined);
 
                 if (initialLoan) {
                     setLoanId(initialLoan.loanId);
@@ -122,6 +261,16 @@ export function LinkTransactionToEmiDialog({
     }, [open, transaction]);
 
     const loan = options?.loans.find(item => item.loanId === loanId) ?? null;
+    const overdraft =
+        options?.overdrafts.find(item => item.loanId === loanId) ?? null;
+
+    // A newly chosen overdraft: the kind is preselected only when this
+    // transaction's direction allows just one (a credit is a drawdown).
+    useEffect(() => {
+        setEntryKind(
+            overdraft?.kinds.length === 1 ? overdraft.kinds[0]! : null
+        );
+    }, [overdraft]);
 
     // A newly chosen loan starts on its earliest instalment this amount
     // fits, and every choice of how it counts is made again.
@@ -169,20 +318,81 @@ export function LinkTransactionToEmiDialog({
         },
     };
 
+    const kindLabels: Record<OverdraftEntryKind, string> = {
+        [OverdraftEntryKind.DRAWDOWN]: `Money taken from the overdraft. The used amount goes up by ${money(amount)}.`,
+        [OverdraftEntryKind.REPAYMENT]: `Money paid back to the overdraft. The used amount goes down by ${money(amount)}.`,
+        [OverdraftEntryKind.INTEREST_CHARGE]: "Interest or a bank charge on the overdraft. Shown separately - the used amount does not change.",
+    };
+
+    const workflow = linkDialogWorkflow(
+        options?.target ?? null,
+        overdraft ? "overdraft" : loan ? "loan" : null
+    );
+    const title = LINK_DIALOG_TITLES[workflow];
+
     const needsDuplicateConfirmation =
         (loan?.possibleDuplicates.length ?? 0) > 0;
 
+    const canSaveOverdraft = canLinkOverdraftChoice({
+        saving,
+        options,
+        overdraft,
+        entryKind,
+    });
+
     const canSave =
-        !saving &&
-        !!options &&
-        !options.refusal &&
-        !!loan &&
-        !!installment &&
-        !!mode &&
-        installment.modes.includes(mode) &&
-        (!needsDuplicateConfirmation || confirmedNotDuplicate);
+        canSaveOverdraft ||
+        canLinkEmiChoice({
+            saving,
+            options,
+            loanSelected: !!loan,
+            installment,
+            mode,
+            needsDuplicateConfirmation,
+            confirmedNotDuplicate,
+        });
+
+    async function handleLinkOverdraft() {
+        if (!canSaveOverdraft || !transaction || !overdraft || !entryKind || inFlight.current) {
+            return;
+        }
+
+        inFlight.current = true;
+
+        try {
+            setSaving(true);
+
+            await new LoanTransactionLinkService().linkOverdraft({
+                transactionId: transaction.id,
+                loanId: overdraft.loanId,
+                entryKind,
+            });
+
+            toast.success(
+                `Linked to ${overdraft.loanName} as a ${OVERDRAFT_ENTRY_KIND_LABELS[entryKind].toLowerCase()}.`
+            );
+
+            await onSuccess?.();
+            onOpenChange(false);
+        } catch (error) {
+            toast.error(
+                emiPaymentErrorMessage(
+                    error,
+                    "The transaction could not be linked to the overdraft."
+                )
+            );
+        } finally {
+            inFlight.current = false;
+            setSaving(false);
+        }
+    }
 
     async function handleLink() {
+        if (overdraft) {
+            await handleLinkOverdraft();
+            return;
+        }
+
         if (!canSave || !transaction || !mode || inFlight.current) {
             return;
         }
@@ -235,55 +445,31 @@ export function LinkTransactionToEmiDialog({
         >
             <DialogContent
                 showCloseButton={!saving}
-                className="
-                    w-[560px]
-                    max-w-[calc(100vw-48px)]
-                    rounded-[24px]
-                    border
-                    border-slate-100
-                    bg-white
-                    p-0
-                    shadow-lg
-                "
+                className={LINK_DIALOG_LAYOUT.content}
             >
-                <DialogHeader className="px-7 pb-4 pt-6">
+                <DialogHeader className={LINK_DIALOG_LAYOUT.header}>
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        Link to Loan EMI
+                        {title}
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm leading-6 text-slate-500">
-                        Record this existing transaction as a loan EMI
-                        payment. No new transaction is created - this one
-                        is kept exactly as it is.
+                        {workflow === "OVERDRAFT"
+                            ? "Record this existing transaction as an overdraft movement - a drawdown, a repayment or an interest / charge."
+                            : workflow === "EMI"
+                              ? "Record this existing transaction as a loan EMI payment."
+                              : "Record this existing transaction as a loan EMI payment or an overdraft movement."}{" "}
+                        No new transaction is created - this one is kept
+                        exactly as it is.
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-5 px-7 pb-6">
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-                        <div className="flex items-baseline justify-between gap-4">
-                            <div className="min-w-0">
-                                <div className="truncate text-sm font-medium text-slate-800">
-                                    {transaction.payee || "—"}
-                                </div>
-                                {transaction.originalNarration && (
-                                    <div
-                                        className="mt-0.5 truncate text-[11px] text-slate-400"
-                                        title={transaction.originalNarration}
-                                    >
-                                        {transaction.originalNarration}
-                                    </div>
-                                )}
-                            </div>
-                            <div className="shrink-0 text-right">
-                                <div className="text-sm font-semibold text-slate-900">
-                                    {money(amount)}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                    {formatDate(transaction.transactionDate)}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                <div className={LINK_DIALOG_LAYOUT.body}>
+                    <LinkTransactionSummary
+                        payee={transaction.payee}
+                        narration={transaction.originalNarration ?? null}
+                        amount={money(amount)}
+                        date={formatDate(transaction.transactionDate)}
+                    />
 
                     {loadError && (
                         <p className="text-sm text-red-600">{loadError}</p>
@@ -294,7 +480,7 @@ export function LinkTransactionToEmiDialog({
                     )}
 
                     {options?.refusal && (
-                        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        <p className={LINK_DIALOG_LAYOUT.notice}>
                             {options.refusal}
                         </p>
                     )}
@@ -313,9 +499,12 @@ export function LinkTransactionToEmiDialog({
                                     onValueChange={value => setLoanId(value ?? "")}
                                     disabled={saving}
                                 >
-                                    <SelectTrigger id="linkEmiLoan" className="w-full">
-                                        <SelectValue placeholder="Select loan">
-                                            {loan?.loanName ?? "Select loan"}
+                                    <SelectTrigger id="linkEmiLoan" className={LINK_DIALOG_LAYOUT.selectTrigger}>
+                                        <SelectValue placeholder="Select loan" className={LINK_DIALOG_LAYOUT.selectText}>
+                                            {loan?.loanName ??
+                                                (overdraft
+                                                    ? `${overdraft.loanName} (Overdraft)`
+                                                    : "Select loan")}
                                         </SelectValue>
                                     </SelectTrigger>
                                     <SelectContent>
@@ -328,9 +517,62 @@ export function LinkTransactionToEmiDialog({
                                                 {item.loanName}
                                             </SelectItem>
                                         ))}
+                                        {options.overdrafts.map(item => (
+                                            <SelectItem
+                                                key={item.loanId}
+                                                value={item.loanId}
+                                                label={`${item.loanName} (Overdraft)`}
+                                            >
+                                                {item.loanName} (Overdraft)
+                                            </SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                             </div>
+
+                            {overdraft?.refusal && (
+                                <p className={LINK_DIALOG_LAYOUT.notice}>
+                                    {overdraft.refusal}
+                                </p>
+                            )}
+
+                            {overdraft && !overdraft.refusal && (
+                                <fieldset>
+                                    <legend className="mb-2 block text-sm font-medium text-slate-700">
+                                        This transaction is
+                                    </legend>
+                                    <div className="space-y-2">
+                                        {overdraft.kinds.map(option => (
+                                            <label
+                                                key={option}
+                                                className={`flex cursor-pointer gap-3 rounded-lg border px-3 py-2.5 ${
+                                                    entryKind === option
+                                                        ? "border-slate-900 bg-slate-50"
+                                                        : "border-slate-200"
+                                                }`}
+                                            >
+                                                <input
+                                                    type="radio"
+                                                    name="linkOverdraftKind"
+                                                    value={option}
+                                                    checked={entryKind === option}
+                                                    onChange={() => setEntryKind(option)}
+                                                    disabled={saving}
+                                                    className="mt-1"
+                                                />
+                                                <span>
+                                                    <span className="block text-sm font-medium text-slate-800">
+                                                        {OVERDRAFT_ENTRY_KIND_LABELS[option]}
+                                                    </span>
+                                                    <span className="block text-xs leading-5 text-slate-500">
+                                                        {kindLabels[option]}
+                                                    </span>
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </fieldset>
+                            )}
 
                             {loan && (
                                 <div>
@@ -350,8 +592,8 @@ export function LinkTransactionToEmiDialog({
                                             onValueChange={value => setScheduleId(value ?? "")}
                                             disabled={saving}
                                         >
-                                            <SelectTrigger id="linkEmiInstallment" className="w-full">
-                                                <SelectValue placeholder="Select instalment">
+                                            <SelectTrigger id="linkEmiInstallment" className={LINK_DIALOG_LAYOUT.selectTrigger}>
+                                                <SelectValue placeholder="Select instalment" className={LINK_DIALOG_LAYOUT.selectText}>
                                                     {installment
                                                         ? `#${installment.installmentNumber} · due ${formatDate(installment.dueDate)} · ${money(installment.remaining)} remaining`
                                                         : "Select instalment"}
@@ -425,7 +667,7 @@ export function LinkTransactionToEmiDialog({
                             )}
 
                             {needsDuplicateConfirmation && loan && (
-                                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                <div className={LINK_DIALOG_LAYOUT.notice}>
                                     {loan.possibleDuplicates.map(text => (
                                         <p key={text}>{text}</p>
                                     ))}
@@ -452,7 +694,7 @@ export function LinkTransactionToEmiDialog({
                     )}
                 </div>
 
-                <div className="flex items-center justify-end gap-3 border-t border-slate-100 px-7 py-5">
+                <div className={LINK_DIALOG_LAYOUT.footer}>
                     <button
                         type="button"
                         disabled={saving}
@@ -468,7 +710,7 @@ export function LinkTransactionToEmiDialog({
                         onClick={handleLink}
                         className="h-9 cursor-pointer rounded-lg bg-slate-900 px-5 text-sm font-medium text-white shadow-sm transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {saving ? "Linking..." : "Link Payment"}
+                        {saving ? "Linking..." : workflow === "OVERDRAFT" ? "Link" : "Link Payment"}
                     </button>
                 </div>
             </DialogContent>

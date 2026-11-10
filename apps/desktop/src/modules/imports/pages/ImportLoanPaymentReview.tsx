@@ -104,7 +104,7 @@ export function ImportLoanPaymentReview({
                                     className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:opacity-60"
                                 >
                                     <Landmark size={14} />
-                                    Link to Loan EMI
+                                    {item.overdraft ? "Link to Loan" : "Link to Loan EMI"}
                                 </button>
                             )}
                         </li>

@@ -39,7 +39,7 @@ export interface LoanFormProps {
 // The "Linked Account" here is the EMI/payment source account. Loan accounts
 // (the loan's own liability row) and investment accounts are never a valid
 // payment source, so they are excluded from the picker.
-const NON_PAYMENT_ACCOUNT_TYPES: ReadonlySet<AccountType> = new Set([
+export const NON_PAYMENT_ACCOUNT_TYPES: ReadonlySet<AccountType> = new Set([
     AccountType.LOAN,
     AccountType.INVESTMENT,
 ]);
@@ -61,7 +61,7 @@ function maskedAccountTail(account: Account): string {
     return tail ? `****${tail}` : "";
 }
 
-function accountOptionLabel(account: Account): string {
+export function accountOptionLabel(account: Account): string {
     return [
         account.name,
         account.institutionName,
@@ -155,6 +155,7 @@ export function LoanForm({
             name: "",
             loanType: "",
             lenderInstitutionName: "",
+            loanAccountNumber: "",
             accountId: "",
             currencyId: fallbackCurrencyId,
             principalAmount: 0,
@@ -210,6 +211,8 @@ export function LoanForm({
             loanType: defaultValues.loanType ?? "",
             lenderInstitutionName:
                 defaultValues.lenderInstitutionName ?? "",
+            loanAccountNumber:
+                defaultValues.loanAccountNumber ?? "",
             accountId: defaultValues.accountId ?? "",
             currencyId:
                 defaultValues.currencyId ?? fallbackCurrencyId,
@@ -387,7 +390,7 @@ export function LoanForm({
                     </FormField>
 
                     <FormField
-                        label="Loan Type"
+                        label="Loan Category"
                         htmlFor="loan-type"
                         required
                         error={errors.loanType?.message}
@@ -410,6 +413,21 @@ export function LoanForm({
                             id="lender-institution"
                             placeholder="e.g. HDFC Bank"
                             {...register("lenderInstitutionName")}
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="Loan Account Number"
+                        htmlFor="loan-account-number"
+                        error={errors.loanAccountNumber?.message}
+                    >
+                        <Input
+                            id="loan-account-number"
+                            type="text"
+                            autoComplete="off"
+                            spellCheck={false}
+                            placeholder="Enter loan account number"
+                            {...register("loanAccountNumber")}
                         />
                     </FormField>
 
@@ -662,16 +680,23 @@ export function LoanForm({
                         htmlFor="paid-installments"
                         error={errors.paidInstallments?.message}
                     >
+                        {/* Read-only: counted from the EMI schedule, never
+                            typed in. Payments are recorded, linked or
+                            reversed from the EMI schedule. */}
                         <Input
                             id="paid-installments"
                             type="number"
-                            min="0"
-                            step="1"
-                            placeholder="0"
+                            readOnly
+                            aria-readonly="true"
+                            tabIndex={-1}
+                            className="bg-slate-50 text-slate-600"
                             {...register("paidInstallments", {
                                 valueAsNumber: true,
                             })}
                         />
+                        <p className="mt-1 text-xs text-slate-500">
+                            Counted from the EMI schedule. Record, link or reverse EMI payments there to change it.
+                        </p>
                     </FormField>
                 </div>
             </Section>

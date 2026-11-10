@@ -1,4 +1,5 @@
 import type { LoanImportPaymentSummary } from "@/modules/loans/services/LoanImportPaymentService";
+import { OVERDRAFT_ENTRY_KIND_LABELS } from "@/modules/loans/types/LoanKind";
 
 /**
  * The sentence appended to the import result message about loan EMI
@@ -23,6 +24,16 @@ export function describeLoanImportPayments(
                             payment.installmentStatus === "PAID" ? "" : ", partial"
                         }`
                 )
+                .join("; ")}).`
+        );
+    }
+
+    const linked = summary.overdraftApplied ?? [];
+
+    if (linked.length > 0) {
+        parts.push(
+            `${linked.length} overdraft transaction${linked.length === 1 ? " was" : "s were"} linked automatically (${linked
+                .map(entry => `${entry.loanName} ${OVERDRAFT_ENTRY_KIND_LABELS[entry.entryKind].toLowerCase()}`)
                 .join("; ")}).`
         );
     }

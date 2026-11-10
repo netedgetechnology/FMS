@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildLoanViewModel } from "./ViewLoanDialog";
-import type { Loan } from "../types";
+import { buildLoanViewModel, buildOverdraftViewModel } from "./ViewLoanDialog";
+import { computeOverdraftPosition } from "../services/overdraftPosition";
+import { LoanKind, type Loan } from "../types";
 
 // This repo has no jsdom / component-render test setup (vitest runs
 // with environment: "node") - see DeletePlanComponentDialog.test.ts for
@@ -81,6 +82,9 @@ describe("buildLoanViewModel - Basic Information", () => {
         ).toBe("HDFC Home Loan");
         expect(
             findField(model.basicInformation, "Loan Type")
+        ).toBe("Term Loan");
+        expect(
+            findField(model.basicInformation, "Loan Category")
         ).toBe("Home Loan");
         expect(
             findField(model.basicInformation, "Lender")
@@ -343,5 +347,49 @@ describe("buildLoanViewModel - read-only by construction", () => {
             expect(typeof field.label).toBe("string");
             expect(typeof field.value).toBe("string");
         }
+    });
+});
+
+describe("Loan Account Number in View Loan", () => {
+    it("shows a Term Loan's number exactly as saved, leading zeros kept", () => {
+        const model = buildLoanViewModel(loan({ loanAccountNumber: "0099000123" }), resolved());
+
+        expect(findField(model.basicInformation, "Loan Account Number")).toBe("0099000123");
+    });
+
+    it("shows a dash for a loan without one", () => {
+        expect(findField(buildLoanViewModel(loan(), resolved()).basicInformation, "Loan Account Number")).toBe("—");
+        expect(
+            findField(buildLoanViewModel(loan({ loanAccountNumber: null }), resolved()).basicInformation, "Loan Account Number")
+        ).toBe("—");
+    });
+
+    it("shows an Overdraft's number in its details", () => {
+        const od = loan({
+            loanKind: LoanKind.OVERDRAFT,
+            loanType: "Overdraft",
+            creditLimit: 12_500_000,
+            openingUsed: 0,
+            openingUsedAsOf: "2026-02-28",
+            linkedAccountIds: ["bank-1"],
+            loanAccountNumber: "0099000123",
+        });
+        const position = computeOverdraftPosition(12_500_000, {
+            used: 0,
+            totalDrawdowns: 0,
+            totalRepayments: 0,
+            totalInterestCharges: 0,
+            invalidLinks: 0,
+        });
+
+        const model = buildOverdraftViewModel(od, position, {
+            lenderName: "TATA Capital",
+            linkedAccountNames: ["Netedge Technology 3999"],
+            currencyLabel: "INR",
+            formatMoney,
+            formatDate,
+        });
+
+        expect(findField(model.details, "Loan Account Number")).toBe("0099000123");
     });
 });

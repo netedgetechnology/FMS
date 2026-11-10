@@ -93,7 +93,7 @@ describe("2+3. a first instalment different from (smaller than) the regular EMI"
         const balances = computeLoanScheduleAndBalances({
             id: "abc-loan", principalAmount: 13300000, interestRate: 11, interestType: "REDUCING",
             tenureMonths: 180, emiAmount: 151167.39, firstInstallmentAmount: 68943,
-            startDate: "2026-04-05", paidInstallments: 0, status: "ACTIVE",
+            startDate: "2026-04-05", status: "ACTIVE",
         });
 
         expect(balances.schedule).toHaveLength(181);
@@ -101,11 +101,11 @@ describe("2+3. a first instalment different from (smaller than) the regular EMI"
         expect(balances.outstandingInterest).toBe(money(68943 + 27210131.34 - 13300000));
     });
 
-    it("an already-paid instalment count marks the first instalment first", () => {
-        const paid = generate({ firstInstallmentAmount: 68943, paidInstallments: 1 });
+    it("never marks an instalment paid - every generated row is UPCOMING", () => {
+        const rows = generate({ firstInstallmentAmount: 68943 });
 
-        expect(paid[0]).toMatchObject({ status: LoanPaymentStatus.PAID, paidAmount: 68943 });
-        expect(paid[1].status).toBe(LoanPaymentStatus.UPCOMING);
+        expect(rows.every(row => row.status === LoanPaymentStatus.UPCOMING)).toBe(true);
+        expect(rows.every(row => row.paidAmount === null && row.transactionId === null)).toBe(true);
     });
 
     it("rejects a negative first instalment", () => {

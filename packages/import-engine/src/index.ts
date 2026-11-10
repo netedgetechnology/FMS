@@ -4,3 +4,4 @@ export * from "./normalizer";
 export * from "./validation";
 export * from "./pipeline";
 export * from "./mapping";
+export * from "./loanStatement";

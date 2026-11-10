@@ -7,6 +7,8 @@ mod import_reconciliation_reset;
 mod loan_create;
 mod loan_delete;
 mod loan_payment;
+mod loan_setup;
+mod overdraft_update;
 mod storage;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -38,6 +40,7 @@ pub fn run() {
             loan_delete::delete_loan_atomic,
             loan_payment::record_emi_payment_atomic,
             loan_payment::reverse_emi_payment_atomic,
+            overdraft_update::update_overdraft_atomic,
             category_import::create_categories_atomic,
             category_import::save_category_csv_template,
         ])

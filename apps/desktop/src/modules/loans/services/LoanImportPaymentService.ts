@@ -5,13 +5,22 @@ import type { Transaction } from "@/modules/transactions/types";
 import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentScheduleRepository";
 import { LoanRepository } from "../repositories/LoanRepository";
 import { LoanSchedulePaymentRepository } from "../repositories/LoanSchedulePaymentRepository";
-import type { Loan } from "../types";
+import { OverdraftTransactionLinkRepository } from "../repositories/OverdraftTransactionLinkRepository";
+import { isOverdraft, overdraftAccountIds, type Loan, type OverdraftEntryKind } from "../types";
 import { LoanStatus } from "../types/LoanStatus";
 import { LoanPaymentService } from "./LoanPaymentService";
 import {
     decideLoanPaymentForTransaction,
+    type LoanImportDecision,
     type LoanMatchState,
 } from "./loanImportMatching";
+import {
+    decideOverdraftForTransaction,
+    type OverdraftImportDecision,
+    type OverdraftMatchState,
+} from "./overdraftImportMatching";
+import { OverdraftService } from "./OverdraftService";
+import { isLoanLinkEligible, loadLoanLinkCategoryIds } from "./loanLinkEligibility";
 
 export interface AppliedLoanImportPayment {
     transactionId: string;
@@ -29,11 +38,24 @@ export interface LoanImportPaymentForReview {
     amount: number;
     loanNames: string[];
     reason: string;
+    /** It may be an Overdraft movement - linked with the generic Link to Loan. */
+    overdraft?: boolean;
+}
+
+/** An imported transaction linked to an Overdraft automatically. */
+export interface AppliedOverdraftImportEntry {
+    transactionId: string;
+    loanId: string;
+    loanName: string;
+    entryKind: OverdraftEntryKind;
+    amount: number;
 }
 
 export interface LoanImportPaymentSummary {
     applied: AppliedLoanImportPayment[];
     needsReview: LoanImportPaymentForReview[];
+    /** Overdraft movements linked automatically - absent when there were none. */
+    overdraftApplied?: AppliedOverdraftImportEntry[];
 }
 
 // What the user is told when something unexpected stops a payment being
@@ -44,6 +66,9 @@ export const COULD_NOT_RECORD_REASON =
 
 export const COULD_NOT_CHECK_REASON =
     "FinWea could not check this payment against your loans. If it is a loan EMI, use Link to Loan EMI to record it.";
+
+export const COULD_NOT_LINK_OVERDRAFT_REASON =
+    "FinWea could not link this transaction to the overdraft automatically. Use Link to Loan to link it.";
 
 export const COULD_NOT_CHECK_IMPORT_REASON =
     "FinWea could not check this import for loan payments. If it included a loan EMI, open it in Transactions and use Link to Loan EMI.";
@@ -68,7 +93,7 @@ export function uncheckedLoanImportSummary(): LoanImportPaymentSummary {
 }
 
 // ---------------------------------------------------------------------
-// Applies statement debits to loan EMIs automatically - run by
+// Applies statement transactions to loans automatically - run by
 // ImportService only once a confirmed import has created its
 // transactions (never during Preview, never for a duplicate row, whose
 // existing transaction is left alone). Each transaction is decided by
@@ -80,6 +105,13 @@ export function uncheckedLoanImportSummary(): LoanImportPaymentSummary {
 // loan's state is re-read after every applied payment, so several EMIs
 // (or several partial payments of one EMI) in one statement each land on
 // the right instalment.
+//
+// The Loan Type decides the rules. A Term Loan's debits go through EMI
+// matching exactly as before; an Overdraft is never sent through EMI
+// matching - its debits AND credits go through Overdraft matching
+// (overdraftImportMatching.ts), which only links a transaction on a
+// pattern the user taught by linking one by hand. A transaction both
+// claim is never applied to either: it goes to review.
 // ---------------------------------------------------------------------
 
 export class LoanImportPaymentService {
@@ -94,6 +126,10 @@ export class LoanImportPaymentService {
     private readonly institutionRepository = new InstitutionRepository();
 
     private readonly loanPaymentService = new LoanPaymentService();
+
+    private readonly overdraftService = new OverdraftService();
+
+    private readonly overdraftLinkRepository = new OverdraftTransactionLinkRepository();
 
     /**
      * Never throws: an unexpected failure leaves the transactions exactly
@@ -121,56 +157,80 @@ export class LoanImportPaymentService {
 
         const order = new Map(transactionIds.map((id, index) => [id, index]));
 
-        const debits = (
+        // Only transactions in a loan category are ever considered - for a
+        // match OR a review item. Debits for Term Loans; debits and credits
+        // for Overdrafts.
+        const loanCategoryIds = await loadLoanLinkCategoryIds();
+
+        const imported = (
             await this.transactionRepository.getByIds(transactionIds)
         )
-            .filter(transaction => transaction.type === "expense")
+            .filter(transaction => isLoanLinkEligible(transaction, loanCategoryIds))
             .sort(
-                (a, b) =>
-                    a.transactionDate.localeCompare(b.transactionDate) ||
-                    order.get(a.id)! - order.get(b.id)!
-            );
+            (a, b) =>
+                a.transactionDate.localeCompare(b.transactionDate) ||
+                order.get(a.id)! - order.get(b.id)!
+        );
 
-        if (debits.length === 0) {
+        if (imported.length === 0) {
             return summary;
         }
 
-        const accountIds = new Set(debits.map(debit => debit.accountId));
+        const accountIds = new Set(imported.map(transaction => transaction.accountId));
 
+        // A Term Loan by its EMI payment account; an Overdraft by any of its
+        // linked bank accounts.
         const loans = (await this.loanRepository.getAll()).filter(
             loan =>
                 loan.status !== LoanStatus.CLOSED &&
-                loan.accountId !== null &&
-                accountIds.has(loan.accountId)
+                (isOverdraft(loan)
+                    ? overdraftAccountIds(loan).some(id => accountIds.has(id))
+                    : loan.accountId !== null && accountIds.has(loan.accountId))
         );
 
         if (loans.length === 0) {
             return summary;
         }
 
+        // Term Loans only - an Overdraft never takes part in EMI matching.
         const states = new Map<string, LoanMatchState>();
 
-        for (const loan of loans) {
+        for (const loan of loans.filter(loan => !isOverdraft(loan))) {
             states.set(loan.id, await this.loadState(loan));
         }
+
+        const overdraftStates: OverdraftMatchState[] = [];
+
+        for (const loan of loans.filter(isOverdraft)) {
+            overdraftStates.push(await this.overdraftService.loadMatchState(loan));
+        }
+
+        const loanNames = new Map(loans.map(loan => [loan.id, loan.name]));
 
         // Loans whose state could not be re-read after a payment - their
         // later debits are never matched on stale state.
         const unreliable = new Set<string>();
 
-        for (const debit of debits) {
-            let decision: ReturnType<typeof decideLoanPaymentForTransaction>;
+        for (const debit of imported) {
+            let decision: LoanImportDecision;
+            let overdraftDecision: OverdraftImportDecision;
 
             try {
-                // Never a second payment for one transaction (the atomic
-                // write refuses it too).
-                if (await this.paymentRepository.getByTransactionId(debit.id)) {
+                // Never a second payment or link for one transaction (the
+                // atomic write and UNIQUE(transaction_id) refuse it too).
+                if (
+                    (await this.paymentRepository.getByTransactionId(debit.id)) ||
+                    (await this.overdraftLinkRepository.getByTransactionId(debit.id))
+                ) {
                     continue;
                 }
 
-                decision = decideLoanPaymentForTransaction(debit, [
-                    ...states.values(),
-                ]);
+                decision =
+                    debit.type === "expense" && states.size > 0
+                        ? decideLoanPaymentForTransaction(debit, [...states.values()])
+                        : { kind: "none" };
+
+                overdraftDecision = decideOverdraftForTransaction(debit, overdraftStates);
             } catch (error) {
                 // Not known to be a loan payment at all - rather than flag
                 // every remaining debit, stop here with one notice; what
@@ -180,6 +240,64 @@ export class LoanImportPaymentService {
                     ...uncheckedLoanImportSummary().needsReview
                 );
                 break;
+            }
+
+            // Claimed by a Term Loan AND an Overdraft: never guessed.
+            if (decision.kind !== "none" && overdraftDecision.kind !== "none") {
+                const loanIds = [
+                    ...(decision.kind === "apply" ? [decision.loanId] : decision.loanIds),
+                    ...(overdraftDecision.kind === "apply"
+                        ? [overdraftDecision.loanId]
+                        : overdraftDecision.loanIds),
+                ];
+
+                summary.needsReview.push({
+                    ...this.forReview(debit, [], "", states),
+                    overdraft: true,
+                    loanNames: loanIds.flatMap(id => loanNames.get(id) ?? []),
+                    reason: `It could belong to more than one loan (${loanIds
+                        .map(id => loanNames.get(id) ?? "a loan")
+                        .join(", ")}), so it was not applied to any. Use Link to Loan to choose.`,
+                });
+                continue;
+            }
+
+            if (overdraftDecision.kind === "review") {
+                summary.needsReview.push({
+                    ...this.forReview(debit, [], overdraftDecision.reason, states),
+                    overdraft: true,
+                    loanNames: overdraftDecision.loanIds.flatMap(id => loanNames.get(id) ?? []),
+                });
+                continue;
+            }
+
+            if (overdraftDecision.kind === "apply") {
+                try {
+                    const { loan } = await this.overdraftService.link({
+                        transactionId: debit.id,
+                        loanId: overdraftDecision.loanId,
+                        entryKind: overdraftDecision.entryKind,
+                        source: "IMPORT",
+                    });
+
+                    (summary.overdraftApplied ??= []).push({
+                        transactionId: debit.id,
+                        loanId: loan.id,
+                        loanName: loan.name,
+                        entryKind: overdraftDecision.entryKind,
+                        amount: debit.amount,
+                    });
+                } catch (error) {
+                    // Refused - nothing was written (one statement); the
+                    // transaction stays an ordinary imported transaction.
+                    console.error("Failed to link an imported overdraft transaction:", error);
+                    summary.needsReview.push({
+                        ...this.forReview(debit, [], COULD_NOT_LINK_OVERDRAFT_REASON, states),
+                        overdraft: true,
+                        loanNames: [loanNames.get(overdraftDecision.loanId) ?? "an overdraft"],
+                    });
+                }
+                continue;
             }
 
             if (decision.kind === "none") {

@@ -15,6 +15,7 @@ import {
     LoanTransactionLinkService,
     type TransactionLinkDetails,
 } from "../services/LoanTransactionLinkService";
+import { OVERDRAFT_ENTRY_KIND_LABELS } from "../types";
 import { emiPaymentErrorMessage } from "./emiPaymentErrorMessage";
 
 // ---------------------------------------------------------------------
@@ -47,11 +48,17 @@ export function LinkedEmiDetails({
             <div className="font-medium text-slate-900">
                 Linked to {details.loanName}
             </div>
+            {details.overdraftEntryKind && (
+                <div>
+                    Overdraft{" "}
+                    {OVERDRAFT_ENTRY_KIND_LABELS[details.overdraftEntryKind].toLowerCase()}
+                </div>
+            )}
             {details.installmentNumber !== null && (
                 <div>EMI #{details.installmentNumber}</div>
             )}
             <div>
-                Payment:{" "}
+                {details.overdraftEntryKind ? "Amount" : "Payment"}:{" "}
                 {formatMoney(details.amount, {
                     currency,
                     locale: "en-IN",
@@ -94,7 +101,7 @@ export function LinkedEmiPaymentDialog({
                     if (loaded) {
                         setDetails(loaded);
                     } else {
-                        setLoadError("This transaction is not linked to a loan EMI any more.");
+                        setLoadError("This transaction is not linked to a loan any more.");
                     }
                 }
             })
@@ -171,12 +178,17 @@ export function LinkedEmiPaymentDialog({
             >
                 <DialogHeader className="px-7 pb-4 pt-6">
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        Linked to Loan EMI
+                        {details?.overdraftEntryKind
+                            ? "Linked to Overdraft"
+                            : "Linked to Loan EMI"}
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm leading-6 text-slate-500">
                         {transaction.payee || "This transaction"} is recorded
-                        as a loan EMI payment.
+                        as{" "}
+                        {details?.overdraftEntryKind
+                            ? "an overdraft movement."
+                            : "a loan EMI payment."}
                     </DialogDescription>
                 </DialogHeader>
 

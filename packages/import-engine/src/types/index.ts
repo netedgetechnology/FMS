@@ -101,6 +101,8 @@ export interface LoanScheduleColumnMapping {
     interest?: string;
     outstandingPrincipal?: string;
     outstandingBalance?: string;
+    /** Optional: the principal outstanding at the START of the instalment. */
+    openingPrincipal?: string;
     loanNumber?: string;
     description?: string;
     referenceNumber?: string;
@@ -115,6 +117,8 @@ export interface NormalizedLoanScheduleCandidate {
     principal: number | null;
     interest: number | null;
     outstandingPrincipal: number | null;
+    /** The lender's opening principal for the row; null/absent when not given. */
+    openingPrincipal?: number | null;
     loanNumber: string | null;
     description: string;
     referenceNumber: string | null;

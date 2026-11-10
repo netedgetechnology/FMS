@@ -5,6 +5,24 @@ import {
     Loan,
     UpdateLoanRequest,
 } from "../types";
+import {
+    OVERDRAFT_POSITIONS_SQL,
+    outstandingInterestSql,
+    outstandingPrincipalSql,
+} from "./overdraftPositionSql";
+
+/**
+ * Paid instalments, derived from the loan's own schedule (PAID rows - linked
+ * payments and "Settled before FinWea" alike). Only a loan with no schedule
+ * at all (an Overdraft, or a legacy row) falls back to the stored column.
+ */
+export const PAID_INSTALMENTS_SQL = `
+    CASE
+        WHEN EXISTS (SELECT 1 FROM loan_payment_schedule ps WHERE ps.loan_id = loans.id)
+            THEN (SELECT COUNT(*) FROM loan_payment_schedule ps WHERE ps.loan_id = loans.id AND ps.status = 'PAID')
+        ELSE loans.paid_installments
+    END
+`;
 
 export interface CreateLoanAtomicRequest {
     loanAccount: {
@@ -25,6 +43,7 @@ export interface CreateLoanAtomicRequest {
         lenderInstitutionId: string | null;
         loanType: string;
         name: string;
+        loanAccountNumber: string | null;
         principalAmount: number;
         interestRate: number;
         interestType: string;
@@ -42,6 +61,19 @@ export interface CreateLoanAtomicRequest {
         createdAt: string;
         updatedAt: string;
     };
+    /**
+     * Present only for an Overdraft: the loan is then stored as
+     * loan_kind = OVERDRAFT with these terms, in the same transaction
+     * (src-tauri/src/loan_create.rs). Absent for a Term Loan, whose
+     * creation is exactly as before.
+     */
+    overdraft?: {
+        creditLimit: number;
+        openingUsed: number;
+        openingUsedAsOf: string;
+        /** Every linked bank account - one overdraft_accounts row each. */
+        accountIds: string[];
+    };
     schedule: Array<{
         id: string;
         installmentNumber: number;
@@ -54,11 +86,84 @@ export interface CreateLoanAtomicRequest {
         paidDate: string | null;
         paidAmount: number | null;
         transactionId: string | null;
+        /** Lender-imported schedule only: the lender's opening principal. */
+        openingPrincipal?: number | null;
+        /** Declared "Settled before FinWea" (migration 052) - no payment behind it. */
+        settledBeforeFinwea?: boolean;
+    }>;
+    /**
+     * The historical instalments linked to their EXISTING bank debit (a loan
+     * that was already running). One loan_schedule_payments row each,
+     * written in the same transaction; the Rust command re-checks every
+     * transaction and every PAID row (src-tauri/src/loan_create.rs).
+     */
+    historicalPayments?: Array<{
+        id: string;
+        scheduleId: string;
+        transactionId: string;
     }>;
     balances: {
         outstandingPrincipal: number;
         outstandingInterest: number;
         status: string;
+    };
+    /**
+     * The Add Loan setup (migration 051, src-tauri/src/loan_setup.rs):
+     * lender terms, disbursements and initial expenses, written in the same
+     * transaction. Absent: creation is exactly as before.
+     */
+    setup?: {
+        loanPurpose: string | null;
+        rateType: string | null;
+        interestCalculationMethod: string | null;
+        sanctionDate: string | null;
+        sanctionedAmount: number | null;
+        firstEmiDate: string | null;
+        repaymentFrequency: string | null;
+        paymentDay: number | null;
+        gracePeriodMonths: number | null;
+        balloonAmount: number | null;
+        scheduleSource: string | null;
+        drawingPower: number | null;
+        disbursements: Array<{
+            id: string;
+            sequence: number;
+            disbursementDate: string;
+            grossAmount: number;
+            deductionsAmount: number;
+            netAmount: number;
+            destinationAccountId: string | null;
+            reference: string | null;
+            transactionId: string | null;
+        }>;
+        expenses: Array<{
+            id: string;
+            expenseType: string;
+            description: string | null;
+            expenseDate: string;
+            baseAmount: number;
+            gstRate: number | null;
+            gstAmount: number;
+            totalAmount: number;
+            settlement: string;
+            disbursementId: string | null;
+            paymentMethod: string | null;
+            paymentAccountId: string | null;
+            transactionReference: string | null;
+            transactionId: string | null;
+        }>;
+    };
+}
+
+// linkedAccountIds arrives as a JSON array (json_group_array) - an empty
+// one for a Term Loan.
+function fromRow(row: Loan): Loan {
+    const raw = row.linkedAccountIds as unknown;
+
+    return {
+        ...row,
+        linkedAccountIds:
+            typeof raw === "string" ? (JSON.parse(raw) as string[]) : (row.linkedAccountIds ?? []),
     };
 }
 
@@ -113,7 +218,21 @@ export class LoanRepository extends Repository {
                 loan_account_id AS loanAccountId,
                 lender_institution_id AS lenderInstitutionId,
                 loan_type AS loanType,
+                loan_kind AS loanKind,
+                credit_limit AS creditLimit,
+                opening_used AS openingUsed,
+                opening_used_as_of AS openingUsedAsOf,
+                (
+                    SELECT json_group_array(account_id)
+                    FROM (
+                        SELECT account_id
+                        FROM overdraft_accounts
+                        WHERE overdraft_accounts.loan_id = loans.id
+                        ORDER BY created_at, rowid
+                    )
+                ) AS linkedAccountIds,
                 name,
+                loan_account_number AS loanAccountNumber,
                 principal_amount AS principalAmount,
                 interest_rate AS interestRate,
                 interest_type AS interestType,
@@ -122,21 +241,35 @@ export class LoanRepository extends Repository {
                 first_installment_amount AS firstInstallmentAmount,
                 start_date AS startDate,
                 maturity_date AS maturityDate,
-                outstanding_principal AS outstandingPrincipal,
-                outstanding_interest AS outstandingInterest,
-                paid_installments AS paidInstallments,
+                ${outstandingPrincipalSql("loans", "od")} AS outstandingPrincipal,
+                ${outstandingInterestSql("loans")} AS outstandingInterest,
+                ${PAID_INSTALMENTS_SQL} AS paidInstallments,
                 currency_id AS currencyId,
                 status,
                 notes,
+                loan_purpose AS loanPurpose,
+                rate_type AS rateType,
+                interest_calculation_method AS interestCalculationMethod,
+                sanction_date AS sanctionDate,
+                sanctioned_amount AS sanctionedAmount,
+                first_emi_date AS firstEmiDate,
+                repayment_frequency AS repaymentFrequency,
+                payment_day AS paymentDay,
+                grace_period_months AS gracePeriodMonths,
+                balloon_amount AS balloonAmount,
+                schedule_source AS scheduleSource,
+                drawing_power AS drawingPower,
                 created_at AS createdAt,
                 updated_at AS updatedAt
             FROM loans
+            LEFT JOIN (${OVERDRAFT_POSITIONS_SQL}) AS od
+                ON od.loan_id = loans.id
             WHERE deleted_at IS NULL
             ORDER BY name
             `
         );
 
-        return rows;
+        return rows.map(fromRow);
     }
 
     async getById(id: string): Promise<Loan | null> {
@@ -148,7 +281,21 @@ export class LoanRepository extends Repository {
                 loan_account_id AS loanAccountId,
                 lender_institution_id AS lenderInstitutionId,
                 loan_type AS loanType,
+                loan_kind AS loanKind,
+                credit_limit AS creditLimit,
+                opening_used AS openingUsed,
+                opening_used_as_of AS openingUsedAsOf,
+                (
+                    SELECT json_group_array(account_id)
+                    FROM (
+                        SELECT account_id
+                        FROM overdraft_accounts
+                        WHERE overdraft_accounts.loan_id = loans.id
+                        ORDER BY created_at, rowid
+                    )
+                ) AS linkedAccountIds,
                 name,
+                loan_account_number AS loanAccountNumber,
                 principal_amount AS principalAmount,
                 interest_rate AS interestRate,
                 interest_type AS interestType,
@@ -157,22 +304,66 @@ export class LoanRepository extends Repository {
                 first_installment_amount AS firstInstallmentAmount,
                 start_date AS startDate,
                 maturity_date AS maturityDate,
-                outstanding_principal AS outstandingPrincipal,
-                outstanding_interest AS outstandingInterest,
-                paid_installments AS paidInstallments,
+                ${outstandingPrincipalSql("loans", "od")} AS outstandingPrincipal,
+                ${outstandingInterestSql("loans")} AS outstandingInterest,
+                ${PAID_INSTALMENTS_SQL} AS paidInstallments,
                 currency_id AS currencyId,
                 status,
                 notes,
+                loan_purpose AS loanPurpose,
+                rate_type AS rateType,
+                interest_calculation_method AS interestCalculationMethod,
+                sanction_date AS sanctionDate,
+                sanctioned_amount AS sanctionedAmount,
+                first_emi_date AS firstEmiDate,
+                repayment_frequency AS repaymentFrequency,
+                payment_day AS paymentDay,
+                grace_period_months AS gracePeriodMonths,
+                balloon_amount AS balloonAmount,
+                schedule_source AS scheduleSource,
+                drawing_power AS drawingPower,
                 created_at AS createdAt,
                 updated_at AS updatedAt
             FROM loans
+            LEFT JOIN (${OVERDRAFT_POSITIONS_SQL}) AS od
+                ON od.loan_id = loans.id
             WHERE id = ?
               AND deleted_at IS NULL
             `,
             [id]
         );
 
-        return rows[0] ?? null;
+        return rows[0] ? fromRow(rows[0]) : null;
+    }
+
+    /**
+     * Edits an Overdraft - its own terms and its full set of linked bank
+     * accounts - in ONE real database transaction (a dedicated Rust
+     * command, src-tauri/src/overdraft_update.rs), so the account set can
+     * never be left half-replaced.
+     */
+    async updateOverdraftAtomic(request: {
+        loanId: string;
+        name: string;
+        loanAccountNumber: string | null;
+        lenderInstitutionId: string | null;
+        currencyId: string;
+        interestRate: number;
+        startDate: string;
+        status: string;
+        notes: string | null;
+        creditLimit: number;
+        openingUsed: number;
+        openingUsedAsOf: string;
+        accountIds: string[];
+        /** Write drawing_power (migration 051) - false leaves it untouched. */
+        updateDrawingPower?: boolean;
+        drawingPower?: number | null;
+        /** Replace a Dropline's steps (migration 053) - false leaves them untouched. */
+        updateDrawingPowerSchedule?: boolean;
+        drawingPowerSchedule?: { id: string; effectiveDate: string; drawingPower: number }[];
+    }): Promise<void> {
+        await invoke("update_overdraft_atomic", { request });
     }
 
     async create(loan: Loan): Promise<void> {
@@ -185,6 +376,7 @@ export class LoanRepository extends Repository {
                 lender_institution_id,
                 loan_type,
                 name,
+                loan_account_number,
                 principal_amount,
                 interest_rate,
                 interest_type,
@@ -203,7 +395,7 @@ export class LoanRepository extends Repository {
                 updated_at
             )
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 loan.id,
@@ -211,6 +403,7 @@ export class LoanRepository extends Repository {
                 loan.lenderInstitutionId,
                 loan.loanType,
                 loan.name,
+                loan.loanAccountNumber ?? null,
                 loan.principalAmount,
                 loan.interestRate,
                 loan.interestType,
@@ -242,6 +435,7 @@ export class LoanRepository extends Repository {
                 lender_institution_id = ?,
                 loan_type = ?,
                 name = ?,
+                loan_account_number = ?,
                 principal_amount = ?,
                 interest_rate = ?,
                 interest_type = ?,
@@ -249,10 +443,16 @@ export class LoanRepository extends Repository {
                 emi_amount = ?,
                 start_date = ?,
                 maturity_date = ?,
-                paid_installments = ?,
+                -- paid_installments is never written by an edit: it is
+                -- derived from the schedule (PAID_INSTALMENTS_SQL).
                 currency_id = ?,
                 status = ?,
                 notes = ?,
+                -- OD terms: written for an Overdraft only. The Loan Type
+                -- itself (loan_kind) is never changed by an edit.
+                credit_limit = CASE WHEN loan_kind = 'OVERDRAFT' THEN ? ELSE credit_limit END,
+                opening_used = CASE WHEN loan_kind = 'OVERDRAFT' THEN ? ELSE opening_used END,
+                opening_used_as_of = CASE WHEN loan_kind = 'OVERDRAFT' THEN ? ELSE opening_used_as_of END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
               AND deleted_at IS NULL
@@ -262,6 +462,7 @@ export class LoanRepository extends Repository {
                 loan.lenderInstitutionId,
                 loan.loanType,
                 loan.name,
+                loan.loanAccountNumber ?? null,
                 loan.principalAmount,
                 loan.interestRate,
                 loan.interestType,
@@ -269,10 +470,12 @@ export class LoanRepository extends Repository {
                 loan.emiAmount,
                 loan.startDate,
                 loan.maturityDate,
-                loan.paidInstallments,
                 loan.currencyId,
                 loan.status,
                 loan.notes ?? null,
+                loan.creditLimit ?? null,
+                loan.openingUsed ?? null,
+                loan.openingUsedAsOf ?? null,
                 loan.id,
             ]
         );

@@ -193,6 +193,12 @@ export function normalizeLoanScheduleRows(
             mapping.outstandingBalance
         );
 
+        const openingPrincipalValue = getValue(
+            row.values,
+            document.headers,
+            mapping.openingPrincipal
+        );
+
         const loanNumberValue = getValue(
             row.values,
             document.headers,
@@ -237,6 +243,11 @@ export function normalizeLoanScheduleRows(
                     outstandingPrincipalValue ||
                     outstandingBalanceValue
                 ),
+
+            openingPrincipal:
+                mapping.openingPrincipal
+                    ? parseNumber(openingPrincipalValue)
+                    : null,
 
             loanNumber:
                 loanNumberValue || null,

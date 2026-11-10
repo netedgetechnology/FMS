@@ -12,9 +12,16 @@ import {
 import { InstitutionRepository } from "@/modules/institutions/repositories/InstitutionRepository";
 
 import { LoanForm } from "./LoanForm";
+import { OverdraftForm } from "./OverdraftForm";
 import { LoanService } from "../services";
-import type { Loan } from "../types";
-import type { LoanFormValues } from "../validation";
+import { OverdraftService } from "../services/OverdraftService";
+import type { DrawingPowerStep } from "../setup/droplineSchedule";
+import { isOverdraft, type Loan } from "../types";
+import {
+    overdraftRequestFromValues,
+    type LoanFormValues,
+    type OverdraftFormValues,
+} from "../validation";
 
 export interface EditLoanDialogProps {
     loan: Loan | null;
@@ -31,6 +38,28 @@ export function EditLoanDialog({
 }: EditLoanDialogProps) {
     const [loading, setLoading] = useState(false);
     const [lenderName, setLenderName] = useState("");
+    // A Dropline's saved steps; null while loading, so the form never opens
+    // with the single drawing-power field for a loan that has steps.
+    const [droplineSteps, setDroplineSteps] = useState<DrawingPowerStep[] | null>(null);
+
+    useEffect(() => {
+        let mounted = true;
+        setDroplineSteps(null);
+
+        if (loan && isOverdraft(loan)) {
+            new OverdraftService()
+                .getDrawingPowerSchedule(loan)
+                .then(steps => mounted && setDroplineSteps(steps))
+                .catch(error => {
+                    console.error("Failed to load drawing-power steps:", error);
+                    if (mounted) setDroplineSteps([]);
+                });
+        }
+
+        return () => {
+            mounted = false;
+        };
+    }, [loan]);
 
     useEffect(() => {
         let mounted = true;
@@ -76,6 +105,41 @@ export function EditLoanDialog({
         return null;
     }
 
+    // An Overdraft is edited with its own form; its Loan Type never changes.
+    async function handleOverdraftSubmit(
+        values: OverdraftFormValues,
+        extras?: { drawingPowerSchedule?: DrawingPowerStep[] }
+    ) {
+        if (!loan) {
+            return;
+        }
+
+        try {
+            setLoading(true);
+
+            await new LoanService().update({
+                ...overdraftRequestFromValues(values),
+                id: loan.id,
+                ...(extras?.drawingPowerSchedule ? { drawingPowerSchedule: extras.drawingPowerSchedule } : {}),
+            });
+
+            await onSuccess?.();
+
+            toast.success("Overdraft updated successfully.");
+            onOpenChange(false);
+        } catch (error) {
+            console.error("Failed to update overdraft:", error);
+
+            toast.error(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to update overdraft."
+            );
+        } finally {
+            setLoading(false);
+        }
+    }
+
     async function handleSubmit(values: LoanFormValues) {
         if (!loan) {
             return;
@@ -92,6 +156,8 @@ export function EditLoanDialog({
                 id: currentLoan.id,
                 name: values.name,
                 loanType: values.loanType,
+                // Blank clears it (LoanService stores null).
+                loanAccountNumber: values.loanAccountNumber ?? null,
                 lenderInstitutionName:
                     values.lenderInstitutionName || undefined,
                 accountId: values.accountId || undefined,
@@ -103,7 +169,8 @@ export function EditLoanDialog({
                 emiAmount: values.emiAmount,
                 firstInstallmentAmount:
                     values.firstInstallmentAmount ?? null,
-                paidInstallments: values.paidInstallments,
+                // paidInstallments is never sent: it is derived from the
+                // EMI schedule and can't be edited (LoanService.update).
                 startDate: values.startDate,
                 maturityDate: values.maturityDate || undefined,
                 status: values.status,
@@ -161,11 +228,40 @@ export function EditLoanDialog({
                 </DialogHeader>
 
                 <div className="border-t border-slate-100 px-7 py-5">
+                    {isOverdraft(loan) && droplineSteps === null ? (
+                    <p className="text-sm text-slate-500">Loading...</p>
+                    ) : isOverdraft(loan) ? (
+                    <OverdraftForm
+                        drawingPowerSchedule={droplineSteps}
+                        facilityLabel={loan.loanType?.trim() || "Overdraft"}
+                        defaultValues={{
+                            name: loan.name,
+                            loanAccountNumber: loan.loanAccountNumber ?? "",
+                            lenderInstitutionName: lenderName,
+                            // Exactly the accounts saved on the OD.
+                            accountIds: loan.linkedAccountIds ?? [],
+                            currencyId: loan.currencyId,
+                            creditLimit: loan.creditLimit ?? 0,
+                            openingUsed: loan.openingUsed ?? 0,
+                            openingUsedAsOf: loan.openingUsedAsOf ?? "",
+                            drawingPower: loan.drawingPower ?? null,
+                            startDate: loan.startDate,
+                            interestRate: loan.interestRate,
+                            status: loan.status,
+                            notes: loan.notes ?? "",
+                        }}
+                        loading={loading}
+                        submitLabel="Save Changes"
+                        onCancel={() => onOpenChange(false)}
+                        onSubmit={handleOverdraftSubmit}
+                    />
+                    ) : (
                     <LoanForm
                         editMode
                         defaultValues={{
                             name: loan.name,
                             loanType: loan.loanType,
+                            loanAccountNumber: loan.loanAccountNumber ?? "",
                             lenderInstitutionName: lenderName,
                             accountId: loan.accountId ?? "",
                             currencyId: loan.currencyId,
@@ -191,6 +287,7 @@ export function EditLoanDialog({
                         onCancel={() => onOpenChange(false)}
                         onSubmit={handleSubmit}
                     />
+                    )}
                 </div>
             </DialogContent>
         </Dialog>

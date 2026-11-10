@@ -4,11 +4,20 @@ import {
     LoanPaymentSchedule,
 } from "../types";
 
+/**
+ * SQLite stores the "Settled before FinWea" flag (migration 052) as 0 / 1;
+ * a row read without the column (an older test schema) is simply not
+ * settled.
+ */
+function withSettledFlag(row: LoanPaymentSchedule): LoanPaymentSchedule {
+    return { ...row, settledBeforeFinwea: Boolean(row.settledBeforeFinwea) };
+}
+
 export class LoanPaymentScheduleRepository extends Repository {
     async getAllByLoanId(
         loanId: string
     ): Promise<LoanPaymentSchedule[]> {
-        return await this.select<LoanPaymentSchedule>(
+        const rows = await this.select<LoanPaymentSchedule>(
             `
             SELECT
                 id,
@@ -23,6 +32,7 @@ export class LoanPaymentScheduleRepository extends Repository {
                 paid_date AS paidDate,
                 paid_amount AS paidAmount,
                 transaction_id AS transactionId,
+                settled_before_finwea AS settledBeforeFinwea,
                 notes
             FROM loan_payment_schedule
             WHERE loan_id = ?
@@ -30,6 +40,8 @@ export class LoanPaymentScheduleRepository extends Repository {
             `,
             [loanId]
         );
+
+        return rows.map(withSettledFlag);
     }
 
     async getById(
@@ -50,6 +62,7 @@ export class LoanPaymentScheduleRepository extends Repository {
                 paid_date AS paidDate,
                 paid_amount AS paidAmount,
                 transaction_id AS transactionId,
+                settled_before_finwea AS settledBeforeFinwea,
                 notes
             FROM loan_payment_schedule
             WHERE id = ?
@@ -57,7 +70,7 @@ export class LoanPaymentScheduleRepository extends Repository {
             [id]
         );
 
-        return rows[0] ?? null;
+        return rows[0] ? withSettledFlag(rows[0]) : null;
     }
 
     async create(

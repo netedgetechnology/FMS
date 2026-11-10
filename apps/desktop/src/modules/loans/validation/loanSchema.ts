@@ -1,5 +1,30 @@
 import { z } from "zod";
 
+/** Longest Loan Account Number accepted. */
+export const LOAN_ACCOUNT_NUMBER_MAX_LENGTH = 64;
+
+/** Optional Loan Account Number - shared by the Term Loan and Overdraft forms. */
+export const loanAccountNumberSchema = z
+    .string()
+    .trim()
+    .max(
+        LOAN_ACCOUNT_NUMBER_MAX_LENGTH,
+        `Loan account number can't be longer than ${LOAN_ACCOUNT_NUMBER_MAX_LENGTH} characters.`
+    )
+    .optional();
+
+/**
+ * The value stored for a Loan Account Number: trimmed text, or null when
+ * blank. Never converted to a number, so "0099000123" stays as typed.
+ */
+export function normalizeLoanAccountNumber(
+    value: string | null | undefined
+): string | null {
+    const trimmed = (value ?? "").trim();
+
+    return trimmed.length > 0 ? trimmed : null;
+}
+
 export const loanSchema = z.object({
     name: z
         .string()
@@ -15,6 +40,10 @@ export const loanSchema = z.object({
         .string()
         .trim()
         .optional(),
+
+    // Free text: letters, digits, hyphens, slashes ... as the lender
+    // prints it. Kept as a string so leading zeros are never lost.
+    loanAccountNumber: loanAccountNumberSchema,
 
     accountId: z
         .string()

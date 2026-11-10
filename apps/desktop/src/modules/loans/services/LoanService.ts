@@ -1,3 +1,4 @@
+import { DROPLINE_OVERDRAFT_ENABLED, droplineScheduleIssues } from "../setup/droplineSchedule";
 import { InstitutionRepository } from "@/modules/institutions/repositories/InstitutionRepository";
 import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
 import { Account, AccountType } from "@/modules/accounts/types";
@@ -6,12 +7,34 @@ import { TransactionRepository } from "@/modules/transactions/repositories/Trans
 import { LoanRepository } from "../repositories/LoanRepository";
 import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentScheduleRepository";
 import { LoanSchedulePaymentRepository } from "../repositories/LoanSchedulePaymentRepository";
-import { computeLoanScheduleAndBalances } from "./EMIScheduleService";
+import { LoanSetupRepository } from "../repositories/LoanSetupRepository";
+import type { CreateLoanAtomicRequest } from "../repositories/LoanRepository";
+import { balancesFromSchedule, computeLoanScheduleAndBalances } from "./EMIScheduleService";
+import {
+    linkedTransactionRefusal,
+    validateSetupDetails,
+} from "../setup/loanSetupAccounting";
+import { checkLenderScheduleRows } from "../setup/lenderSchedule";
+import { lenderRowsToSchedule } from "../setup/loanSetupWizard";
+import {
+    entriesFromDetails,
+    historicalInstalmentIssues,
+    localToday,
+    markHistoricalInstalments,
+    paidInstalmentCount,
+    type HistoricalEntry,
+} from "../setup/historicalInstalments";
+import type { LoanSetupDetails } from "../setup/loanSetupTypes";
+import { OverdraftService } from "./OverdraftService";
 import {
     Loan,
+    LoanKind,
+    LoanPaymentSchedule,
     CreateLoanRequest,
     UpdateLoanRequest,
+    isOverdraft,
 } from "../types";
+import { normalizeLoanAccountNumber } from "../validation/loanSchema";
 
 // ---------------------------------------------------------------------
 // Data-integrity rules enforced here (Loans Phase 1 - data integrity and
@@ -102,6 +125,213 @@ export class LoanService {
 
     private readonly transactionRepository =
         new TransactionRepository();
+
+    private readonly overdraftService = new OverdraftService();
+
+    private readonly setupRepository = new LoanSetupRepository();
+
+    /**
+     * The Add Loan setup, checked before anything is written: its own
+     * accounting rules (validateSetupDetails), and every linked bank
+     * transaction - it must still exist, be live, not be used by anything
+     * else, and fit exactly (account, direction, amount). The Rust command
+     * checks the same again inside the write transaction.
+     */
+    private async verifySetup(
+        setup: LoanSetupDetails,
+        context: {
+            loanKind: LoanKind;
+            sanctionedAmount: number | null;
+            sanctionDate: string | null;
+        }
+    ): Promise<void> {
+        const issues = validateSetupDetails(setup, context);
+
+        if (issues.length > 0) {
+            throw new Error(issues[0]!.message);
+        }
+
+        const wanted = [
+            ...setup.disbursements.map((d, index) => ({
+                id: d.transactionId,
+                side: "IN" as const,
+                accountId: d.destinationAccountId,
+                amount: d.netAmount,
+                what: `disbursement ${index + 1}`,
+            })),
+            ...setup.expenses.map((e, index) => ({
+                id: e.transactionId,
+                side: "OUT" as const,
+                accountId: e.paymentAccountId,
+                amount: e.totalAmount,
+                what: `expense ${index + 1}`,
+            })),
+        ].filter((item): item is typeof item & { id: string } => Boolean(item.id));
+
+        if (wanted.length === 0) {
+            return;
+        }
+
+        const found = new Map(
+            (await this.setupRepository.getTransactionsForLinking(wanted.map(item => item.id))).map(
+                transaction => [transaction.id, transaction]
+            )
+        );
+
+        for (const item of wanted) {
+            const transaction = found.get(item.id);
+
+            if (!transaction || transaction.deleted) {
+                throw new Error(`The bank transaction linked to ${item.what} no longer exists.`);
+            }
+
+            if (transaction.claimedBy) {
+                throw new Error(
+                    `The bank transaction linked to ${item.what} is already used by ${transaction.claimedBy}.`
+                );
+            }
+
+            const refusal = linkedTransactionRefusal(transaction, item);
+
+            if (refusal) {
+                throw new Error(refusal);
+            }
+        }
+    }
+
+    /** The setup as the Rust command stores it, with fresh row ids. */
+    private atomicSetup(
+        setup: LoanSetupDetails
+    ): NonNullable<CreateLoanAtomicRequest["setup"]> {
+        const disbursementIds = setup.disbursements.map(() => crypto.randomUUID());
+
+        return {
+            loanPurpose: setup.loanPurpose,
+            rateType: setup.rateType,
+            interestCalculationMethod: setup.interestCalculationMethod,
+            sanctionDate: setup.sanctionDate,
+            sanctionedAmount: setup.sanctionedAmount,
+            firstEmiDate: setup.firstEmiDate,
+            repaymentFrequency: setup.repaymentFrequency,
+            paymentDay: setup.paymentDay,
+            gracePeriodMonths: setup.gracePeriodMonths,
+            balloonAmount: setup.balloonAmount,
+            scheduleSource: setup.scheduleSource,
+            drawingPower: setup.drawingPower,
+            ...(setup.drawingPowerSchedule?.length
+                ? { drawingPowerSchedule: setup.drawingPowerSchedule.map(step => ({ id: crypto.randomUUID(), ...step })) }
+                : {}),
+            disbursements: setup.disbursements.map((d, index) => ({
+                id: disbursementIds[index]!,
+                sequence: index + 1,
+                disbursementDate: d.date,
+                grossAmount: d.grossAmount,
+                deductionsAmount: d.deductionsAmount,
+                netAmount: d.netAmount,
+                destinationAccountId: d.destinationAccountId,
+                reference: d.reference,
+                transactionId: d.transactionId,
+            })),
+            expenses: setup.expenses.map(e => ({
+                id: crypto.randomUUID(),
+                expenseType: e.expenseType,
+                description: e.description,
+                expenseDate: e.expenseDate,
+                baseAmount: e.baseAmount,
+                gstRate: e.gstRate,
+                gstAmount: e.gstAmount,
+                totalAmount: e.totalAmount,
+                settlement: e.settlement,
+                disbursementId:
+                    e.disbursementIndex !== null ? disbursementIds[e.disbursementIndex] ?? null : null,
+                paymentMethod: e.paymentMethod,
+                paymentAccountId: e.paymentAccountId,
+                transactionReference: e.transactionReference,
+                transactionId: e.transactionId,
+            })),
+        };
+    }
+
+    /** A setup refusal from the Rust command, as the plain message it carries. */
+    private async createAtomicWithSetup(request: CreateLoanAtomicRequest): Promise<void> {
+        try {
+            await this.repository.createAtomic(request);
+        } catch (error) {
+            const match = String(error instanceof Error ? error.message : error).match(
+                /LOAN_SETUP_REFUSED: (.*)$/s
+            );
+
+            throw match ? new Error(match[1]) : error;
+        }
+    }
+
+    /**
+     * An Overdraft's own terms, checked before anything is written. Its
+     * used / available amounts are never stored - see OverdraftService.
+     */
+    private overdraftTerms(request: {
+        creditLimit?: number | null;
+        openingUsed?: number | null;
+        openingUsedAsOf?: string | null;
+        linkedAccountIds?: string[] | null;
+    }): {
+        creditLimit: number;
+        openingUsed: number;
+        openingUsedAsOf: string;
+        accountIds: string[];
+    } {
+        const creditLimit = Number(request.creditLimit);
+        const openingUsed = Number(request.openingUsed ?? 0);
+        const openingUsedAsOf = request.openingUsedAsOf?.trim() ?? "";
+
+        if (!Number.isFinite(creditLimit) || creditLimit <= 0) {
+            throw new Error("The OD limit must be greater than 0.");
+        }
+
+        if (!Number.isFinite(openingUsed) || openingUsed < 0) {
+            throw new Error("The opening used amount cannot be negative.");
+        }
+
+        if (!/^\d{4}-\d{2}-\d{2}/.test(openingUsedAsOf)) {
+            throw new Error("Enter the date the opening used amount is as of.");
+        }
+
+        // OD movements are recognised on these accounts only - without one
+        // nothing could ever be linked or matched.
+        const accountIds = [
+            ...new Set(
+                (request.linkedAccountIds ?? [])
+                    .map(id => this.normalizeAccountId(id))
+                    .filter((id): id is string => id !== null)
+            ),
+        ];
+
+        if (accountIds.length === 0) {
+            throw new Error("Choose at least one bank account this overdraft is linked to.");
+        }
+
+        return {
+            creditLimit,
+            openingUsed,
+            openingUsedAsOf: openingUsedAsOf.slice(0, 10),
+            accountIds,
+        };
+    }
+
+    /**
+     * The Term Loan columns an Overdraft does not use - fixed values, so
+     * nothing EMI-related (schedule, principal, tenure) is ever read from
+     * an OD. Its limit lives only in credit_limit.
+     */
+    private static readonly OVERDRAFT_TERM_FIELDS = {
+        principalAmount: 0,
+        interestType: "REDUCING" as const,
+        tenureMonths: null,
+        emiAmount: null,
+        firstInstallmentAmount: null,
+        maturityDate: null,
+        paidInstallments: 0,
+    };
 
     /**
      * Every loan is backed 1:1 by a real account record
@@ -201,6 +431,10 @@ export class LoanService {
     async create(
         request: CreateLoanRequest
     ): Promise<string> {
+        if (isOverdraft(request)) {
+            return await this.createOverdraft(request);
+        }
+
         const now = new Date().toISOString();
 
         const lenderInstitutionId =
@@ -225,6 +459,10 @@ export class LoanService {
             loanType: request.loanType,
 
             name: request.name,
+
+            loanAccountNumber: normalizeLoanAccountNumber(
+                request.loanAccountNumber
+            ),
 
             principalAmount: request.principalAmount,
 
@@ -263,7 +501,36 @@ export class LoanService {
             createdAt: now,
 
             updatedAt: now,
+
+            firstEmiDate: request.setup?.firstEmiDate ?? null,
+
+            paymentDay: request.setup?.paymentDay ?? null,
+
+            balloonAmount: request.setup?.balloonAmount ?? null,
+
+            interestCalculationMethod:
+                request.setup?.interestCalculationMethod ?? null,
         };
+
+        const setup = request.setup ?? null;
+
+        if (setup) {
+            await this.verifySetup(setup, {
+                loanKind: LoanKind.TERM_LOAN,
+                sanctionedAmount: setup.sanctionedAmount,
+                sanctionDate: setup.sanctionDate,
+            });
+
+            if (setup.disbursements.length > 0) {
+                const gross = setup.disbursements.reduce((sum, d) => sum + d.grossAmount, 0);
+
+                if (Math.abs(gross - loan.principalAmount) >= 0.005) {
+                    throw new Error(
+                        "The loan principal must equal the gross amount disbursed."
+                    );
+                }
+            }
+        }
 
         const loanAccount = this.buildLoanAccount(
             loanAccountId,
@@ -283,14 +550,50 @@ export class LoanService {
         // write failure (e.g. an unresolved Linked Account) rolls back
         // everything on the one connection that ran it - never leaving
         // a dangling transaction/lock behind for the next attempt.
+        // The lender's official schedule, when imported, is stored exactly as
+        // given (after the same checks the import step ran); otherwise
+        // FinWea generates it from the terms.
+        let lenderSchedule = null;
+
+        if (setup?.lenderSchedule) {
+            const checked = checkLenderScheduleRows(setup.lenderSchedule, {
+                principalAmount: loan.principalAmount,
+                startDate: loan.startDate,
+            });
+
+            if (!checked.rows) {
+                throw new Error(
+                    checked.errors[0]?.message ??
+                        "The lender schedule could not be used."
+                );
+            }
+
+            lenderSchedule = lenderRowsToSchedule(loan.id, checked.rows);
+        }
+
+        // Every instalment starts UPCOMING. The historical ones (a loan that
+        // was already running) are marked PAID only as the user resolved
+        // them, one by one: linked to an existing bank debit, or explicitly
+        // "Settled before FinWea". create_loan_atomic checks the same again.
+        const unmarked = lenderSchedule ?? computeLoanScheduleAndBalances(loan).schedule;
+        const historical = await this.verifiedHistoricalEntries(
+            unmarked,
+            setup,
+            request.paidInstallments ?? 0,
+            loan
+        );
+        const markedSchedule = markHistoricalInstalments(unmarked, historical);
         const {
             schedule,
             outstandingPrincipal,
             outstandingInterest,
             status,
-        } = computeLoanScheduleAndBalances(loan);
+        } = balancesFromSchedule(markedSchedule, loan.principalAmount, loan.status);
 
-        await this.repository.createAtomic({
+        // Derived from the schedule - never a typed-in count.
+        loan.paidInstallments = paidInstalmentCount(schedule);
+
+        await this.createAtomicWithSetup({
             loanAccount: {
                 id: loanAccount.id,
                 institutionId: loanAccount.institutionId,
@@ -311,6 +614,7 @@ export class LoanService {
                     loan.lenderInstitutionId,
                 loanType: loan.loanType,
                 name: loan.name,
+                loanAccountNumber: loan.loanAccountNumber ?? null,
                 principalAmount: loan.principalAmount,
                 interestRate: loan.interestRate,
                 interestType: loan.interestType,
@@ -346,15 +650,205 @@ export class LoanService {
                 paidDate: installment.paidDate,
                 paidAmount: installment.paidAmount,
                 transactionId: installment.transactionId,
+                openingPrincipal: installment.openingPrincipal ?? null,
+                settledBeforeFinwea: installment.settledBeforeFinwea === true,
             })),
+            historicalPayments: schedule
+                .filter(installment => installment.status === "PAID" && !installment.settledBeforeFinwea)
+                .map(installment => ({
+                    id: crypto.randomUUID(),
+                    scheduleId: installment.id,
+                    transactionId: installment.transactionId!,
+                })),
             balances: {
                 outstandingPrincipal,
                 outstandingInterest,
                 status,
             },
+            setup: setup ? this.atomicSetup(setup) : undefined,
         });
 
         return loan.id;
+    }
+
+    /**
+     * The historical instalments of a loan that was already running, checked
+     * against the unmarked schedule and - for a linked one - against the
+     * bank transaction as it is in the database now (live, unclaimed, money
+     * out, on the loan's EMI account, exactly the instalment amount, not
+     * dated in the future). A bare paid-instalment count is refused: each
+     * instalment must be resolved on its own.
+     */
+    private async verifiedHistoricalEntries(
+        schedule: LoanPaymentSchedule[],
+        setup: LoanSetupDetails | null,
+        requestedPaidCount: number,
+        loan: Pick<Loan, "accountId" | "startDate">
+    ): Promise<HistoricalEntry[]> {
+        const details = setup?.historicalInstalments ?? [];
+
+        if (requestedPaidCount !== 0 && requestedPaidCount !== details.length) {
+            throw new Error(
+                "Instalments paid before FinWea can't be entered as a count. Link each one to its bank debit, or mark it \"Settled before FinWea\", in Add Loan."
+            );
+        }
+
+        if (details.length === 0) {
+            return [];
+        }
+
+        const entries = entriesFromDetails(details);
+        const linkedIds = entries
+            .map(entry => entry.transaction?.id)
+            .filter((id): id is string => Boolean(id));
+        const stored = new Map(
+            (await this.setupRepository.getTransactionsForLinking(linkedIds)).map(
+                transaction => [transaction.id, transaction]
+            )
+        );
+
+        // The database's own figures, not what the screen remembered.
+        const current: HistoricalEntry[] = entries.map(entry => {
+            if (!entry.transaction) {
+                return entry;
+            }
+
+            const transaction = stored.get(entry.transaction.id);
+
+            if (!transaction || transaction.deleted) {
+                throw new Error(`The bank transaction linked to instalment #${entry.installmentNumber} no longer exists.`);
+            }
+
+            if (transaction.claimedBy) {
+                throw new Error(
+                    `The bank transaction linked to instalment #${entry.installmentNumber} is already used by ${transaction.claimedBy}.`
+                );
+            }
+
+            return { ...entry, transaction };
+        });
+
+        const issues = historicalInstalmentIssues(schedule, current, {
+            today: localToday(),
+            accountId: loan.accountId,
+            loanStartDate: loan.startDate,
+            otherLinkedIds: [
+                ...(setup?.disbursements ?? []).map(d => d.transactionId),
+                ...(setup?.expenses ?? []).map(e => e.transactionId),
+            ].filter((id): id is string => Boolean(id)),
+        });
+
+        if (issues.length > 0) {
+            throw new Error(issues[0]!.message);
+        }
+
+        return current;
+    }
+
+    /**
+     * An Overdraft: the loan row, its mirror account and the account link
+     * in the same single atomic write as a Term Loan - with no EMI
+     * schedule. Its used amount starts as the opening used amount and is
+     * derived from then on (OVERDRAFT_POSITIONS_SQL); the stored
+     * outstanding columns are 0 and never read for an OD.
+     */
+    private async createOverdraft(
+        request: CreateLoanRequest
+    ): Promise<string> {
+        const terms = this.overdraftTerms(request);
+        const now = new Date().toISOString();
+
+        const lenderInstitutionId =
+            await this.resolveLenderInstitutionId(
+                request.lenderInstitutionName,
+                request.lenderInstitutionId
+            );
+
+        const loanId = crypto.randomUUID();
+        const loanAccountId = crypto.randomUUID();
+        const loanAccount = this.buildLoanAccount(
+            loanAccountId,
+            request,
+            lenderInstitutionId,
+            now
+        );
+        const fields = LoanService.OVERDRAFT_TERM_FIELDS;
+        const setup = request.setup ?? null;
+
+        if (setup) {
+            await this.verifySetup(setup, {
+                loanKind: LoanKind.OVERDRAFT,
+                sanctionedAmount: null,
+                sanctionDate: setup.sanctionDate,
+            });
+
+            if (setup.drawingPowerSchedule?.length && !DROPLINE_OVERDRAFT_ENABLED) {
+                throw new Error("Dropline Overdraft needs a database update that has not been applied.");
+            }
+
+            const drawingPower = setup.drawingPower;
+
+            if (drawingPower !== null && drawingPower !== undefined) {
+                if (!Number.isFinite(drawingPower) || drawingPower < 0) {
+                    throw new Error("Drawing power cannot be negative.");
+                }
+
+                if (drawingPower > terms.creditLimit) {
+                    throw new Error("Drawing power cannot be more than the sanctioned limit.");
+                }
+            }
+        }
+
+        await this.createAtomicWithSetup({
+            loanAccount: {
+                id: loanAccount.id,
+                institutionId: loanAccount.institutionId,
+                businessEntityId: loanAccount.businessEntityId,
+                currencyId: loanAccount.currencyId,
+                name: loanAccount.name,
+                accountType: loanAccount.type,
+                description: loanAccount.description ?? null,
+                isActive: loanAccount.isActive,
+                createdAt: loanAccount.createdAt,
+                updatedAt: loanAccount.updatedAt,
+            },
+            loan: {
+                id: loanId,
+                // The first linked account, for code that reads one account;
+                // the OD itself uses overdraft_accounts (terms.accountIds).
+                accountId: terms.accountIds[0]!,
+                lenderInstitutionId,
+                loanType: request.loanType?.trim() || "Overdraft",
+                name: request.name,
+                loanAccountNumber: normalizeLoanAccountNumber(request.loanAccountNumber),
+                principalAmount: fields.principalAmount,
+                interestRate: request.interestRate ?? 0,
+                interestType: fields.interestType,
+                tenureMonths: fields.tenureMonths,
+                emiAmount: fields.emiAmount,
+                firstInstallmentAmount: fields.firstInstallmentAmount,
+                startDate: request.startDate,
+                maturityDate: fields.maturityDate,
+                outstandingPrincipal: 0,
+                outstandingInterest: 0,
+                paidInstallments: fields.paidInstallments,
+                currencyId: request.currencyId,
+                status: request.status,
+                notes: request.notes ?? null,
+                createdAt: now,
+                updatedAt: now,
+            },
+            overdraft: terms,
+            schedule: [],
+            balances: {
+                outstandingPrincipal: 0,
+                outstandingInterest: 0,
+                status: request.status,
+            },
+            setup: setup ? this.atomicSetup(setup) : undefined,
+        });
+
+        return loanId;
     }
 
     async update(
@@ -380,6 +874,70 @@ export class LoanService {
 
         if (!existing) {
             throw new Error("Loan not found.");
+        }
+
+        // The paid-instalment count comes from the EMI schedule itself; an
+        // edit can never move it on its own (it would no longer describe the
+        // schedule). Not sent (undefined / null) = unchanged.
+        if (
+            request.paidInstallments !== undefined &&
+            request.paidInstallments !== null &&
+            request.paidInstallments !== existing.paidInstallments
+        ) {
+            throw new Error(
+                "The number of paid instalments comes from the EMI schedule and can't be edited. Record, link or reverse EMI payments from the EMI schedule instead."
+            );
+        }
+
+        // A caller that doesn't send it (undefined) keeps the saved number;
+        // a blank one clears it.
+        const loanAccountNumber =
+            request.loanAccountNumber === undefined
+                ? existing.loanAccountNumber ?? null
+                : normalizeLoanAccountNumber(request.loanAccountNumber);
+
+        // The Loan Type never changes through an edit. For an Overdraft the
+        // Term Loan columns keep their fixed values, and it can't be closed
+        // while any of the limit is still used.
+        let overdraftTerms: ReturnType<LoanService["overdraftTerms"]> | null = null;
+
+        if (isOverdraft(existing)) {
+            const terms = this.overdraftTerms(request);
+            overdraftTerms = terms;
+
+            // A Dropline's steps are replaced as a whole, checked by the same
+            // rules as at setup; Rust checks them again in its transaction.
+            if (request.drawingPowerSchedule !== undefined) {
+                if (!DROPLINE_OVERDRAFT_ENABLED) {
+                    throw new Error("Drawing-power steps need database update 053, which has not been applied.");
+                }
+
+                const issue = droplineScheduleIssues(
+                    request.drawingPowerSchedule.map((step, index) => ({ key: String(index), ...step })),
+                    terms.creditLimit
+                )[0];
+
+                if (issue) {
+                    throw new Error(issue.message);
+                }
+            }
+
+            if (request.status === "CLOSED" && existing.status !== "CLOSED") {
+                const position = await this.overdraftService.getPosition(existing);
+
+                if (position.used > 0) {
+                    throw new Error(
+                        "This overdraft can't be marked Closed while part of its limit is still used. Link the repayments first, or choose On Hold instead."
+                    );
+                }
+            }
+
+            request = {
+                ...request,
+                ...LoanService.OVERDRAFT_TERM_FIELDS,
+                ...terms,
+                loanKind: LoanKind.OVERDRAFT,
+            };
         }
 
         // Once an EMI schedule has been generated, it was built from the
@@ -479,13 +1037,56 @@ export class LoanService {
             );
         }
 
-        await this.repository.update({
-            ...request,
-            accountId: this.normalizeAccountId(
-                request.accountId
-            ),
-            lenderInstitutionId,
-        });
+        if (overdraftTerms) {
+            // The OD's terms and its whole set of linked bank accounts, in
+            // one atomic write (src-tauri/src/overdraft_update.rs).
+            try {
+                await this.repository.updateOverdraftAtomic({
+                    loanId: request.id,
+                    name: request.name,
+                    loanAccountNumber,
+                    lenderInstitutionId,
+                    currencyId: request.currencyId,
+                    interestRate: request.interestRate ?? 0,
+                    startDate: request.startDate,
+                    status: request.status,
+                    notes: request.notes ?? null,
+                    creditLimit: overdraftTerms.creditLimit,
+                    openingUsed: overdraftTerms.openingUsed,
+                    openingUsedAsOf: overdraftTerms.openingUsedAsOf,
+                    accountIds: overdraftTerms.accountIds,
+                    // A drawing power revision, only when the caller sent one.
+                    // A Dropline has none: its steps are sent instead.
+                    updateDrawingPower:
+                        request.drawingPowerSchedule === undefined && request.drawingPower !== undefined,
+                    drawingPower: request.drawingPower ?? null,
+                    ...(request.drawingPowerSchedule !== undefined
+                        ? {
+                              updateDrawingPowerSchedule: true,
+                              drawingPowerSchedule: request.drawingPowerSchedule.map(step => ({
+                                  id: crypto.randomUUID(),
+                                  effectiveDate: step.effectiveDate,
+                                  drawingPower: step.drawingPower,
+                              })),
+                          }
+                        : {}),
+                });
+            } catch (error) {
+                // A Tauri refusal is a plain string - show the user its message.
+                throw error instanceof Error
+                    ? error
+                    : new Error(String(error).replace(/^OVERDRAFT_UPDATE_REFUSED: /, ""));
+            }
+        } else {
+            await this.repository.update({
+                ...request,
+                loanAccountNumber,
+                accountId: this.normalizeAccountId(
+                    request.accountId
+                ),
+                lenderInstitutionId,
+            });
+        }
 
         // Identity sync only - opening_balance stays 0; the liability is
         // always derived from the loan's current outstanding balances.
@@ -558,6 +1159,14 @@ export class LoanService {
             );
         }
 
+        // Same rule for an Overdraft: its linked transactions are its
+        // history. Unlinking never touches a transaction.
+        if (isOverdraft(loan) && (await this.overdraftService.hasLinks(id))) {
+            throw new Error(
+                "This overdraft has linked transactions and can't be deleted. Unlink them first (Transactions, the green loan icon, Unlink), then try again."
+            );
+        }
+
         // Read the link before deleting, and without the deleted_at filter,
         // so a retry after a partially-failed delete still resolves the
         // same account (it can never become untraceable).
@@ -570,12 +1179,24 @@ export class LoanService {
               )
             : false;
 
-        await this.repository.deleteAtomic({
-            loanId: id,
-            loanAccountId:
-                loanAccountId && !accountHasTransactions
-                    ? loanAccountId
-                    : null,
-        });
+        // The checks above give a fast, friendly answer; delete_loan_atomic
+        // repeats every one of them (and the financial-plan check) inside
+        // the delete's own transaction, so a stale read can never let a
+        // protected loan through. Its refusal is shown as plain text.
+        try {
+            await this.repository.deleteAtomic({
+                loanId: id,
+                loanAccountId:
+                    loanAccountId && !accountHasTransactions
+                        ? loanAccountId
+                        : null,
+            });
+        } catch (error) {
+            const match = String(error instanceof Error ? error.message : error).match(
+                /LOAN_DELETE_REFUSED: (.*)$/s
+            );
+
+            throw match ? new Error(match[1]) : error;
+        }
     }
 }

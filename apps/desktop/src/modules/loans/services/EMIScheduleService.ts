@@ -41,9 +41,17 @@ export function computeLoanScheduleAndBalances(
         | "emiAmount"
         | "firstInstallmentAmount"
         | "startDate"
-        | "paidInstallments"
         | "status"
-    >
+    > &
+        Partial<
+            Pick<
+                Loan,
+                | "firstEmiDate"
+                | "paymentDay"
+                | "balloonAmount"
+                | "interestCalculationMethod"
+            >
+        >
 ): LoanScheduleAndBalances {
     if (loan.principalAmount <= 0) {
         throw new Error(
@@ -75,8 +83,27 @@ export function computeLoanScheduleAndBalances(
         emiAmount: loan.emiAmount,
         firstInstallmentAmount: loan.firstInstallmentAmount ?? null,
         startDate: loan.startDate,
-        paidInstallments: loan.paidInstallments,
+        firstEmiDate: loan.firstEmiDate ?? null,
+        paymentDay: loan.paymentDay ?? null,
+        balloonAmount: loan.balloonAmount ?? null,
+        interestCalculationMethod: loan.interestCalculationMethod ?? null,
     });
+
+    return balancesFromSchedule(schedule, loan.principalAmount, loan.status);
+}
+
+/**
+ * A schedule's opening accounting balances: the principal outstanding
+ * after the last instalment marked PAID (the full principal when none is),
+ * and the interest still to come. Shared by FinWea's generated schedule
+ * and a lender-imported one, so both are reconciled the same way.
+ */
+export function balancesFromSchedule(
+    schedule: LoanPaymentSchedule[],
+    principalAmount: number,
+    loanStatus: Loan["status"]
+): LoanScheduleAndBalances {
+    const loan = { principalAmount, status: loanStatus };
 
     /*
      * Reconcile the loan's outstanding balances with the freshly built

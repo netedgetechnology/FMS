@@ -33,9 +33,10 @@ function transaction(id: string): Transaction {
     return {
         id,
         accountId: "account-1",
-        categoryId: null,
         subcategoryId: null,
         payee: "Aster Finance",
+        // A loan-link category - only those rows can show the icon.
+        categoryId: "cat-loan",
         counterparty: null,
         branch: null,
         type: "expense",
@@ -76,6 +77,7 @@ function props(linkedIds: string[], onLinkToLoan = vi.fn()) {
         onDelete: vi.fn(),
         onLinkToLoan,
         loanLinkedIds: new Set(linkedIds),
+        loanLinkCategoryIds: new Set(["cat-loan"]),
     };
 }
 

@@ -5,6 +5,8 @@ import {
 } from "@/core/formatting";
 import { Eye, Landmark, Pencil, Trash2 } from "lucide-react";
 
+import { isLoanLinkEligible } from "@/modules/loans/services/loanLinkEligibility";
+
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { Transaction } from "../types";
@@ -27,8 +29,45 @@ interface TransactionTableProps {
      * show what it is linked to.
      */
     onLinkToLoan?: (transaction: Transaction) => void;
-    /** Ids of the transactions that are a loan EMI payment. */
+    /** Ids of the transactions that are a loan EMI payment or an Overdraft movement. */
     loanLinkedIds?: ReadonlySet<string>;
+    /**
+     * Accounts an Overdraft is linked to - there money in (a drawdown) can
+     * be linked too, and the action is the generic Link to Loan.
+     */
+    overdraftAccountIds?: ReadonlySet<string>;
+    /**
+     * Ids of the loan-link categories (see loans/services/
+     * loanLinkEligibility.ts) - only a transaction in one of them can be
+     * linked to a loan, whatever its account.
+     */
+    loanLinkCategoryIds?: ReadonlySet<string>;
+}
+
+/**
+ * Whether the row shows the Landmark (Link to Loan) icon: always for a
+ * transaction that is already linked (to see it, or unlink it); otherwise
+ * only for one in a loan-link category that could be linked - an outgoing
+ * EMI payment, or a movement on an Overdraft's account. The account alone
+ * never makes a transaction eligible.
+ */
+export function showsLoanLinkIcon(
+    transaction: Pick<Transaction, "id" | "type" | "accountId" | "categoryId">,
+    sets: {
+        loanLinkedIds?: ReadonlySet<string>;
+        overdraftAccountIds?: ReadonlySet<string>;
+        loanLinkCategoryIds?: ReadonlySet<string>;
+    }
+): boolean {
+    if (sets.loanLinkedIds?.has(transaction.id)) {
+        return true;
+    }
+
+    return (
+        isLoanLinkEligible(transaction, sets.loanLinkCategoryIds ?? new Set()) &&
+        (transaction.type === "expense" ||
+            (sets.overdraftAccountIds?.has(transaction.accountId) ?? false))
+    );
 }
 
 /**
@@ -36,12 +75,18 @@ interface TransactionTableProps {
  * button, same icon, same size and place - only the icon colour and the
  * tooltip say whether it is linked.
  */
-export function loanLinkButtonState(linked: boolean): {
+export function loanLinkButtonState(
+    linked: boolean,
+    // On an Overdraft's account the action covers EMIs and OD movements.
+    generic = false
+): {
     title: string;
     className: string;
 } {
+    const target = generic ? "Loan" : "Loan EMI";
+
     return {
-        title: linked ? "Linked to Loan EMI" : "Link to Loan EMI",
+        title: linked ? `Linked to ${target}` : `Link to ${target}`,
         className: linked
             ? "inline-flex h-8 w-8 items-center justify-center rounded-lg text-emerald-600 transition-colors hover:bg-slate-100 hover:text-emerald-700"
             : "inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800",
@@ -94,6 +139,8 @@ export function TransactionTable({
     onDelete,
     onLinkToLoan,
     loanLinkedIds,
+    overdraftAccountIds,
+    loanLinkCategoryIds,
 }: TransactionTableProps) {
     const formatDate = useDateFormatter();
     return (
@@ -275,7 +322,11 @@ export function TransactionTable({
                                     </button>
 
                                     {onLinkToLoan &&
-                                        transaction.type === "expense" && (
+                                        showsLoanLinkIcon(transaction, {
+                                            loanLinkedIds,
+                                            overdraftAccountIds,
+                                            loanLinkCategoryIds,
+                                        }) && (
                                             <button
                                                 type="button"
                                                 onClick={() =>
@@ -285,6 +336,9 @@ export function TransactionTable({
                                                     loanLinkButtonState(
                                                         loanLinkedIds?.has(
                                                             transaction.id
+                                                        ) ?? false,
+                                                        overdraftAccountIds?.has(
+                                                            transaction.accountId
                                                         ) ?? false
                                                     ).title
                                                 }
@@ -292,8 +346,8 @@ export function TransactionTable({
                                                     loanLinkedIds?.has(
                                                         transaction.id
                                                     )
-                                                        ? `${transaction.payee} is linked to a loan EMI`
-                                                        : `Link ${transaction.payee} to a loan EMI`
+                                                        ? `${transaction.payee} is linked to a loan${overdraftAccountIds?.has(transaction.accountId) ? "" : " EMI"}`
+                                                        : `Link ${transaction.payee} to a loan${overdraftAccountIds?.has(transaction.accountId) ? "" : " EMI"}`
                                                 }
                                                 className={
                                                     loanLinkButtonState(

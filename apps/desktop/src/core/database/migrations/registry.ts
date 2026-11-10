@@ -42,6 +42,12 @@ import { ImportDraftsMigration } from "./042_import_drafts";
 import { PaymentTypesMigration } from "./044_payment_types";
 import { LoanFirstInstallmentMigration } from "./045_loan_first_installment";
 import { LoanPaymentLinkSettlementMigration } from "./046_loan_payment_link_settlement";
+import { LoanOverdraftMigration } from "./047_loan_overdraft";
+import { OverdraftAccountsMigration } from "./048_overdraft_accounts";
+import { LoanAccountNumberMigration } from "./050_loan_account_number";
+import { LoanSetupMigration } from "./051_loan_setup";
+import { HistoricalInstalmentSettlementMigration } from "./052_historical_instalment_settlement";
+import { DroplineDrawingPowerScheduleMigration } from "./053_dropline_drawing_power_schedule";
 
 // Version 43 is retired: a since-removed migration (transfer links) was
 // applied to some development databases, and MigrationEngine skips any
@@ -91,5 +97,11 @@ export const migrations = [
     PaymentTypesMigration,
     LoanFirstInstallmentMigration,
     LoanPaymentLinkSettlementMigration,
+    LoanOverdraftMigration,
+    OverdraftAccountsMigration,
+    LoanAccountNumberMigration,
+    LoanSetupMigration,
+    HistoricalInstalmentSettlementMigration,
+    DroplineDrawingPowerScheduleMigration,
 ];
 

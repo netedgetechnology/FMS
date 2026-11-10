@@ -12,6 +12,7 @@ export type LoanColumnMappingField =
     | "interest"
     | "outstandingPrincipal"
     | "outstandingBalance"
+    | "openingPrincipal"
     | "loanNumber"
     | "description"
     | "referenceNumber";
@@ -54,6 +55,15 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "sequence",
             "sr no",
             "sr number",
+            "instalment",
+            "instalment no",
+            "instalment number",
+            "inst no",
+            "emi #",
+            "no",
+            "s no",
+            "s. no",
+            "sl no",
         ],
     },
     {
@@ -66,6 +76,11 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "installment_date",
             "scheduled date",
             "scheduled_date",
+            "instalment date",
+            "emi date",
+            "emi due date",
+            "repayment date",
+            "date",
         ],
     },
     {
@@ -93,6 +108,10 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "monthly_installment",
             "payment amount",
             "payment_amount",
+            "instalment amount",
+            "emi amt",
+            "emi (rs)",
+            "emi amount (rs)",
         ],
     },
     {
@@ -104,6 +123,9 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "principal_amount",
             "principal paid",
             "principal_paid",
+            "principal component",
+            "principal repaid",
+            "principal (rs)",
         ],
     },
     {
@@ -115,6 +137,8 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "interest_amount",
             "interest paid",
             "interest_paid",
+            "interest component",
+            "interest (rs)",
         ],
     },
     {
@@ -127,6 +151,9 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "principal_outstanding",
             "remaining principal",
             "remaining_principal",
+            "closing principal",
+            "closing principal outstanding",
+            "principal outstanding after emi",
         ],
     },
     {
@@ -142,6 +169,24 @@ const LOAN_HEADER_RULES: HeaderRule[] = [
             "balance_outstanding",
             "remaining balance",
             "remaining_balance",
+            "closing balance",
+            "closing_balance",
+            "closing outstanding",
+        ],
+    },
+    {
+        field: "openingPrincipal",
+        confidence: "high",
+        names: [
+            "opening principal",
+            "opening_principal",
+            "opening balance",
+            "opening_balance",
+            "opening outstanding",
+            "opening principal outstanding",
+            "beginning balance",
+            "principal opening",
+            "principal outstanding before emi",
         ],
     },
     {

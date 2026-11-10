@@ -26,6 +26,8 @@ import { useCategories } from "@/modules/categories/hooks";
 import { LinkTransactionToEmiDialog } from "@/modules/loans/components/LinkTransactionToEmiDialog";
 import { LinkedEmiPaymentDialog } from "@/modules/loans/components/LinkedEmiPaymentDialog";
 import { LoanSchedulePaymentRepository } from "@/modules/loans/repositories/LoanSchedulePaymentRepository";
+import { OverdraftService } from "@/modules/loans/services/OverdraftService";
+import { loanLinkCategoryIds as findLoanLinkCategoryIds } from "@/modules/loans/services/loanLinkEligibility";
 
 import {
     AddTransactionDialog,
@@ -391,16 +393,35 @@ export default function TransactionsPage() {
     const [loanLinkedIds, setLoanLinkedIds] = useState<ReadonlySet<string>>(
         () => new Set()
     );
+    // Accounts an active Overdraft is linked to (money in can be linked there too).
+    const [overdraftAccountIds, setOverdraftAccountIds] = useState<ReadonlySet<string>>(
+        () => new Set()
+    );
 
     useEffect(() => {
         let cancelled = false;
+        const overdraftService = new OverdraftService();
 
-        new LoanSchedulePaymentRepository()
-            .getAll()
-            .then(payments => {
+        Promise.all([
+            new LoanSchedulePaymentRepository().getAll(),
+            overdraftService.getLinkedTransactionIds(),
+            overdraftService.getOverdrafts(),
+        ])
+            .then(([payments, overdraftLinkedIds, overdrafts]) => {
                 if (!cancelled) {
                     setLoanLinkedIds(
-                        new Set(payments.map(payment => payment.transactionId))
+                        new Set([
+                            ...payments.map(payment => payment.transactionId),
+                            ...overdraftLinkedIds,
+                        ])
+                    );
+                    // Every bank account of every active OD.
+                    setOverdraftAccountIds(
+                        new Set(
+                            overdrafts
+                                .filter(loan => loan.status !== "CLOSED")
+                                .flatMap(loan => loan.linkedAccountIds ?? [])
+                        )
                     );
                 }
             })
@@ -454,6 +475,13 @@ export default function TransactionsPage() {
                     category.name,
                 ])
             ),
+        [categories]
+    );
+
+    // The loan-link categories among the user's categories - re-derived
+    // whenever categories change, so a renamed category counts at once.
+    const loanLinkCategoryIds = useMemo(
+        () => findLoanLinkCategoryIds(categories),
         [categories]
     );
 
@@ -1148,6 +1176,8 @@ export default function TransactionsPage() {
                                 onDelete={setDeletingTransaction}
                                 onLinkToLoan={handleLinkToLoan}
                                 loanLinkedIds={loanLinkedIds}
+                                overdraftAccountIds={overdraftAccountIds}
+                                loanLinkCategoryIds={loanLinkCategoryIds}
                             />
                         </div>
                     )}

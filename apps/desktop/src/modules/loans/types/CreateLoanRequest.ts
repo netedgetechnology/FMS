@@ -1,4 +1,5 @@
 import { Loan } from "./Loan";
+import type { LoanSetupDetails } from "../setup/loanSetupTypes";
 
 export type CreateLoanRequest =
     Omit<
@@ -22,4 +23,11 @@ export type CreateLoanRequest =
         emiAmount?: number | null;
         maturityDate?: string | null;
         notes?: string;
+
+        /**
+         * The Add Loan setup workflow's extra details - lender terms,
+         * disbursements, initial expenses and (optionally) the lender's
+         * official schedule. Absent: creation is exactly as before.
+         */
+        setup?: LoanSetupDetails | null;
     };
