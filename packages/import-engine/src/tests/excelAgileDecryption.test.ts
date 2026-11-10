@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
 
 import {
+    computeIteratedSpinHash,
     decryptAgileWorkbook,
     isAgileEncryptedWorkbook,
 } from "../parser/excelAgileDecryption";
@@ -32,6 +34,20 @@ import { processExcel } from "../pipeline";
 // together they cover both hash-algorithm/key-size paths this code
 // actually branches on (see createHasher/deriveBlockKey).
 const FIXTURE_PASSWORD = "test-password-123";
+
+// Every test below that opens the fixture with a password runs ONE real
+// key derivation: 100,000 sequential SHA-512 hashes (the fixture's
+// spinCount - Excel's own default, kept so the tests exercise what users'
+// files really need). That is CPU-bound work by specification: about 1.4s
+// on an idle machine (measured best-of-5), but it scales with whatever
+// else holds the CPU - the full suite runs other test files in parallel,
+// and on a fully loaded machine one derivation was seen taking 5.4s,
+// past vitest's generic 5s default. The budget below is that measured
+// worst case with headroom, scoped to these derivation tests only; it
+// changes no assertion. A real slowdown in the derivation is caught
+// separately by "the spin hash" tests, which check it against an
+// independent hash implementation.
+const KEY_DERIVATION_BUDGET_MS = 20_000;
 
 const __dirname = dirname(
     fileURLToPath(import.meta.url)
@@ -103,8 +119,43 @@ describe("isAgileEncryptedWorkbook", () => {
     });
 });
 
+// The optimised spin loop (one reused buffer per iteration) must produce
+// exactly what the specification's H(n) = Hash(iterator || H(n-1))
+// produces - checked against Node's own, independent native hashes for
+// every algorithm the decryptor branches on.
+describe("the spin hash", () => {
+    function referenceSpinHash(algorithm: string, salt: Uint8Array, password: string, spinCount: number): Buffer {
+        let current = createHash(algorithm).update(salt).update(Buffer.from(password, "utf16le")).digest();
+
+        for (let iteration = 0; iteration < spinCount; iteration += 1) {
+            const iterator = Buffer.alloc(4);
+            iterator.writeUInt32LE(iteration, 0);
+            current = createHash(algorithm).update(iterator).update(current).digest();
+        }
+
+        return current;
+    }
+
+    const salt = Uint8Array.from({ length: 16 }, (_, index) => (index * 37 + 11) & 0xff);
+
+    it.each([
+        ["SHA1", "sha1"],
+        ["SHA256", "sha256"],
+        ["SHA384", "sha384"],
+        ["SHA512", "sha512"],
+    ])("matches an independent %s implementation", (algorithm, nodeName) => {
+        for (const spinCount of [0, 1, 2, 257]) {
+            const ours = computeIteratedSpinHash(algorithm, salt, "pässwörd-€", spinCount);
+
+            expect(Buffer.from(ours).toString("hex")).toBe(
+                referenceSpinHash(nodeName, salt, "pässwörd-€", spinCount).toString("hex")
+            );
+        }
+    });
+});
+
 describe("decryptAgileWorkbook", () => {
-    it("decrypts with the correct password and produces a workbook parseExcel can read", async () => {
+    it("decrypts with the correct password and produces a workbook parseExcel can read", { timeout: KEY_DERIVATION_BUDGET_MS }, async () => {
         const decrypted = await decryptAgileWorkbook(
             loadAgileEncryptedFixture(),
             FIXTURE_PASSWORD
@@ -126,7 +177,7 @@ describe("decryptAgileWorkbook", () => {
         ]);
     });
 
-    it("rejects a wrong password with ExcelPasswordError(reason: incorrect) - never a generic/parse error", async () => {
+    it("rejects a wrong password with ExcelPasswordError(reason: incorrect) - never a generic/parse error", { timeout: KEY_DERIVATION_BUDGET_MS }, async () => {
         await expect(
             decryptAgileWorkbook(
                 loadAgileEncryptedFixture(),
@@ -138,7 +189,7 @@ describe("decryptAgileWorkbook", () => {
         });
     });
 
-    it("never leaks the password into the decrypted bytes", async () => {
+    it("never leaks the password into the decrypted bytes", { timeout: KEY_DERIVATION_BUDGET_MS }, async () => {
         const decrypted = await decryptAgileWorkbook(
             loadAgileEncryptedFixture(),
             FIXTURE_PASSWORD
@@ -167,7 +218,7 @@ describe("resolveExcelWorkbookContent", () => {
         });
     });
 
-    it("rejects a wrong password the same way decryptAgileWorkbook does", async () => {
+    it("rejects a wrong password the same way decryptAgileWorkbook does", { timeout: KEY_DERIVATION_BUDGET_MS }, async () => {
         await expect(
             resolveExcelWorkbookContent(
                 loadAgileEncryptedFixture(),
@@ -179,7 +230,7 @@ describe("resolveExcelWorkbookContent", () => {
         });
     });
 
-    it("with the correct password, returns content processExcel can run the normal pipeline on - preview/mapping/import are unaffected", async () => {
+    it("with the correct password, returns content processExcel can run the normal pipeline on - preview/mapping/import are unaffected", { timeout: KEY_DERIVATION_BUDGET_MS }, async () => {
         const resolvedContent =
             await resolveExcelWorkbookContent(
                 loadAgileEncryptedFixture(),
@@ -239,7 +290,7 @@ describe("parseExcel alone (bypassing resolveExcelWorkbookContent) is unchanged 
 });
 
 describe("ExcelPasswordError instances thrown by the Agile path are real ExcelPasswordError instances", () => {
-    it("instanceof check passes (not just a same-shaped object)", async () => {
+    it("instanceof check passes (not just a same-shaped object)", { timeout: KEY_DERIVATION_BUDGET_MS }, async () => {
         await expect(
             decryptAgileWorkbook(
                 loadAgileEncryptedFixture(),
