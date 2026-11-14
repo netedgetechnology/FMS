@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { toast } from "sonner";
 
@@ -15,6 +15,9 @@ import { getErrorMessage } from "@/core/errors";
 
 import { AddLoanWizard } from "./setup/AddLoanWizard";
 import { StatementImportPanel } from "./setup/StatementImportPanel";
+import { StatementRateChangesStep, UnrecordedConfirmation } from "./rates/StatementRateChangesStep";
+import { unrecordedNotice, type ConfirmedRateChange, type ConfirmedStatementRates } from "../statementImport/statementRateProposals";
+import { InterestRateHistoryRepository } from "../repositories/InterestRateHistoryRepository";
 import type { StatementDraftResult } from "../statementImport/statementToDraft";
 import { LoanService } from "../services";
 import { LoanKind, type CreateLoanRequest } from "../types";
@@ -104,19 +107,67 @@ export function AddLoanDialog({
     const [session, setSession] = useState(0);
     const [mode, setMode] = useState<"manual" | "statement">("manual");
     const [fromStatement, setFromStatement] = useState<(StatementDraftResult & { fileName: string }) | null>(null);
+    // Stage 4: a statement Term Loan just created, whose confirmed rate
+    // changes are recorded next through the reviewed workflow.
+    const [rateFollowUp, setRateFollowUp] = useState<{ loanId: string; confirmed: ConfirmedStatementRates } | null>(null);
+    // Audit H1: the follow-up's changes not recorded yet, and a close
+    // (X / Escape / outside click / Cancel) waiting for its confirmation.
+    const [unrecorded, setUnrecorded] = useState<{ changes: ConfirmedRateChange[]; loanName: string | null }>({ changes: [], loanName: null });
+    const [closeRequested, setCloseRequested] = useState(false);
+    const trackUnrecorded = useCallback((changes: ConfirmedRateChange[], loanName: string | null) => setUnrecorded({ changes, loanName }), []);
+    // Whether a statement's rate changes can be saved (migration 054 applied).
+    // Until then they are shown for information only and nothing changes.
+    const [rateHistoryAvailable, setRateHistoryAvailable] = useState(false);
+
+    useEffect(() => {
+        if (!open) return;
+        let mounted = true;
+        new InterestRateHistoryRepository()
+            .isAvailable()
+            .then(available => mounted && setRateHistoryAvailable(available))
+            .catch(error => {
+                console.error("Failed to check interest rate history:", error);
+                if (mounted) setRateHistoryAvailable(false);
+            });
+        return () => {
+            mounted = false;
+        };
+    }, [open]);
 
     function handleOpenChange(next: boolean) {
         if (next) {
             setError(null);
             setMode("manual");
             setFromStatement(null);
+            setRateFollowUp(null);
+            setUnrecorded({ changes: [], loanName: null });
+            setCloseRequested(false);
             setSession(value => value + 1);
+        } else if (rateFollowUp) {
+            // Never close past unrecorded statement rate changes silently.
+            if (unrecorded.changes.length > 0) {
+                setCloseRequested(true);
+                return;
+            }
+            finishFollowUp([], unrecorded.loanName);
+            return;
         }
 
         setOpen(next);
     }
 
-    async function handleSubmit(values: CreateLoanRequest) {
+    /** Ends the Term follow-up; changes left unrecorded are announced until dismissed. */
+    function finishFollowUp(left: readonly ConfirmedRateChange[], loanName: string | null) {
+        setCloseRequested(false);
+        setRateFollowUp(null);
+        setUnrecorded({ changes: [], loanName: null });
+        setOpen(false);
+        void onSuccess?.();
+        const notice = unrecordedNotice(loanName, left);
+        if (notice) toast.warning(notice, { duration: Infinity, action: { label: "OK", onClick: () => undefined } });
+    }
+
+    async function handleSubmit(values: CreateLoanRequest, rateChanges: ConfirmedStatementRates | null = null) {
         setLoading(true);
         setError(null);
 
@@ -133,7 +184,13 @@ export function AddLoanDialog({
                         ? "Overdraft created successfully."
                         : "Loan created successfully."
                 );
-                setOpen(false);
+                if (rateChanges && rateChanges.changes.length > 0) {
+                    setUnrecorded({ changes: rateChanges.changes, loanName: values.name || null });
+                    setCloseRequested(false);
+                    setRateFollowUp({ loanId: result.loanId, confirmed: rateChanges });
+                } else {
+                    setOpen(false);
+                }
             } else {
                 setError(result.message);
                 toast.error(result.message);
@@ -196,9 +253,28 @@ export function AddLoanDialog({
                 )}
 
                 <div className="max-h-[calc(100vh-180px)] space-y-4 overflow-y-auto border-t border-slate-100 px-7 py-5">
-                    {mode === "statement" ? (
+                    {rateFollowUp && closeRequested && unrecorded.changes.length > 0 && (
+                        <UnrecordedConfirmation
+                            unrecorded={unrecorded.changes}
+                            action="Close"
+                            onConfirm={() => finishFollowUp(unrecorded.changes, unrecorded.loanName)}
+                            onCancel={() => setCloseRequested(false)}
+                        />
+                    )}
+                    {rateFollowUp ? (
+                        <StatementRateChangesStep
+                            loanId={rateFollowUp.loanId}
+                            confirmed={rateFollowUp.confirmed}
+                            onUnrecordedChange={trackUnrecorded}
+                            onDone={finishFollowUp}
+                        />
+                    ) : mode === "statement" ? (
                         <StatementImportPanel
                             onCancel={() => setMode("manual")}
+                            // A Term Loan is saved straight from the review.
+                            onSaveTermLoan={handleSubmit}
+                            saving={loading}
+                            rateHistoryAvailable={rateHistoryAvailable}
                             onContinue={(result, fileName) => {
                                 setFromStatement({ ...result, fileName });
                                 setSession(value => value + 1);
@@ -236,7 +312,9 @@ export function AddLoanDialog({
                                 initialDraft={fromStatement?.draft ?? draftFromDefaults(defaultValues)}
                                 kindLocked={fromStatement !== null}
                                 preferredCurrencyCode={fromStatement?.currencyCode ?? null}
-                                onSubmit={handleSubmit}
+                                statementFacts={fromStatement?.statementFacts ?? null}
+                                statementRates={fromStatement?.rateHistory ? { review: fromStatement.rateHistory, fileName: fromStatement.fileName } : null}
+                                onSubmit={request => handleSubmit(request)}
                                 onCancel={() => setOpen(false)}
                             />
                         </>

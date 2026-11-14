@@ -19,6 +19,8 @@ import {
     selectedExtension,
     type StatementReviewState,
 } from "./statementReview";
+import { statementFactsFromReview, type StatementFacts } from "./statementReconciliation";
+import { hasRateProposals, type StatementRateReview } from "./statementRateProposals";
 
 export interface StatementDraftResult {
     draft: Partial<LoanSetupDraft> & { loanKind: LoanKind };
@@ -26,6 +28,13 @@ export interface StatementDraftResult {
     currencyCode: string | null;
     /** What the customer should know about how the draft was filled. */
     notes: string[];
+    /** Term Loan: the statement's position, compared on Review with the loan to be saved. */
+    statementFacts: StatementFacts | null;
+    /**
+     * The statement's rate changes as reviewed (Stage 4): proposed history
+     * entries, saved only once confirmed - null when it prints none.
+     */
+    rateHistory: StatementRateReview | null;
 }
 
 function money(state: StatementReviewState, id: Parameters<typeof field>[1]): number | null {
@@ -48,14 +57,20 @@ function statusFrom(value: string): LoanSetupDraft["status"] {
     return "ACTIVE";
 }
 
+/** The one disbursement built from the statement's stated totals (no table rows). */
+export const STATED_DISBURSEMENT_KEY = "stated-disbursement";
+
 function termDraft(state: StatementReviewState, notes: string[]): Partial<LoanSetupDraft> {
     const extension = selectedExtension(state);
     const printedSchedule = extension?.type === "TERM_LOAN" ? extension.schedule : [];
     const gross = money(state, "grossDisbursed");
     const net = money(state, "netDisbursed");
 
+    // Every row keeps the review's own stable key (never its position), so a
+    // bank-transaction link made against a row stays with that row when
+    // other rows are removed, added or reordered.
     const rows: DisbursementDraft[] = state.disbursements.map(row => ({
-        key: newKey(),
+        key: row.key,
         date: row.date ?? "",
         grossAmount: row.gross,
         deductionsAmount: row.deductions ?? null,
@@ -66,7 +81,7 @@ function termDraft(state: StatementReviewState, notes: string[]): Partial<LoanSe
 
     if (rows.length === 0 && gross !== null) {
         rows.push({
-            key: newKey(),
+            key: STATED_DISBURSEMENT_KEY,
             date: text(state, "disbursementDate"),
             grossAmount: gross,
             deductionsAmount: net !== null ? Math.round((gross - net) * 100) / 100 : money(state, "totalDeductions"),
@@ -77,9 +92,10 @@ function termDraft(state: StatementReviewState, notes: string[]): Partial<LoanSe
     }
 
     if (rows.length === 0) {
-        for (const entry of state.facility.transactions.filter(row => row.kind === "DRAWDOWN")) {
+        for (const [index, entry] of state.facility.transactions.filter(row => row.kind === "DRAWDOWN").entries()) {
             rows.push({
-                key: newKey(),
+                // The ledger is read-only on review, so its order is fixed.
+                key: `ledger-drawdown-${index}`,
                 date: entry.date,
                 grossAmount: entry.amount,
                 deductionsAmount: null,
@@ -104,7 +120,7 @@ function termDraft(state: StatementReviewState, notes: string[]): Partial<LoanSe
     const startDate = text(state, "startDate") || firstDisbursement?.date || text(state, "disbursementDate");
 
     const expenses: InitialExpenseDraft[] = state.charges.map(charge => ({
-        key: newKey(),
+        key: charge.key,
         expenseType: charge.category,
         description: charge.name,
         expenseDate: charge.date ?? firstDisbursement?.date ?? startDate,
@@ -122,20 +138,23 @@ function termDraft(state: StatementReviewState, notes: string[]): Partial<LoanSe
     const interestType = text(state, "interestTypeText");
 
     if (printedSchedule.length > 0) {
-        notes.push(`The statement prints a schedule of ${printedSchedule.length} instalments. It is shown for checking only; use the official CSV on the Schedule step to load a lender schedule.`);
+        notes.push(`The statement prints a schedule of ${printedSchedule.length} instalments. It is shown for checking only; import the lender's official CSV under Repayment Schedule to use a lender schedule.`);
     }
 
     const current = money(state, "currentInterestRate");
     const original = money(state, "interestRate");
     if (current !== null && original !== null && current !== original) {
-        notes.push(`The rate changed from ${original}% to ${current}%. FinWea's schedule uses one rate, so the original ${original}% is filled in - check the schedule, or import the lender's.`);
+        notes.push(
+            `The rate changed from ${original}% to ${current}%. The loan is set up at the original ${original}% from its start date, so FinWea's schedule starts from that rate. ` +
+                "The statement's rate changes are listed under Interest rate history: where rate history is available, each is recorded after the loan is created, with its revised schedule for you to confirm. Otherwise check the schedule, or import the lender's."
+        );
     }
 
     const agreement = field(state, "agreementNumber");
 
     const paid = state.facility.transactions.filter(entry => entry.kind === "REPAYMENT" || entry.kind === "INTEREST_PAYMENT").length;
     if (paid > 0) {
-        notes.push(`The statement lists ${paid} past repayment(s). None are marked paid automatically - resolve each instalment on the Schedule step (link its bank debit or mark it settled before FinWea).`);
+        notes.push(`The statement lists ${paid} past repayment(s). None are marked paid automatically - resolve each instalment under Instalments Paid Before FinWea (link its bank debit or mark it settled before FinWea).`);
     }
 
     const frequency = text(state, "repaymentFrequency");
@@ -223,6 +242,8 @@ export function reviewToDraft(state: StatementReviewState): StatementDraftResult
 
     return {
         notes,
+        statementFacts: route.loanKind === LoanKind.TERM_LOAN ? statementFactsFromReview(state) : null,
+        rateHistory: hasRateProposals(state.rates) ? state.rates : null,
         currencyCode: /\b[A-Z]{3}\b/.exec(text(state, "currencyCode"))?.[0] ?? null,
         draft: {
             ...emptyLoanSetupDraft(route.loanKind),

@@ -81,13 +81,15 @@ export interface OverdraftRowModel {
 export function buildOverdraftRow(
     loan: Loan,
     position: OverdraftPosition | null,
-    accountNames: ReadonlyMap<string, string>
+    accountNames: ReadonlyMap<string, string>,
+    /** The current rate from the rate history (currentLoanRate); the stored rate when omitted. */
+    currentRate?: number
 ): OverdraftRowModel {
     return {
         limit: position ? position.limit : null,
         used: position ? position.used : null,
         available: position ? position.available : null,
-        interestRate: loan.interestRate,
+        interestRate: currentRate ?? loan.interestRate,
         linkedAccounts: (loan.linkedAccountIds ?? []).map(
             id => accountNames.get(id) ?? id
         ),
@@ -102,4 +104,16 @@ export function buildOverdraftRow(
                 position.status === "OVER_DRAWING_POWER"),
         reviewReasons: position ? position.reviewReasons : [],
     };
+}
+
+/**
+ * The loan an open dialog shows, after the list reloads: the reloaded copy
+ * of the same loan (its rate, schedule figures and terms as saved), so a
+ * dialog kept open after a save - e.g. a second rate change in the loan's
+ * details - never works from the object it was opened with. Nothing open:
+ * stays closed; a loan no longer listed keeps the object it had.
+ */
+export function refreshedSelection<T extends { id: string }>(selected: T | null, reloaded: readonly T[]): T | null {
+    if (selected === null) return null;
+    return reloaded.find(loan => loan.id === selected.id) ?? selected;
 }

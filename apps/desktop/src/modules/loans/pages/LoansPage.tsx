@@ -25,11 +25,16 @@ import { AccountService } from "@/modules/accounts/services";
 import { OverdraftService } from "../services/OverdraftService";
 import type { OverdraftPosition } from "../services/overdraftPosition";
 import { Loan, isOverdraft } from "../types";
+import { InterestRateHistoryRepository } from "../repositories/InterestRateHistoryRepository";
+import { localToday } from "../setup/historicalInstalments";
+import { currentLoanRate, groupByLoan } from "../setup/interestRateHistory";
+import type { InterestRateHistoryEntry } from "../types/InterestRateHistory";
 import {
     OVERDRAFT_COLUMNS,
     TERM_LOAN_COLUMNS,
     buildOverdraftRow,
     loanRowActions,
+    refreshedSelection,
     splitLoansBySection,
     type OverdraftRowModel,
 } from "./loansPageSections";
@@ -37,6 +42,9 @@ import {
 export default function LoansPage() {
     const formatDate = useDateFormatter();
     const [loans, setLoans] = useState<Loan[]>([]);
+    // Live rate history per loan: the current rate shown is derived from it
+    // (setup/interestRateHistory), never a lagging stored snapshot.
+    const [rateHistory, setRateHistory] = useState<ReadonlyMap<string, Omit<InterestRateHistoryEntry, "effectiveUntil">[]>>(new Map());
     const [loading, setLoading] = useState(true);
     const [scheduleLoan, setScheduleLoan] = useState<Loan | null>(null);
     const [viewLoan, setViewLoan] = useState<Loan | null>(null);
@@ -100,6 +108,15 @@ export default function LoansPage() {
                 }
             }
 
+            let rates: ReadonlyMap<string, Omit<InterestRateHistoryEntry, "effectiveUntil">[]> = new Map();
+
+            try {
+                rates = groupByLoan(await new InterestRateHistoryRepository().findAllLive());
+            } catch (error) {
+                // The loans still show, with their own stored rates.
+                console.error("Failed to load interest rate history:", error);
+            }
+
             const dashboardService =
                 new LoanDashboardService();
 
@@ -114,10 +131,14 @@ export default function LoansPage() {
             // never disagree for a moment.
             setLoans(result);
             setOverdraftPositions(positions);
+            setRateHistory(rates);
             if (names) {
                 setAccountNames(names);
             }
             setDashboardSummary(dashboardResult);
+            // An open loan's details show the reloaded loan (e.g. after a
+            // rate change saved from them), never the object they opened with.
+            setViewLoan(current => refreshedSelection(current, result));
             loadTracker.current.markLoaded();
         } catch (error) {
             if (requestGuard.current.isStale(requestId)) {
@@ -338,7 +359,7 @@ export default function LoansPage() {
                                             </td>
 
                                             <td className="px-4 py-4 text-right text-sm text-slate-700">
-                                                {loan.interestRate.toFixed(2)}%
+                                                {currentLoanRate(loan, rateHistory.get(loan.id) ?? [], localToday()).rate.toFixed(2)}%
                                             </td>
 
                                             <td className="px-4 py-4 text-right text-sm text-slate-700">
@@ -426,7 +447,8 @@ export default function LoansPage() {
                                             row={buildOverdraftRow(
                                                 loan,
                                                 overdraftPositions.get(loan.id) ?? null,
-                                                accountNames
+                                                accountNames,
+                                                currentLoanRate(loan, rateHistory.get(loan.id) ?? [], localToday()).rate
                                             )}
                                             formatDate={formatDate}
                                             onView={setViewLoan}
@@ -443,6 +465,7 @@ export default function LoansPage() {
                 <ViewLoanDialog
                     loan={viewLoan}
                     open={viewLoan !== null}
+                    onLoanChanged={loadLoans}
                     onOpenChange={open => {
                         if (!open) {
                             setViewLoan(null);

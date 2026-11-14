@@ -152,6 +152,39 @@ export function finalTyping(params: {
     return { type, transferDirection: null };
 }
 
+/**
+ * The notice when the Type the user chose is NOT what will be saved:
+ * Income / Expense on a Transfer category is saved as a Transfer (the
+ * category decides - see finalTyping / applyTransferCategoryRule), so
+ * say so plainly, with the way to really change it. null otherwise.
+ */
+export function transferCategoryTypeNotice(params: {
+    chosenType: FormTransactionType;
+    saved: { type: FormTransactionType; transferDirection: TransferDirection | null };
+    categoryName: string | null | undefined;
+}): string | null {
+    const { chosenType, saved } = params;
+
+    if (chosenType === "transfer" || saved.type !== "transfer") {
+        return null;
+    }
+
+    const category = params.categoryName?.trim() || "This category";
+    const direction = saved.transferDirection === "IN" ? "Transfer In" : saved.transferDirection === "OUT" ? "Transfer Out" : "Transfer";
+    const chosen = chosenType === "income" ? "Income" : "Expense";
+
+    return `${category} is a Transfer category, so this is saved as ${direction}, not ${chosen}. To save it as ${chosen === "Income" ? "an Income" : "an Expense"}, choose ${chosen === "Income" ? "an income" : "an expense"} category.`;
+}
+
+/** The saved type, as the success message names it: "Expense", "Transfer Out"... */
+export function savedTypeLabel(saved: { type: string; transferDirection?: TransferDirection | null } | null | undefined): string | null {
+    if (!saved) return null;
+    if (saved.type === "transfer") {
+        return saved.transferDirection === "IN" ? "Transfer In" : saved.transferDirection === "OUT" ? "Transfer Out" : "Transfer";
+    }
+    return saved.type === "income" ? "Income" : saved.type === "expense" ? "Expense" : null;
+}
+
 const SIDE_WORDS: Record<DebitCreditSide, string> = {
     income: "money in (a credit)",
     expense: "money out (a debit)",

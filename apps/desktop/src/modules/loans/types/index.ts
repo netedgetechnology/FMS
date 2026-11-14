@@ -6,3 +6,4 @@ export * from "./LoanPaymentSchedule";
 export * from "./LoanSchedulePayment";
 export * from "./InterestType";
 export * from "./LoanKind";
+export * from "./InterestRateHistory";

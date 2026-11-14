@@ -21,6 +21,7 @@ import {
 import {
     draftToCreateRequest,
     draftToDetails,
+    duplicateLoanIssues,
     emptyLoanSetupDraft,
     generatedSchedulePreview,
     newDisbursementDraft,
@@ -575,5 +576,28 @@ describe("Add Loan wizard", () => {
         expect(request.setup).toMatchObject({ drawingPower: 12_000_000, scheduleSource: null, firstEmiDate: null, disbursements: [] });
         expect(draftToDetails({ ...draft, drawingPower: 16_000_000 }).drawingPower).toBe(16_000_000);
         expect(validateStep({ ...draft, drawingPower: 16_000_000 }, "overdraft").map(i => i.message)).toContain("Drawing power cannot be more than the sanctioned limit.");
+    });
+});
+
+describe("Add Loan - the same Term Loan twice", () => {
+    const existing = [
+        { name: "Synthetic LAP", loanAccountNumber: "XLOAN0000000000000001" },
+        { name: "Closed and deleted", loanAccountNumber: "XLOAN0000000000000009", deletedAt: "2026-10-01" },
+    ];
+    const draftWith = (loanAccountNumber: string, kind = LoanKind.TERM_LOAN) => ({ ...emptyLoanSetupDraft(kind), loanAccountNumber });
+
+    it("flags a lender account number a live loan already has, ignoring case and spaces", () => {
+        const issues = duplicateLoanIssues(draftWith("  xloan0000000000000001 "), existing);
+
+        expect(issues).toHaveLength(1);
+        expect(issues[0]!.field).toBe("loanAccountNumber");
+        expect(issues[0]!.message).toMatch(/already exists \("Synthetic LAP"\)/);
+    });
+
+    it("does not flag a deleted loan's number, a blank number, a new number or an Overdraft", () => {
+        expect(duplicateLoanIssues(draftWith("XLOAN0000000000000009"), existing)).toEqual([]);
+        expect(duplicateLoanIssues(draftWith(""), existing)).toEqual([]);
+        expect(duplicateLoanIssues(draftWith("XLOAN0000000000000002"), existing)).toEqual([]);
+        expect(duplicateLoanIssues(draftWith("XLOAN0000000000000001", LoanKind.OVERDRAFT), existing)).toEqual([]);
     });
 });

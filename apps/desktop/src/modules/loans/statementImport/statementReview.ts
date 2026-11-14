@@ -26,6 +26,7 @@ import {
 
 import { DROPLINE_OVERDRAFT_ENABLED } from "../setup/droplineSchedule";
 import { LoanKind } from "../types";
+import { rateReviewFromFacility, setOriginalRate, updateRateProposal, type ProposalChange, type StatementRateReview } from "./statementRateProposals";
 
 export type StatementRoute =
     | { kind: "WIZARD"; loanKind: LoanKind; loanCategory: string; limitations: string[]; dropline: boolean }
@@ -118,6 +119,8 @@ export interface StatementReviewState {
     fields: Record<FieldId, ReviewField>;
     disbursements: ReviewDisbursement[];
     charges: ReviewCharge[];
+    /** The statement's rate changes, as proposed history entries (Stage 4). */
+    rates: StatementRateReview;
     confirmed: boolean;
     droplineEnabled: boolean;
 }
@@ -158,6 +161,7 @@ export function createReviewState(
         fields,
         disbursements: facility.disbursements.map((row, index) => ({ ...row, key: `d-${index}` })),
         charges: facility.charges.map((row, index) => ({ ...row, key: `c-${index}`, provenance: "SOURCE" })),
+        rates: rateReviewFromFacility(facility, typeof fields.interestTypeText.value === "string" ? fields.interestTypeText.value : null),
         confirmed: false,
         droplineEnabled,
     };
@@ -202,6 +206,16 @@ export function updateCharge(state: StatementReviewState, key: string, change: P
 
 export function removeCharge(state: StatementReviewState, key: string): StatementReviewState {
     return { ...state, confirmed: false, charges: state.charges.filter(row => row.key !== key) };
+}
+
+/** Corrects one proposed rate change (its date, rate, type, or leaving it out). */
+export function editRateProposal(state: StatementReviewState, key: string, change: ProposalChange): StatementReviewState {
+    return { ...state, confirmed: false, rates: updateRateProposal(state.rates, key, change) };
+}
+
+/** Sets the rate from the loan's start date, when the statement does not print it. */
+export function editOriginalRate(state: StatementReviewState, rate: number | null): StatementReviewState {
+    return { ...state, confirmed: false, rates: setOriginalRate(state.rates, rate) };
 }
 
 export function setConfirmed(state: StatementReviewState, confirmed: boolean): StatementReviewState {

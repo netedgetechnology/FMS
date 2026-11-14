@@ -90,7 +90,7 @@ function actionButtons(html: string): string[] {
 }
 
 function loanButton(html: string): string {
-    const button = actionButtons(html).find(b => /title="Link(ed)? to Loan EMI"/.test(b));
+    const button = actionButtons(html).find(b => /title="Link(ed)? to Loan"/.test(b));
     expect(button).toBeDefined();
     return button!;
 }
@@ -156,9 +156,9 @@ describe("Transactions - Link to Loan EMI icon, linked and unlinked", () => {
         ]);
     });
 
-    it("6. the tooltip says Link to Loan EMI / Linked to Loan EMI", () => {
-        expect(attr(unlinked, "title")).toBe("Link to Loan EMI");
-        expect(attr(linked, "title")).toBe("Linked to Loan EMI");
+    it("6. the tooltip says Link to Loan / Linked to Loan (one universal action)", () => {
+        expect(attr(unlinked, "title")).toBe("Link to Loan");
+        expect(attr(linked, "title")).toBe("Linked to Loan");
     });
 
     it("4. a linked transaction's icon stays clickable and calls the same action", () => {
@@ -166,7 +166,7 @@ describe("Transactions - Link to Loan EMI icon, linked and unlinked", () => {
 
         const onLinkToLoan = vi.fn();
         const tree = TransactionTable(props(["t1"], onLinkToLoan));
-        const button = findButton(tree, "Linked to Loan EMI");
+        const button = findButton(tree, "Linked to Loan");
 
         expect(button).not.toBeNull();
         button!.props.onClick();

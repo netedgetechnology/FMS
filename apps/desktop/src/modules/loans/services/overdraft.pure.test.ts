@@ -161,8 +161,8 @@ describe("OD details view", () => {
 
 describe("Transactions link icon wording", () => {
     it("stays Link to Loan EMI without an OD, and is the generic Link to Loan on an OD's account", () => {
-        expect(loanLinkButtonState(false).title).toBe("Link to Loan EMI");
-        expect(loanLinkButtonState(true).title).toBe("Linked to Loan EMI");
+        expect(loanLinkButtonState(false).title).toBe("Link to Loan");
+        expect(loanLinkButtonState(true).title).toBe("Linked to Loan");
         expect(loanLinkButtonState(false, true).title).toBe("Link to Loan");
         expect(loanLinkButtonState(true, true).title).toBe("Linked to Loan");
     });

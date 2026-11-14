@@ -1,3 +1,4 @@
+import { balanceSide } from "@/core/accounting/transferClassification";
 import { AccountRepository } from "@/modules/accounts/repositories/AccountRepository";
 import { TransactionRepository } from "@/modules/transactions/repositories/TransactionRepository";
 import type { Transaction } from "@/modules/transactions/types";
@@ -6,7 +7,7 @@ import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentSchedu
 import { LoanRepository } from "../repositories/LoanRepository";
 import { LoanSchedulePaymentRepository } from "../repositories/LoanSchedulePaymentRepository";
 import { LoanStatus } from "../types/LoanStatus";
-import { isOverdraft, overdraftAccountIds, type OverdraftEntryKind } from "../types";
+import { isOverdraft, overdraftAccountIds, type Loan, type OverdraftEntryKind } from "../types";
 import { LoanImportPaymentService } from "./LoanImportPaymentService";
 import { OverdraftService } from "./OverdraftService";
 import {
@@ -22,8 +23,6 @@ import {
 } from "./LoanPaymentService";
 import {
     MANUAL_PAYMENT_MATCH_WINDOW_DAYS,
-    transactionIdentifiesLoan,
-    transactionNamesLoan,
     unpaidInstallments,
     type LoanMatchState,
 } from "./loanImportMatching";
@@ -49,10 +48,18 @@ import {
 // a settlement is repeated for the same amount against an instalment of
 // the same scheduled amount.
 //
-// The same action links a transaction to an Overdraft (Link to Loan):
-// there it is a Drawdown, a Repayment or an Interest / Charge - never an
-// EMI. See OverdraftService; future imports learn from it the same way
+// The same action links a transaction to an Overdraft: there it is a
+// Drawdown, a Repayment or an Interest / Charge - never an EMI. See
+// OverdraftService; future imports learn from it the same way
 // (overdraftImportMatching.ts).
+//
+// One universal workflow (Link Transaction to Loan): EVERY active loan is
+// offered - Term Loan, Overdraft, Dropline, Cash Credit - whatever its
+// payment account or the transaction's account. The user chooses; the
+// CHOSEN loan's type decides what the link is. Each loan carries its own
+// refusal when it cannot take this transaction (e.g. money in can never be
+// an EMI; an Overdraft movement must be on one of its linked bank
+// accounts, the only ones its Used amount counts - overdraftPositionSql).
 // ---------------------------------------------------------------------
 
 export type LoanLinkMode = "full" | "partial" | "settle";
@@ -71,6 +78,8 @@ export interface LoanLinkInstallmentOption {
 export interface LoanLinkLoanOption {
     loanId: string;
     loanName: string;
+    /** What the loan is, for the list: "Term Loan". */
+    loanType: string;
     installments: LoanLinkInstallmentOption[];
     /**
      * Payments of this loan that created their own transaction for the
@@ -78,19 +87,22 @@ export interface LoanLinkLoanOption {
      * same real payment, entered by hand.
      */
     possibleDuplicates: string[];
+    /** Why this transaction cannot be an EMI payment of this loan, or null. */
+    refusal: string | null;
 }
 
 /** An Overdraft this transaction can be linked to, and as what. */
 export interface OverdraftLinkOption {
     loanId: string;
     loanName: string;
+    /** What the facility was saved as, for the list: Overdraft, Cash Credit, Dropline Overdraft... */
+    loanType: string;
     /** What this transaction's direction allows it to be. */
     kinds: OverdraftEntryKind[];
     /** Why it can't be linked to this overdraft, or null. */
     refusal: string | null;
 }
 
-/** What an already-linked transaction is linked to - for its details popup. */
 export interface TransactionLinkDetails {
     loanName: string;
     /** null when the instalment can no longer be found (and for an Overdraft). */
@@ -101,28 +113,18 @@ export interface TransactionLinkDetails {
     overdraftEntryKind?: OverdraftEntryKind;
 }
 
-/**
- * Which linking workflow the transaction belongs to, from the active loans
- * on its account - never from its category or its text:
- *   EMI       - only Term Loans use the account (Link to Loan EMI).
- *   OVERDRAFT - only Overdrafts use it, or none does but an Overdraft
- *               exists on another account (Link to Overdraft).
- *   ANY       - both use it; the user chooses (Link to Loan).
- */
-export type LoanLinkTarget = "EMI" | "OVERDRAFT" | "ANY";
-
 export interface TransactionLinkOptions {
     transaction: Transaction;
     /** Why this transaction cannot be linked at all, or null. */
     refusal: string | null;
-    target: LoanLinkTarget;
-    /** Term Loans - linked to an EMI instalment. */
+    /** Every active Term Loan - linked to an EMI instalment. */
     loans: LoanLinkLoanOption[];
-    /** Overdrafts on the transaction's account - linked as a movement. */
+    /** Every active Overdraft / Dropline / Cash Credit - linked as a movement. */
     overdrafts: OverdraftLinkOption[];
-    /** The loan the transaction identifies, when exactly one does. */
-    suggestedLoanId: string | null;
 }
+
+/** Money in (Income, Transfer In) can never be a loan EMI payment. */
+export const NOT_AN_EMI_PAYMENT_REASON = "Only an outgoing transaction (an Expense or a Transfer Out) can be a loan EMI payment.";
 
 const MONEY_EPSILON = 0.005;
 
@@ -154,7 +156,7 @@ export function linkModesFor(amount: number, remaining: number): LoanLinkMode[] 
 export function buildLinkOptions(
     transaction: Transaction,
     states: readonly LoanMatchState[]
-): Omit<TransactionLinkOptions, "refusal" | "overdrafts" | "target"> {
+): Pick<TransactionLinkOptions, "transaction" | "loans"> {
     const amount = roundMoney(transaction.amount);
     const day = dayNumber(transaction.transactionDate);
 
@@ -166,6 +168,8 @@ export function buildLinkOptions(
         return {
             loanId: state.loan.id,
             loanName: state.loan.name,
+            loanType: "Term Loan",
+            refusal: null,
             installments: unpaidInstallments(state).map(item => ({
                 scheduleId: item.schedule.id,
                 installmentNumber: item.schedule.installmentNumber,
@@ -191,55 +195,28 @@ export function buildLinkOptions(
         };
     });
 
-    const identified = states.filter(state =>
-        transactionIdentifiesLoan(transaction, state)
-    );
-
-    return {
-        transaction,
-        loans,
-        suggestedLoanId:
-            identified.length === 1 ? identified[0]!.loan.id : null,
-    };
-}
-
-/** The workflow for a transaction, from the active loans on its account. */
-export function linkTargetFor(counts: {
-    termLoansOnAccount: number;
-    overdraftsOnAccount: number;
-    overdraftsElsewhere: number;
-}): LoanLinkTarget {
-    if (counts.overdraftsOnAccount > 0) {
-        return counts.termLoansOnAccount > 0 ? "ANY" : "OVERDRAFT";
-    }
-
-    return counts.termLoansOnAccount === 0 && counts.overdraftsElsewhere > 0
-        ? "OVERDRAFT"
-        : "EMI";
+    return { transaction, loans };
 }
 
 /**
- * Why a transaction on an account no active loan uses can't be linked to
- * the Overdrafts that do exist - naming its real account and each OD's
- * linked accounts, so the user can decide whether to add the account to
- * the OD (Edit Loan). Never done for them.
+ * Why an Overdraft cannot take a transaction on another bank account -
+ * naming both, so the user can decide whether to add the account to the
+ * OD (Edit Loan). Its Used amount counts only movements on its linked
+ * accounts (overdraftPositionSql), so such a link would never count.
  */
 export function overdraftAccountMismatchRefusal(
+    loanName: string,
     transactionAccountName: string,
-    overdrafts: ReadonlyArray<{ loanName: string; accountNames: string[] }>
+    linkedAccountNames: string[]
 ): string {
-    const linkedTo = overdrafts
-        .map(
-            od =>
-                `${od.loanName} (Overdraft) is linked only to ${
-                    od.accountNames.length > 0
-                        ? od.accountNames.join(", ")
-                        : "other bank accounts"
-                }`
-        )
-        .join("; ");
+    return `This transaction is on ${transactionAccountName}, which is not one of ${loanName}'s linked bank accounts (${
+        linkedAccountNames.length > 0 ? linkedAccountNames.join(", ") : "none"
+    }). Its Used amount counts only movements on those accounts. If ${transactionAccountName} really belongs to ${loanName}, add it to the overdraft's bank accounts in Edit Loan first - it is never added automatically.`;
+}
 
-    return `This transaction is on ${transactionAccountName}, which no active loan or overdraft uses: ${linkedTo}. If ${transactionAccountName} really belongs to the overdraft, add it to the overdraft's bank accounts in Edit Loan first - it is never added automatically.`;
+/** How a facility is listed: its saved type (Overdraft, Cash Credit...), else "Overdraft". */
+export function overdraftTypeLabel(loan: Pick<Loan, "loanType">): string {
+    return loan.loanType?.trim() || "Overdraft";
 }
 
 export class LoanTransactionLinkService {
@@ -264,30 +241,7 @@ export class LoanTransactionLinkService {
             throw new Error("The transaction was not found.");
         }
 
-        // The active loans, by the transaction's REAL account (read from the
-        // database, never from what a table shows). Which workflow applies
-        // follows from these alone: an Overdraft on the account means the
-        // OD workflow, never the Term Loan EMI one.
-        const activeLoans = (await this.loanRepository.getAll()).filter(
-            loan => loan.status !== LoanStatus.CLOSED
-        );
-        const activeOverdrafts = activeLoans.filter(isOverdraft);
-        const overdraftsOnAccount = activeOverdrafts.filter(loan =>
-            overdraftAccountIds(loan).includes(transaction.accountId)
-        );
-        const overdraftsElsewhere = activeOverdrafts.filter(
-            loan => !overdraftsOnAccount.includes(loan)
-        );
-        const loans = activeLoans.filter(
-            loan => !isOverdraft(loan) && loan.accountId === transaction.accountId
-        );
-        const target = linkTargetFor({
-            termLoansOnAccount: loans.length,
-            overdraftsOnAccount: overdraftsOnAccount.length,
-            overdraftsElsewhere: overdraftsElsewhere.length,
-        });
-
-        const empty = { transaction, target, loans: [], overdrafts: [], suggestedLoanId: null };
+        const empty = { transaction, loans: [], overdrafts: [] };
 
         const overdraftLink = await this.overdraftService.getLinkByTransactionId(transaction.id);
 
@@ -296,7 +250,6 @@ export class LoanTransactionLinkService {
 
             return {
                 ...empty,
-                target: "OVERDRAFT",
                 refusal: `This transaction is already linked to ${linkedTo?.name ?? "an overdraft"}. Unlink it first to link it elsewhere.`,
             };
         }
@@ -308,7 +261,6 @@ export class LoanTransactionLinkService {
 
             return {
                 ...empty,
-                target: "EMI",
                 refusal: `This transaction is already recorded as a payment of ${loan?.name ?? "a loan"}. Reverse that payment from the loan's EMI Schedule first to link it elsewhere.`,
             };
         }
@@ -319,86 +271,73 @@ export class LoanTransactionLinkService {
             return { ...empty, refusal: NOT_LOAN_CATEGORY_REASON };
         }
 
-        // On an account no active loan uses, while an Overdraft exists on
-        // another: say exactly that, with the real account names - the
-        // account is never added to the OD for the user.
-        if (loans.length === 0 && overdraftsOnAccount.length === 0 && overdraftsElsewhere.length > 0) {
-            const accountNames = new Map(
-                (await new AccountRepository().getAll()).map(account => [account.id, account.name])
-            );
+        // Every active loan, of every type, whatever its account.
+        const activeLoans = (await this.loanRepository.getAll()).filter(
+            loan => loan.status !== LoanStatus.CLOSED
+        );
 
-            return {
-                ...empty,
-                refusal: overdraftAccountMismatchRefusal(
-                    accountNames.get(transaction.accountId) ?? "a bank account",
-                    overdraftsElsewhere.map(loan => ({
-                        loanName: loan.name,
-                        accountNames: overdraftAccountIds(loan).map(
-                            id => accountNames.get(id) ?? id
-                        ),
-                    }))
-                ),
-            };
+        if (activeLoans.length === 0) {
+            return { ...empty, refusal: "There is no active loan to link this transaction to." };
         }
 
-        // Overdrafts linked to this transaction's account (an OD can have
-        // several) - a credit can be a drawdown, a debit a repayment or an
-        // interest / charge.
-        const overdrafts: OverdraftLinkOption[] = overdraftsOnAccount.map(loan => ({
-            loanId: loan.id,
-            loanName: loan.name,
-            kinds: overdraftKindsFor(transaction),
-            refusal: overdraftLinkRefusal(transaction, loan),
-        }));
+        const termLoans = activeLoans.filter(loan => !isOverdraft(loan));
+        const facilities = activeLoans.filter(isOverdraft);
 
-        // Money in can only be an Overdraft movement - never an EMI.
-        if (transaction.type !== "expense") {
-            return overdrafts.length > 0
-                ? {
-                      ...empty,
-                      target: "OVERDRAFT",
-                      overdrafts,
-                      suggestedLoanId: overdrafts.length === 1 ? overdrafts[0]!.loanId : null,
-                      refusal: null,
-                  }
-                : {
-                      ...empty,
-                      refusal: "Only an outgoing (expense) transaction can be a loan EMI payment.",
-                  };
+        let accountNames: Map<string, string> | null = null;
+        const nameOf = async (id: string) => {
+            accountNames ??= new Map((await new AccountRepository().getAll()).map(account => [account.id, account.name]));
+            return accountNames.get(id) ?? id;
+        };
+
+        const overdrafts: OverdraftLinkOption[] = [];
+
+        for (const loan of facilities) {
+            const linkedIds = overdraftAccountIds(loan);
+            let refusal = overdraftLinkRefusal(transaction, loan);
+
+            if (refusal && !linkedIds.includes(transaction.accountId)) {
+                refusal = overdraftAccountMismatchRefusal(
+                    loan.name,
+                    await nameOf(transaction.accountId),
+                    await Promise.all(linkedIds.map(nameOf))
+                );
+            }
+
+            overdrafts.push({
+                loanId: loan.id,
+                loanName: loan.name,
+                loanType: overdraftTypeLabel(loan),
+                kinds: overdraftKindsFor(transaction),
+                refusal,
+            });
         }
 
-        if (loans.length === 0 && overdrafts.length === 0) {
+        // Only money out - an Expense or a Transfer Out - can be an EMI
+        // payment; money in can only be an Overdraft movement: every Term
+        // Loan is still listed, refusing it.
+        if (balanceSide(transaction) !== "expense") {
             return {
-                ...empty,
-                refusal: "No active loan has this transaction's account as its EMI payment account.",
+                transaction,
+                refusal: null,
+                overdrafts,
+                loans: termLoans.map(loan => ({
+                    loanId: loan.id,
+                    loanName: loan.name,
+                    loanType: "Term Loan",
+                    installments: [],
+                    possibleDuplicates: [],
+                    refusal: NOT_AN_EMI_PAYMENT_REASON,
+                })),
             };
         }
 
         const states: LoanMatchState[] = [];
 
-        for (const loan of loans) {
+        for (const loan of termLoans) {
             states.push(await this.stateLoader.loadState(loan));
         }
 
-        const termOptions = buildLinkOptions(transaction, states);
-
-        // The one Overdraft on the account is preselected when no Term Loan
-        // is there, or when the transaction itself names it.
-        const namedOverdrafts = overdraftsOnAccount.filter(loan =>
-            transactionNamesLoan(transaction, { loan, lenderName: null, schedule: [], payments: [] })
-        );
-
-        return {
-            ...termOptions,
-            target,
-            overdrafts,
-            suggestedLoanId:
-                termOptions.suggestedLoanId ??
-                (overdrafts.length === 1 && (loans.length === 0 || namedOverdrafts.length === 1)
-                    ? overdrafts[0]!.loanId
-                    : null),
-            refusal: null,
-        };
+        return { ...buildLinkOptions(transaction, states), overdrafts, refusal: null };
     }
 
     /** Transactions -> Link to Loan, for an Overdraft. See OverdraftService.link. */
@@ -490,9 +429,23 @@ export class LoanTransactionLinkService {
             throw new Error(options.refusal);
         }
 
-        const installment = options.loans
-            .find(loan => loan.loanId === request.loanId)
-            ?.installments.find(item => item.scheduleId === request.scheduleId);
+        const loanOption = options.loans.find(loan => loan.loanId === request.loanId);
+
+        if (!loanOption) {
+            throw new Error(
+                options.overdrafts.some(item => item.loanId === request.loanId)
+                    ? "That loan is an overdraft: link the transaction as a drawdown, repayment or interest / charge."
+                    : "That loan is not open for linking any more."
+            );
+        }
+
+        if (loanOption.refusal) {
+            throw new Error(loanOption.refusal);
+        }
+
+        const installment = loanOption.installments.find(
+            item => item.scheduleId === request.scheduleId
+        );
 
         if (!installment) {
             throw new Error("That instalment is not open for payment any more.");
@@ -511,6 +464,9 @@ export class LoanTransactionLinkService {
             scheduleId: request.scheduleId,
             transactionId: request.transactionId,
             settlesInstallment: request.mode === "settle",
+            // The user chose this loan: its EMI payment account is not
+            // required to be the transaction's account here.
+            fromAnyAccount: true,
         });
     }
 }

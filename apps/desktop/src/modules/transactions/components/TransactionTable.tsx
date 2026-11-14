@@ -52,7 +52,7 @@ interface TransactionTableProps {
  * never makes a transaction eligible.
  */
 export function showsLoanLinkIcon(
-    transaction: Pick<Transaction, "id" | "type" | "accountId" | "categoryId">,
+    transaction: Pick<Transaction, "id" | "type" | "accountId" | "categoryId" | "transferDirection">,
     sets: {
         loanLinkedIds?: ReadonlySet<string>;
         overdraftAccountIds?: ReadonlySet<string>;
@@ -65,15 +65,17 @@ export function showsLoanLinkIcon(
 
     return (
         isLoanLinkEligible(transaction, sets.loanLinkCategoryIds ?? new Set()) &&
-        (transaction.type === "expense" ||
+        // Money out (an Expense or a Transfer Out) can be an EMI payment.
+        (balanceSide(transaction) === "expense" ||
             (sets.overdraftAccountIds?.has(transaction.accountId) ?? false))
     );
 }
 
 /**
- * The Link to Loan EMI button for a linked / unlinked transaction. Same
+ * The Link to Loan button for a linked / unlinked transaction. Same
  * button, same icon, same size and place - only the icon colour and the
- * tooltip say whether it is linked.
+ * tooltip say whether it is linked. One universal action for every loan
+ * type (Link Transaction to Loan); `generic` is kept for its callers.
  */
 export function loanLinkButtonState(
     linked: boolean,
@@ -83,7 +85,8 @@ export function loanLinkButtonState(
     title: string;
     className: string;
 } {
-    const target = generic ? "Loan" : "Loan EMI";
+    void generic;
+    const target = "Loan";
 
     return {
         title: linked ? `Linked to ${target}` : `Link to ${target}`,

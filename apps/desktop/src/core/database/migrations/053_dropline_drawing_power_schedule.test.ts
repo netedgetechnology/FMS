@@ -21,9 +21,11 @@ function databaseBefore(): DatabaseSync {
 }
 
 describe("migration 053 - Dropline Drawing Power Schedule", () => {
-    it("is registered once, as the last migration", () => {
+    it("is registered once, in order (054 Interest Rate History follows it)", () => {
         expect(migrations.filter(item => item.version === migration.version)).toEqual([migration]);
-        expect(migrations[migrations.length - 1]).toBe(migration);
+        const index = migrations.indexOf(migration);
+        expect(migrations[index - 1]!.version).toBeLessThan(migration.version);
+        expect(migrations[index + 1]?.version).toBe(54);
     });
 
     it("refuses a step whose loan does not exist when foreign keys are on", () => {

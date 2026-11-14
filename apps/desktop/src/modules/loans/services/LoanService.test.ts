@@ -571,7 +571,6 @@ describe("LoanService.update - protecting a generated schedule from unsafe edits
 
         it.each([
             ["principalAmount", { principalAmount: 150000 }],
-            ["interestRate", { interestRate: 12 }],
             ["interestType", { interestType: "FLAT" as const }],
             ["tenureMonths", { tenureMonths: 24 }],
             ["startDate", { startDate: "2026-02-01" }],
@@ -594,6 +593,15 @@ describe("LoanService.update - protecting a generated schedule from unsafe edits
                 expect(repository.update).not.toHaveBeenCalled();
             }
         );
+
+        // Stage 3.1: the rate has its own, earlier refusal (Record rate change).
+        it("rejects a change to interestRate - it is recorded with its history instead", async () => {
+            const service = createService();
+
+            await expect(service.update(updateRequest({ interestRate: 12 }))).rejects.toThrow(/Use Record rate change/);
+
+            expect(repository.update).not.toHaveBeenCalled();
+        });
 
         it("allows saving with every protected term unchanged", async () => {
             const service = createService();
@@ -795,19 +803,29 @@ describe("LoanService.update - protecting a generated schedule from unsafe edits
             );
         });
 
-        it("allows changing terms freely", async () => {
+        it("allows changing terms freely - except the interest rate", async () => {
             const service = createService();
 
             await service.update(
                 updateRequest({
                     principalAmount: 200000,
-                    interestRate: 15,
                 })
             );
 
             expect(repository.update).toHaveBeenCalledTimes(
                 1
             );
+        });
+
+        // Stage 3.1: no edit path bypasses the rate history, even before a
+        // schedule exists (Record rate change records it with its date and source).
+        it("rejects a change to the interest rate and writes nothing", async () => {
+            const service = createService();
+
+            await expect(service.update(updateRequest({ interestRate: 15 }))).rejects.toThrow(/Use Record rate change/);
+
+            expect(repository.update).not.toHaveBeenCalled();
+            expect(accountRepository.syncLinkedAccount).not.toHaveBeenCalled();
         });
 
         // Same root cause as LoanService.create's Linked Account bug:

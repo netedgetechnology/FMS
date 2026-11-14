@@ -14,6 +14,10 @@
 //   - an account would be removed while a transaction on it is still
 //     linked to this OD (it would silently stop counting) - the user
 //     unlinks those transactions first.
+//   - the interest rate would change: an OD / CC / Dropline rate change
+//     is recorded with its effective date and source by
+//     record_rate_change_atomic (Interest Rate History), never overwritten
+//     by an edit (the request must carry the stored rate unchanged);
 //   - a Dropline Overdraft's steps (migration 053) would be invalid:
 //     none, a repeated or malformed date, a negative amount, or one above
 //     the sanctioned limit - including a limit lowered below a kept step.
@@ -274,6 +278,23 @@ async fn run_update(
             )));
         }
 
+        // The rate is never changed by an edit (see the header): it goes
+        // through the rate-history command, so it is never silently lost.
+        let stored_rate: Option<f64> = sqlx::query_scalar(
+            "SELECT interest_rate FROM loans WHERE id = ? AND loan_kind = 'OVERDRAFT' AND deleted_at IS NULL",
+        )
+        .bind(&request.loan_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some(stored) = stored_rate {
+            if !request.interest_rate.is_finite() || (request.interest_rate - stored).abs() > 1e-6 {
+                return Err(UpdateError::Refused(
+                    "The interest rate can't be changed here. Use Record rate change in the facility's details, which keeps the rate history with its effective date and source.".to_string(),
+                ));
+            }
+        }
+
         // The first account stays in loans.account_id for older code that
         // reads one account; the OD itself uses overdraft_accounts only.
         let updated = sqlx::query(
@@ -449,8 +470,8 @@ mod tests {
                 transaction_id TEXT NOT NULL UNIQUE,
                 entry_kind TEXT NOT NULL
             );
-            INSERT INTO loans (id, account_id, loan_kind, name, currency_id, start_date, status, credit_limit, opening_used, opening_used_as_of)
-            VALUES ('od-1', 'acct-a', 'OVERDRAFT', 'TATA OD', 'cur-inr', '2026-01-31', 'ACTIVE', 100, 0, '2026-10-08');
+            INSERT INTO loans (id, account_id, loan_kind, name, currency_id, interest_rate, start_date, status, credit_limit, opening_used, opening_used_as_of)
+            VALUES ('od-1', 'acct-a', 'OVERDRAFT', 'TATA OD', 'cur-inr', 10.5, '2026-01-31', 'ACTIVE', 100, 0, '2026-10-08');
             INSERT INTO loans (id, account_id, name, currency_id, start_date, status)
             VALUES ('term-1', 'acct-a', 'Term', 'cur-inr', '2026-01-31', 'ACTIVE');
             INSERT INTO overdraft_accounts (id, loan_id, account_id) VALUES ('oa-1', 'od-1', 'acct-a');
@@ -558,6 +579,40 @@ mod tests {
             loan.get::<Option<String>, _>("loan_account_number").as_deref(),
             Some("0099000123")
         );
+    }
+
+    /// Interest Rate History, Stage 3.1: an OD / CC / Dropline edit never
+    /// overwrites the rate - it is recorded by record_rate_change_atomic.
+    #[tokio::test]
+    async fn refuses_a_rate_change_and_writes_nothing_but_saves_an_unchanged_rate() {
+        let pool = test_pool().await;
+        let before = sqlx::query("SELECT name, interest_rate, credit_limit FROM loans WHERE id = 'od-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (name, credit_limit): (String, Option<f64>) = (before.get("name"), before.get("credit_limit"));
+
+        for rate in [11.25, 0.0, f64::NAN] {
+            let mut changed = request(&["acct-a", "acct-b"]);
+            changed.interest_rate = rate;
+            let error = run_update(&pool, &changed).await.expect_err("refused").to_string();
+            assert!(error.starts_with(REFUSED) && error.contains("Record rate change"), "{error}");
+        }
+
+        // Nothing written: name, limit, rate and accounts are as they were.
+        let after = sqlx::query("SELECT name, interest_rate, credit_limit FROM loans WHERE id = 'od-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after.get::<String, _>("name"), name);
+        assert_eq!(after.get::<f64, _>("interest_rate"), 10.5);
+        assert_eq!(after.get::<Option<f64>, _>("credit_limit"), credit_limit);
+        assert_eq!(accounts(&pool).await, vec!["acct-a"]);
+
+        // The unchanged rate saves the other terms as before.
+        run_update(&pool, &request(&["acct-a"])).await.expect("unchanged rate saves");
+        let saved: (String, f64) = sqlx::query_as("SELECT name, interest_rate FROM loans WHERE id = 'od-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(saved, ("TATA Capital".to_string(), 10.5));
     }
 
     #[tokio::test]

@@ -25,6 +25,17 @@ export const PAID_INSTALMENTS_SQL = `
 `;
 
 export interface CreateLoanAtomicRequest {
+    /**
+     * A lender institution FinWea does not have yet, created inside the same
+     * transaction as the loan so a refused save leaves no stray institution.
+     */
+    newLenderInstitution?: {
+        id: string;
+        name: string;
+        institutionType: string;
+        createdAt: string;
+        updatedAt: string;
+    };
     loanAccount: {
         id: string;
         institutionId: string | null;
@@ -97,6 +108,29 @@ export interface CreateLoanAtomicRequest {
      * written in the same transaction; the Rust command re-checks every
      * transaction and every PAID row (src-tauri/src/loan_create.rs).
      */
+    /**
+     * Interest Rate History (migration 054): the id for the loan's initial
+     * rate row (its rate from its start date), written in the same
+     * transaction. Ignored until the table exists.
+     */
+    initialRateHistoryId?: string;
+    /**
+     * Stage 4 (Overdraft only): a statement's confirmed rate changes -
+     * the original rate (the INITIAL row) and each change, written in the
+     * same transaction. Refused for a Term Loan and without migration 054.
+     */
+    statementRateHistory?: {
+        initialRate: number;
+        changes: Array<{
+            id: string;
+            effectiveFrom: string;
+            rate: number;
+            rateType: "FIXED" | "FLOATING" | null;
+            reference: string;
+            notes: string;
+            createdAt: string;
+        }>;
+    };
     historicalPayments?: Array<{
         id: string;
         scheduleId: string;
@@ -187,6 +221,30 @@ export class LoanRepository extends Repository {
         request: CreateLoanAtomicRequest
     ): Promise<void> {
         await invoke("create_loan_atomic", { request });
+    }
+
+    /**
+     * Live loans already holding this lender account number (trimmed,
+     * case-insensitive) - the same check create_loan_atomic repeats inside
+     * its transaction for a Term Loan.
+     */
+    async findLiveByLoanAccountNumber(
+        loanAccountNumber: string
+    ): Promise<Array<{ id: string; name: string }>> {
+        const number = loanAccountNumber.trim();
+
+        if (!number) return [];
+
+        return await this.select<{ id: string; name: string }>(
+            `
+            SELECT id, name
+            FROM loans
+            WHERE deleted_at IS NULL
+              AND loan_account_number IS NOT NULL
+              AND lower(trim(loan_account_number)) = lower(?)
+            `,
+            [number]
+        );
     }
 
     /**

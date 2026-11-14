@@ -253,6 +253,13 @@ export interface RateChange {
     previousRate: number | null;
     page: number;
     raw: string;
+    /** How it was read: a row of a rate table, or a sentence (narration). */
+    origin: "TABLE" | "TEXT";
+    /**
+     * Every date printed on the line, as read (ISO). More than one means the
+     * effective date is ambiguous - the one chosen is the engine's guess.
+     */
+    datesInText: string[];
 }
 
 export interface LimitChange {

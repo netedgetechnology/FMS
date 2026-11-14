@@ -133,7 +133,7 @@ describe("form schemas", () => {
 });
 
 describe("LoanService.create - Loan Account Number", () => {
-    const repository = { createAtomic: vi.fn() };
+    const repository = { createAtomic: vi.fn(), findLiveByLoanAccountNumber: vi.fn(async () => []) };
     const institutionRepository = { getByName: vi.fn(), create: vi.fn() };
 
     function createService(): LoanService {

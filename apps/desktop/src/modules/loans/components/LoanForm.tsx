@@ -559,10 +559,19 @@ export function LoanForm({
                             min="0"
                             step="0.01"
                             placeholder="e.g. 8.50"
+                            readOnly={editMode}
+                            aria-readonly={editMode || undefined}
+                            tabIndex={editMode ? -1 : undefined}
+                            className={editMode ? "bg-slate-50 text-slate-600" : undefined}
                             {...register("interestRate", {
                                 valueAsNumber: true,
                             })}
                         />
+                        {editMode && (
+                            <p className="mt-1 text-xs text-slate-500" data-rate-locked="true">
+                                Changed with Record rate change in the loan's details, which keeps the rate history with its effective date and source.
+                            </p>
+                        )}
                     </FormField>
 
                     <FormField

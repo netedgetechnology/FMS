@@ -82,6 +82,29 @@ describe("Link Payment button - Term Loan EMI (unchanged)", () => {
         expect(canLinkEmiChoice({ ...base, needsDuplicateConfirmation: true })).toBe(false);
         expect(canLinkEmiChoice({ ...base, needsDuplicateConfirmation: true, confirmedNotDuplicate: true })).toBe(true);
     });
+
+    it("a loan that refuses this transaction (e.g. money in for a Term Loan) never enables Link Payment", () => {
+        expect(canLinkEmiChoice({ ...base, loanRefusal: "Only an outgoing (expense) transaction can be a loan EMI payment." })).toBe(false);
+        expect(canLinkEmiChoice({ ...base, loanRefusal: null })).toBe(true);
+    });
+});
+
+describe("dialog wiring - one universal Link Transaction to Loan", () => {
+    const source = readFileSync(fileURLToPath(new URL("./LinkTransactionToEmiDialog.tsx", import.meta.url)), "latin1");
+
+    it("one title; nothing preselected; the selected loan decides the workflow; no account warning or tick", () => {
+        expect(source).toContain("{LINK_DIALOG_TITLE}");
+        expect(source).not.toContain("suggestedLoanId");
+        expect(source).not.toContain("setLoanId(initialLoan");
+        expect(source).toContain('const workflow = linkWorkflowFor(overdraft ? "overdraft" : loan ? "loan" : null);');
+        expect(source).not.toContain("paymentAccountMismatch");
+        expect(source).not.toContain("confirmedOtherAccount");
+        expect(source).not.toContain("Link to Overdraft");
+    });
+
+    it("every loan is listed with its type", () => {
+        expect(source.match(/\{item\.loanName\} \(\{item\.loanType\}\)/g)).toHaveLength(2);
+    });
 });
 
 describe("dialog layout - nothing escapes the dialog", () => {
@@ -141,7 +164,7 @@ describe("dialog layout - nothing escapes the dialog", () => {
         expect(source).toContain("<DialogHeader className={LINK_DIALOG_LAYOUT.header}>");
         expect(source).toContain("<div className={LINK_DIALOG_LAYOUT.body}>");
         expect(source).toContain("<div className={LINK_DIALOG_LAYOUT.footer}>");
-        expect(source.match(/className=\{LINK_DIALOG_LAYOUT\.notice\}/g)).toHaveLength(3);
+        expect(source.match(/className=\{LINK_DIALOG_LAYOUT\.notice\}/g)).toHaveLength(4);
         expect(source.match(/className=\{LINK_DIALOG_LAYOUT\.selectTrigger\}/g)).toHaveLength(2);
         expect(source).toContain("<LinkTransactionSummary");
         // No hard-coded amber notice left outside the shared class.

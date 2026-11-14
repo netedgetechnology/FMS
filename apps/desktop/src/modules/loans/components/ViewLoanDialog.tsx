@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { LoanSetupSummary } from "./setup/LoanSetupSummary";
+import { InterestRateHistorySection } from "./rates/InterestRateHistorySection";
 
 import {
     Dialog,
@@ -22,11 +23,16 @@ import {
 import { LOAN_KIND_LABELS, LoanKind, isOverdraft, type Loan } from "../types";
 import type { DrawingPowerStep } from "../setup/droplineSchedule";
 import { localToday } from "../setup/historicalInstalments";
+import { InterestRateHistoryRepository } from "../repositories/InterestRateHistoryRepository";
+import { currentLoanRate, currentRateLabel } from "../setup/interestRateHistory";
+import type { InterestRateHistoryEntry } from "../types/InterestRateHistory";
 
 export interface ViewLoanDialogProps {
     loan: Loan | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    /** A rate change was saved: the loan list should reload. */
+    onLoanChanged?: () => void;
 }
 
 export interface LoanViewField {
@@ -86,6 +92,8 @@ export function buildLoanViewModel(
         formatMoney: (value: number) => string;
         formatDate: (value: string) => string;
         emiSummary: ResolvedLoanEmiSummary | null;
+        /** The current rate from the rate history (currentLoanRate); else the loan's own rate. */
+        interestRateLabel?: string;
     }
 ): LoanViewModel {
     const {
@@ -130,7 +138,7 @@ export function buildLoanViewModel(
             },
             {
                 label: "Interest Rate",
-                value: `${loan.interestRate.toFixed(2)}%`,
+                value: resolved.interestRateLabel ?? `${loan.interestRate.toFixed(2)}%`,
             },
             {
                 label: "Interest Type",
@@ -260,6 +268,8 @@ export function buildOverdraftViewModel(
         /** A Dropline's saved steps (OverdraftService.getDrawingPowerSchedule). */
         drawingPowerSchedule?: readonly DrawingPowerStep[];
         today?: string;
+        /** The current rate from the rate history (currentLoanRate); else the loan's own rate. */
+        interestRateLabel?: string;
     }
 ): OverdraftViewModel {
     const { formatMoney, formatDate } = resolved;
@@ -323,7 +333,7 @@ export function buildOverdraftViewModel(
             },
             {
                 label: "Interest Rate",
-                value: `${loan.interestRate.toFixed(2)}%`,
+                value: resolved.interestRateLabel ?? `${loan.interestRate.toFixed(2)}%`,
             },
             { label: "Lender", value: resolved.lenderName || EMPTY },
             { label: "Loan Account Number", value: loan.loanAccountNumber || EMPTY },
@@ -389,6 +399,7 @@ export function ViewLoanDialog({
     loan,
     open,
     onOpenChange,
+    onLoanChanged,
 }: ViewLoanDialogProps) {
     const formatMoney = useMoneyFormatter();
     const formatDate = useDateFormatter();
@@ -404,6 +415,13 @@ export function ViewLoanDialog({
     const [overdraftSteps, setOverdraftSteps] = useState<DrawingPowerStep[]>([]);
     const [overdraftAccountNames, setOverdraftAccountNames] =
         useState<string[]>([]);
+    const [rateHistory, setRateHistory] = useState<InterestRateHistoryEntry[]>([]);
+    // Bumped when a rate change is saved, so the current rate shown reloads.
+    const [rateVersion, setRateVersion] = useState(0);
+    const handleLoanChanged = () => {
+        setRateVersion(version => version + 1);
+        onLoanChanged?.();
+    };
 
     useEffect(() => {
         let mounted = true;
@@ -411,6 +429,16 @@ export function ViewLoanDialog({
         async function loadRelated() {
             if (!loan) {
                 return;
+            }
+
+            // The current rate is derived from the live rate history (empty
+            // until migration 054 is applied: the loan's own rate is shown).
+            try {
+                const history = await new InterestRateHistoryRepository().findByLoan(loan.id);
+                if (mounted) setRateHistory(history);
+            } catch (error) {
+                console.error("Failed to load interest rate history for loan view:", error);
+                if (mounted) setRateHistory([]);
             }
 
             if (loan.lenderInstitutionId) {
@@ -547,7 +575,7 @@ export function ViewLoanDialog({
         return () => {
             mounted = false;
         };
-    }, [loan, open]);
+    }, [loan, open, rateVersion]);
 
     if (!loan) {
         return null;
@@ -556,6 +584,7 @@ export function ViewLoanDialog({
     const currency = currencies.find(
         item => item.id === loan.currencyId
     );
+    const interestRateLabel = currentRateLabel(currentLoanRate(loan, rateHistory, localToday()), formatDate);
 
     if (isOverdraft(loan)) {
         return (
@@ -563,6 +592,7 @@ export function ViewLoanDialog({
                 loan={loan}
                 open={open}
                 onOpenChange={onOpenChange}
+                onLoanChanged={handleLoanChanged}
                 model={
                     overdraftPosition
                         ? buildOverdraftViewModel(loan, overdraftPosition, {
@@ -575,6 +605,7 @@ export function ViewLoanDialog({
                                   formatMoney(value, currency?.code),
                               formatDate,
                               drawingPowerSchedule: overdraftSteps,
+                              interestRateLabel,
                           })
                         : null
                 }
@@ -592,6 +623,7 @@ export function ViewLoanDialog({
             formatMoney(value, currency?.code),
         formatDate,
         emiSummary,
+        interestRateLabel,
     });
 
     return (
@@ -654,6 +686,8 @@ export function ViewLoanDialog({
 
                     <LoanSetupSummary loan={loan} />
 
+                    <InterestRateHistorySection loan={loan} onLoanChanged={handleLoanChanged} />
+
                     {viewModel.emiSummary && (
                         <Section title="EMI Summary">
                             <FieldGrid
@@ -679,11 +713,13 @@ function OverdraftView({
     loan,
     open,
     onOpenChange,
+    onLoanChanged,
     model,
 }: {
     loan: Loan;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    onLoanChanged?: () => void;
     model: OverdraftViewModel | null;
 }) {
     return (
@@ -788,6 +824,8 @@ function OverdraftView({
                             )}
 
                             <LoanSetupSummary loan={loan} />
+
+                            <InterestRateHistorySection loan={loan} onLoanChanged={onLoanChanged} />
 
                             <Section title="Status">
                                 <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">

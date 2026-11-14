@@ -428,15 +428,18 @@ async fn insert_transaction(
 }
 
 /// Linking an existing transaction (an imported bank debit) as the
-/// payment's record: it must still exist, be an outgoing expense and be
-/// for exactly the payment's amount - the payment never changes the real
-/// transaction, so it must already be what the payment says it is.
+/// payment's record: it must still exist, be money OUT of its account -
+/// an Expense, or a Transfer whose direction is OUT - and be for exactly
+/// the payment's amount. The payment never changes the real transaction
+/// (its type stays as it is), so it must already be what the payment says
+/// it is. Money in (Income, Transfer In) and a Transfer with no recorded
+/// direction are refused.
 async fn check_existing_transaction(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     payment: &EmiPaymentRow,
 ) -> Result<(), EmiWriteError> {
     let existing = sqlx::query(
-        "SELECT type, amount FROM transactions WHERE id = ? AND deleted_at IS NULL",
+        "SELECT type, transfer_direction, amount FROM transactions WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(&payment.transaction_id)
     .fetch_optional(&mut **tx)
@@ -444,11 +447,12 @@ async fn check_existing_transaction(
     .ok_or_else(|| EmiWriteError::Refused("The linked transaction was not found.".to_string()))?;
 
     let kind: String = existing.get("type");
+    let direction: Option<String> = existing.get("transfer_direction");
     let amount: f64 = existing.get("amount");
 
-    if kind != "expense" {
+    if !is_money_out(&kind, direction.as_deref()) {
         return Err(EmiWriteError::Refused(
-            "Only an outgoing (expense) transaction can record a loan payment.".to_string(),
+            "Only an outgoing transaction (an Expense or a Transfer Out) can record a loan payment.".to_string(),
         ));
     }
 
@@ -459,6 +463,11 @@ async fn check_existing_transaction(
     }
 
     Ok(())
+}
+
+/// Money out of the transaction's account: an Expense, or a Transfer Out.
+fn is_money_out(kind: &str, transfer_direction: Option<&str>) -> bool {
+    kind == "expense" || (kind == "transfer" && transfer_direction == Some("OUT"))
 }
 
 async fn run_record(
@@ -920,6 +929,56 @@ mod tests {
         let status: String = sqlx::query("SELECT status FROM loan_payment_schedule WHERE id = 'sch-1'")
             .fetch_one(&pool).await.unwrap().get(0);
         assert_eq!(status, "OVERDUE");
+    }
+
+    async fn seed_transfer(pool: &Pool<Sqlite>, id: &str, direction: Option<&str>, amount: f64) {
+        sqlx::query(
+            "INSERT INTO transactions (id, account_id, payee, type, transfer_direction, amount, transaction_date, is_imported, original_narration)              VALUES (?, 'acct-1', 'Lender', 'transfer', ?, ?, '2026-06-05', 1, 'NEFT DR LENDER EMI')",
+        )
+        .bind(id)
+        .bind(direction)
+        .bind(amount)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn links_a_transfer_out_and_keeps_it_a_transfer_out() {
+        let pool = test_pool().await;
+        seed_transfer(&pool, "tr-out", Some("OUT"), 68943.0).await;
+
+        run_record(&pool, &link_existing("pay-1", "tr-out", 68943.0)).await.expect("linked");
+
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM transactions").await, 1);
+        let txn = sqlx::query("SELECT type, transfer_direction, amount, transaction_date FROM transactions WHERE id = 'tr-out'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(txn.get::<String, _>("type"), "transfer");
+        assert_eq!(txn.get::<Option<String>, _>("transfer_direction").as_deref(), Some("OUT"));
+        assert_eq!(txn.get::<f64, _>("amount"), 68943.0);
+        assert_eq!(txn.get::<String, _>("transaction_date"), "2026-06-05");
+        let linked: String = sqlx::query("SELECT transaction_id FROM loan_schedule_payments WHERE id = 'pay-1'")
+            .fetch_one(&pool).await.unwrap().get(0);
+        assert_eq!(linked, "tr-out");
+
+        // Still one transaction, one payment.
+        let mut again = link_existing("pay-2", "tr-out", 68943.0);
+        again.payment.schedule_id = "sch-2".to_string();
+        again.schedule.id = "sch-2".to_string();
+        assert!(matches!(run_record(&pool, &again).await, Err(EmiWriteError::Refused(ref r)) if r.contains("already recorded")));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_transfer_in_or_a_transfer_with_no_direction() {
+        let pool = test_pool().await;
+        seed_transfer(&pool, "tr-in", Some("IN"), 1000.0).await;
+        seed_transfer(&pool, "tr-none", None, 1000.0).await;
+
+        for txn in ["tr-in", "tr-none"] {
+            let result = run_record(&pool, &link_existing("pay-x", txn, 1000.0)).await;
+            assert!(matches!(result, Err(EmiWriteError::Refused(ref r)) if r.contains("Transfer Out")), "{txn}: {result:?}");
+        }
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM loan_schedule_payments").await, 0);
     }
 
     fn reversal_of(payment_id: &str, txn_id: &str) -> ReverseEmiPaymentRequest {

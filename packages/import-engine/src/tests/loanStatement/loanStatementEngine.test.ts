@@ -359,6 +359,43 @@ Date         Narration       Debit        Credit       Balance
         expect(facility.conflicts.some(c => c.fieldId === "totalOutstanding")).toBe(true);
     });
 
+    it("flags a term loan whose outstanding principal is not disbursed less principal repaid, and keeps every figure", () => {
+        const facility = only(`
+Term Loan Statement
+Loan Account No : LN-50001
+EMI Amount : 20,000.00
+Amount Disbursed : 5,00,000.00
+Principal Repaid : 60,000.00
+Principal Outstanding : 4,50,000.00
+`);
+
+        const finding = facility.conflicts.find(c => c.message.startsWith("The outstanding principal does not equal"));
+        expect(finding?.values.map(v => v.value)).toEqual([450000, 440000]);
+        expect(value(facility, "outstandingPrincipal")).toBe(450000);
+        expect(value(facility, "principalRepaidTotal")).toBe(60000);
+        expect(facility.fields.outstandingPrincipal?.status).toBe("FOUND");
+    });
+
+    it("flags net disbursed plus deductions that does not make the gross", () => {
+        const facility = only(`
+Term Loan Statement
+Loan Account No : LN-50002
+EMI Amount : 20,000.00
+
+Disbursal Date     Gross Amount    Net Amount    Deductions
+12/02/2025         5,00,000.00     4,90,000.00   9,000.00
+`);
+
+        const finding = facility.conflicts.find(c => c.fieldId === "netDisbursed");
+        expect(finding?.values.map(v => v.value)).toEqual([500000, 499000]);
+        expect(value(facility, "grossDisbursed")).toBe(500000);
+    });
+
+    it("raises no arithmetic finding when the term figures agree", () => {
+        const facility = only(TERM);
+        expect(facility.conflicts.filter(c => c.fieldId === "netDisbursed" || c.message.startsWith("The outstanding principal does not equal"))).toEqual([]);
+    });
+
     it("flags a row that breaks the running balance and withholds calculated figures", () => {
         const facility = only(`
 Overdraft Statement

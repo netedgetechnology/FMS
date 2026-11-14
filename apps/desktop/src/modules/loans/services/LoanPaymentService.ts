@@ -1,3 +1,4 @@
+import { balanceSide } from "@/core/accounting/transferClassification";
 import { TransactionService } from "@/modules/transactions/services/TransactionService";
 import { TransactionRepository } from "@/modules/transactions/repositories/TransactionRepository";
 import type {
@@ -205,12 +206,19 @@ export class LoanPaymentService {
      * instalment becomes PAID while its scheduled total stays as
      * calculated, so the difference remains visible; nothing is rounded
      * or written off silently. Without it, a smaller amount is PARTIAL.
+     *
+     * `fromAnyAccount`: the user chose this loan for this transaction by
+     * hand (Transactions -> Link Transaction to Loan), so it need not be
+     * from the loan's EMI payment account. Neither the transaction nor the
+     * loan's payment account is changed. Without it (automatic import
+     * matching), a transaction from another account is refused.
      */
     async recordPaymentFromTransaction(request: {
         loanId: string;
         scheduleId: string;
         transactionId: string;
         settlesInstallment?: boolean;
+        fromAnyAccount?: boolean;
     }): Promise<ProcessLoanPaymentResult> {
         const transaction =
             await this.transactionRepository.getById(
@@ -223,9 +231,12 @@ export class LoanPaymentService {
             );
         }
 
-        if (transaction.type !== "expense") {
+        // Money out of its account - an Expense, or a Transfer Out - and
+        // never changed: a Transfer Out stays a Transfer Out (the same rule
+        // as record_emi_payment_atomic). Income / Transfer In are refused.
+        if (balanceSide(transaction) !== "expense") {
             throw new Error(
-                "Only an outgoing (expense) transaction can record a loan payment."
+                "Only an outgoing transaction (an Expense or a Transfer Out) can record a loan payment."
             );
         }
 
@@ -249,7 +260,10 @@ export class LoanPaymentService {
                 settlesInstallment: request.settlesInstallment,
             });
 
-        if (transaction.accountId !== prepared.loan.accountId) {
+        if (
+            transaction.accountId !== prepared.loan.accountId &&
+            request.fromAnyAccount !== true
+        ) {
             throw new Error(
                 "The transaction is not from this loan's payment account."
             );

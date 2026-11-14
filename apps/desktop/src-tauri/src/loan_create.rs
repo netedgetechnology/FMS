@@ -170,9 +170,25 @@ pub struct OverdraftTerms {
     pub account_ids: Vec<String>,
 }
 
+/// A lender institution named in Add Loan that FinWea does not have yet.
+/// Inserted inside the create transaction, so a refused or failed create
+/// never leaves a stray institution behind.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewInstitution {
+    pub id: String,
+    pub name: String,
+    pub institution_type: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateLoanAtomicRequest {
+    /// Absent from older callers, which created the institution beforehand.
+    #[serde(default)]
+    pub new_lender_institution: Option<NewInstitution>,
     pub loan_account: LoanMirrorAccount,
     pub loan: NewLoan,
     #[serde(default)]
@@ -188,6 +204,112 @@ pub struct CreateLoanAtomicRequest {
     /// every older caller (which then may not send any PAID instalment).
     #[serde(default)]
     pub historical_payments: Vec<HistoricalPayment>,
+    /// Interest Rate History (migration 054): the id of the loan's initial
+    /// rate row - its rate and start date, recorded with the loan. Absent
+    /// from older callers. Written only once the table exists, so a
+    /// database without migration 054 creates loans exactly as before.
+    #[serde(default)]
+    pub initial_rate_history_id: Option<String>,
+    /// Interest Rate History, Stage 4 - Overdraft / Cash Credit / Dropline
+    /// only: the rate changes the customer confirmed from a lender
+    /// statement. Recorded (never recalculated) with the loan, in this
+    /// transaction: the original rate from the start date (as the INITIAL
+    /// row), then each change. Absent from every other caller.
+    #[serde(default)]
+    pub statement_rate_history: Option<StatementRateHistory>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementRateEntry {
+    pub id: String,
+    pub effective_from: String,
+    pub rate: f64,
+    #[serde(default)]
+    pub rate_type: Option<String>,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementRateHistory {
+    /// The rate from the loan's start date (the INITIAL row's rate).
+    pub initial_rate: f64,
+    pub changes: Vec<StatementRateEntry>,
+}
+
+fn valid_rate(value: f64) -> bool {
+    value.is_finite() && (0.0..=100.0).contains(&value)
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    value.len() == 10 && chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+}
+
+/// Every rule a statement's confirmed rate history must meet before any of
+/// it is written: an Overdraft only, a real original rate, changes after
+/// the start date, one per date in date order, each a real change, and the
+/// loan's stored rate equal to the rate in force today.
+fn check_statement_rate_history(request: &CreateLoanAtomicRequest, history: &StatementRateHistory, today: &str) -> Result<(), String> {
+    if request.overdraft.is_none() {
+        return Err("A Term Loan's statement rate changes are recorded after it is created, through Record rate change (Keep EMI / Keep Tenure). They cannot be saved with the loan.".to_string());
+    }
+    if !valid_rate(history.initial_rate) {
+        return Err("The original rate must be from 0 to 100 (% per year).".to_string());
+    }
+    if history.changes.is_empty() {
+        return Err("No confirmed rate change was sent.".to_string());
+    }
+
+    let start = day(&request.loan.start_date);
+    let mut previous_date: Option<&str> = None;
+    let mut previous_rate = history.initial_rate;
+    let mut in_force_today = history.initial_rate;
+    let mut ids: HashSet<&str> = HashSet::new();
+
+    for change in &history.changes {
+        if change.id.trim().is_empty() || !ids.insert(change.id.as_str()) {
+            return Err("Each rate change needs its own id.".to_string());
+        }
+        if !valid_iso_date(&change.effective_from) {
+            return Err("A rate change has no valid effective date (YYYY-MM-DD).".to_string());
+        }
+        if !valid_rate(change.rate) {
+            return Err(format!("The rate from {} must be from 0 to 100 (% per year).", change.effective_from));
+        }
+        if let Some(rate_type) = change.rate_type.as_deref() {
+            if rate_type != "FIXED" && rate_type != "FLOATING" {
+                return Err("The rate type must be Fixed or Floating.".to_string());
+            }
+        }
+        if change.effective_from.as_str() <= start {
+            return Err(format!("The rate change from {} is not after the loan's start date ({start}).", change.effective_from));
+        }
+        if previous_date.is_some_and(|previous| change.effective_from.as_str() <= previous) {
+            return Err("The rate changes must be in date order, one per date.".to_string());
+        }
+        if (change.rate - previous_rate).abs() < 1e-9 {
+            return Err(format!("The rate from {} is the same as the rate before it.", change.effective_from));
+        }
+        if change.effective_from.as_str() <= today {
+            in_force_today = change.rate;
+        }
+        previous_date = Some(change.effective_from.as_str());
+        previous_rate = change.rate;
+    }
+
+    if (request.loan.interest_rate - in_force_today).abs() > 1e-9 {
+        return Err(format!(
+            "The confirmed rate changes put the rate in force today at {in_force_today}%, but the loan's interest rate is {}%.",
+            request.loan.interest_rate
+        ));
+    }
+
+    Ok(())
 }
 
 fn refused(message: String) -> sqlx::Error {
@@ -196,6 +318,98 @@ fn refused(message: String) -> sqlx::Error {
 
 fn day(value: &str) -> &str {
     value.get(..10).unwrap_or(value)
+}
+
+/// The loan's initial Interest Rate History row (migration 054): its own
+/// rate from its start date, source INITIAL, no previous rate. Written in
+/// the create transaction, so a refused or failed save leaves none. Skipped
+/// when the caller sends no id, or the table does not exist yet (054 not
+/// applied) - the loan is then created exactly as before.
+async fn record_initial_rate(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    request: &CreateLoanAtomicRequest,
+    today: &str,
+) -> Result<(), sqlx::Error> {
+    let statement = request.statement_rate_history.as_ref();
+    if let Some(history) = statement {
+        check_statement_rate_history(request, history, today).map_err(refused)?;
+    }
+
+    let Some(id) = request
+        .initial_rate_history_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        if statement.is_some() {
+            return Err(refused("The loan's original rate row has no id.".to_string()));
+        }
+        return Ok(());
+    };
+
+    let table: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'loan_interest_rate_history'",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+
+    if table == 0 {
+        // Confirmed history is never dropped silently.
+        if statement.is_some() {
+            return Err(refused(
+                "The statement's rate changes need the interest rate history database update (migration 054), which has not been applied.".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    let loan = &request.loan;
+    let rate_type = request.setup.as_ref().and_then(|setup| setup.rate_type.clone());
+    // With a statement's history, the original rate (not today's) is the
+    // rate from the start date; otherwise the loan's own rate.
+    let initial_rate = statement.map(|history| history.initial_rate).unwrap_or(loan.interest_rate);
+
+    sqlx::query(
+        r#"
+        INSERT INTO loan_interest_rate_history
+        (id, loan_id, effective_from, rate, previous_rate, rate_type, source, created_at)
+        VALUES (?, ?, ?, ?, NULL, ?, 'INITIAL', ?)
+        "#,
+    )
+    .bind(id)
+    .bind(&loan.id)
+    .bind(day(&loan.start_date))
+    .bind(initial_rate)
+    .bind(&rate_type)
+    .bind(&loan.created_at)
+    .execute(&mut **tx)
+    .await?;
+
+    if let Some(history) = statement {
+        let mut previous = history.initial_rate;
+        for change in &history.changes {
+            sqlx::query(
+                r#"
+                INSERT INTO loan_interest_rate_history
+                (id, loan_id, effective_from, rate, previous_rate, rate_type, source, reference, notes, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'STATEMENT_IMPORT', ?, ?, ?)
+                "#,
+            )
+            .bind(&change.id)
+            .bind(&loan.id)
+            .bind(&change.effective_from)
+            .bind(change.rate)
+            .bind(previous)
+            .bind(&change.rate_type)
+            .bind(change.reference.as_deref().map(str::trim).filter(|value| !value.is_empty()))
+            .bind(change.notes.as_deref().map(str::trim).filter(|value| !value.is_empty()))
+            .bind(&change.created_at)
+            .execute(&mut **tx)
+            .await?;
+            previous = change.rate;
+        }
+    }
+
+    Ok(())
 }
 
 /// Today's local date, YYYY-MM-DD - the same "today" the wizard uses.
@@ -433,6 +647,55 @@ async fn run_create_on(
     let mut tx = pool.begin().await?;
 
     let outcome: Result<(), sqlx::Error> = async {
+        // A Term Loan whose lender account number is already on a live loan
+        // is the same loan again (e.g. the same statement imported twice).
+        // Checked inside the transaction, so two saves cannot both pass.
+        if request.overdraft.is_none() {
+            if let Some(number) = request
+                .loan
+                .loan_account_number
+                .as_deref()
+                .map(str::trim)
+                .filter(|number| !number.is_empty())
+            {
+                let existing: Option<String> = sqlx::query_scalar(
+                    r#"
+                    SELECT name
+                    FROM loans
+                    WHERE deleted_at IS NULL
+                      AND loan_account_number IS NOT NULL
+                      AND lower(trim(loan_account_number)) = lower(?)
+                    LIMIT 1
+                    "#,
+                )
+                .bind(number)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+                if let Some(name) = existing {
+                    return Err(refused(format!(
+                        "A loan with account number {number} already exists (\"{name}\"). Nothing was saved, so the same loan is not added twice."
+                    )));
+                }
+            }
+        }
+
+        if let Some(institution) = &request.new_lender_institution {
+            sqlx::query(
+                r#"
+                INSERT INTO institutions (id, name, type, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&institution.id)
+            .bind(&institution.name)
+            .bind(&institution.institution_type)
+            .bind(&institution.created_at)
+            .bind(&institution.updated_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
         let account = &request.loan_account;
 
         sqlx::query(
@@ -541,6 +804,9 @@ async fn run_create_on(
         .bind(&loan.id)
         .execute(&mut *tx)
         .await?;
+
+        // Its initial rate, from its start date (migration 054).
+        record_initial_rate(&mut tx, request, today).await?;
 
         for installment in &request.schedule {
             sqlx::query(
@@ -708,6 +974,14 @@ mod tests {
 
         sqlx::query(
             r#"
+            CREATE TABLE institutions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE accounts (
                 id TEXT PRIMARY KEY,
                 institution_id TEXT,
@@ -780,6 +1054,7 @@ mod tests {
 
     fn valid_request() -> CreateLoanAtomicRequest {
         CreateLoanAtomicRequest {
+            new_lender_institution: None,
             loan_account: LoanMirrorAccount {
                 id: "loan-acct-1".to_string(),
                 institution_id: None,
@@ -837,6 +1112,8 @@ mod tests {
                 settled_before_finwea: false,
             }],
             historical_payments: vec![],
+            initial_rate_history_id: None,
+            statement_rate_history: None,
             balances: LoanAccountingBalances {
                 outstanding_principal: 9211.51,
                 outstanding_interest: 561.86,
@@ -1643,5 +1920,565 @@ mod tests {
         let error = refusal(&pool, &historical_request(rows, vec![])).await;
         assert!(error.contains("is not paid, so it cannot carry a payment"), "{error}");
         nothing_written(&pool).await;
+    }
+
+    fn second_loan(mut request: CreateLoanAtomicRequest) -> CreateLoanAtomicRequest {
+        request.loan.id = "loan-2".to_string();
+        request.loan_account.id = "loan-acct-2".to_string();
+        request.schedule[0].id = "sched-2".to_string();
+        request
+    }
+
+    #[tokio::test]
+    async fn refuses_a_second_term_loan_with_the_same_lender_account_number_and_writes_nothing() {
+        let pool = test_pool().await;
+        run_create(&pool, &valid_request()).await.expect("first create");
+
+        // The same statement imported again: same number, other case/spaces.
+        let mut again = second_loan(valid_request());
+        again.loan.loan_account_number = Some("  0099000123 ".to_string());
+        again.new_lender_institution = Some(NewInstitution {
+            id: "inst-2".to_string(),
+            name: "Example Lender".to_string(),
+            institution_type: "Financial Institution".to_string(),
+            created_at: "2026-09-20T00:00:00.000Z".to_string(),
+            updated_at: "2026-09-20T00:00:00.000Z".to_string(),
+        });
+
+        let error = run_create(&pool, &again).await.expect_err("refused").to_string();
+        assert!(error.contains(REFUSED), "{error}");
+        assert!(error.contains("already exists"), "{error}");
+        assert_eq!(count(&pool, "loans").await, 1);
+        assert_eq!(count(&pool, "accounts").await, 1);
+        assert_eq!(count(&pool, "loan_payment_schedule").await, 1);
+        assert_eq!(count(&pool, "institutions").await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_loan_or_a_blank_account_number_does_not_block_a_new_loan() {
+        let pool = test_pool().await;
+        run_create(&pool, &valid_request()).await.expect("first create");
+        sqlx::query("UPDATE loans SET deleted_at = '2026-10-01' WHERE id = 'loan-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        run_create(&pool, &second_loan(valid_request()))
+            .await
+            .expect("a deleted loan's number can be used again");
+
+        let mut third = second_loan(valid_request());
+        third.loan.id = "loan-3".to_string();
+        third.loan_account.id = "loan-acct-3".to_string();
+        third.schedule[0].id = "sched-3".to_string();
+        third.loan.loan_account_number = None;
+        run_create(&pool, &third).await.expect("no number, no duplicate check");
+
+        assert_eq!(count(&pool, "loans").await, 3);
+    }
+
+    #[tokio::test]
+    async fn a_new_lender_institution_is_created_with_the_loan_and_rolled_back_with_it() {
+        let pool = test_pool().await;
+        let institution = || NewInstitution {
+            id: "inst-1".to_string(),
+            name: "Example Lender".to_string(),
+            institution_type: "Financial Institution".to_string(),
+            created_at: "2026-09-20T00:00:00.000Z".to_string(),
+            updated_at: "2026-09-20T00:00:00.000Z".to_string(),
+        };
+
+        // A create that fails after the institution insert leaves nothing.
+        let mut failing = valid_request();
+        failing.new_lender_institution = Some(institution());
+        failing.loan.lender_institution_id = Some("inst-1".to_string());
+        failing.loan.account_id = Some(String::new());
+        assert!(run_create(&pool, &failing).await.is_err());
+        assert_eq!(count(&pool, "institutions").await, 0);
+        assert_eq!(count(&pool, "loans").await, 0);
+
+        let mut request = valid_request();
+        request.new_lender_institution = Some(institution());
+        request.loan.lender_institution_id = Some("inst-1".to_string());
+        run_create(&pool, &request).await.expect("create succeeds");
+        assert_eq!(count(&pool, "institutions").await, 1);
+        let lender: Option<String> = sqlx::query_scalar("SELECT lender_institution_id FROM loans WHERE id = 'loan-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(lender.as_deref(), Some("inst-1"));
+    }
+
+    /// Every table's row count, by name - the whole database's shape.
+    async fn table_counts(pool: &Pool<Sqlite>) -> Vec<(String, i64)> {
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let mut counts = Vec::new();
+        for name in names {
+            counts.push((name.clone(), count(pool, &name).await));
+        }
+        counts
+    }
+
+    async fn assert_integrity(pool: &Pool<Sqlite>) {
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(pool).await.unwrap();
+        assert_eq!(integrity, "ok");
+        let fk_violations = sqlx::query("PRAGMA foreign_key_check").fetch_all(pool).await.unwrap();
+        assert!(fk_violations.is_empty(), "{} foreign key violation(s)", fk_violations.len());
+    }
+
+    /// The failed-save rollback, end to end: a second loan - with a NEW
+    /// lender, its own mirror account, a full schedule and two historical
+    /// EMI links - fails INSIDE the save transaction, after its lender,
+    /// account, loan, schedule and first link are already written, because
+    /// its other EMI debit is already claimed by the first loan (as when
+    /// the debit is linked elsewhere while the Add Loan wizard is open).
+    /// Everything it wrote is rolled back; the first loan is untouched.
+    #[tokio::test]
+    async fn a_failure_inside_the_save_rolls_back_the_new_lender_loan_schedule_and_links() {
+        let pool = historical_pool().await;
+
+        // Loan A (committed): instalment 1 linked to the September debit.
+        let mut rows = four_rows();
+        rows[0] = paid_linked(rows[0].clone(), "emi-sep", "2026-09-21");
+        run_create_on(&pool, &historical_request(rows, vec![historical_payment("s1", "emi-sep")]), TODAY)
+            .await
+            .expect("loan A is created");
+
+        let before = table_counts(&pool).await;
+        assert_integrity(&pool).await;
+
+        // Loan B: a new lender, a different lender account number, its own
+        // ids. Instalment 2 links a free debit (written first), instalment 1
+        // the September debit loan A already uses (refused inside the tx).
+        let loan_b = |first_instalment: LoanScheduleInstallment, payments: Vec<HistoricalPayment>| {
+            let mut rows: Vec<_> = four_rows()
+                .into_iter()
+                .map(|mut row| {
+                    row.id = row.id.replace('s', "b");
+                    row
+                })
+                .collect();
+            rows[0] = first_instalment;
+            rows[1] = paid_linked(rows[1].clone(), "emi-oct", "2026-10-20");
+            let mut request = historical_request(rows, payments);
+            request.loan.id = "loan-2".to_string();
+            request.loan.name = "Synthetic Rollback Loan".to_string();
+            request.loan.loan_account_number = Some("XLOAN0000000000000002".to_string());
+            request.loan_account.id = "loan-acct-2".to_string();
+            request.new_lender_institution = Some(NewInstitution {
+                id: "inst-rollback".to_string(),
+                name: "Rollback Test Lender".to_string(),
+                institution_type: "Financial Institution".to_string(),
+                created_at: "2026-11-11T00:00:00.000Z".to_string(),
+                updated_at: "2026-11-11T00:00:00.000Z".to_string(),
+            });
+            request.loan.lender_institution_id = Some("inst-rollback".to_string());
+            request
+        };
+        let mut first = row("b1", 1, "2026-09-20");
+        first = paid_linked(first, "emi-sep", "2026-09-21");
+        let failing = loan_b(first, vec![historical_payment("b2", "emi-oct"), historical_payment("b1", "emi-sep")]);
+
+        let error = refusal(&pool, &failing).await;
+        assert!(error.contains("instalment #1") && error.contains("already linked"), "{error}");
+
+        // Nothing of loan B survived, in any table; the database is sound.
+        assert_eq!(table_counts(&pool).await, before);
+        assert_integrity(&pool).await;
+        for (table, column, id) in [
+            ("institutions", "id", "inst-rollback"),
+            ("accounts", "id", "loan-acct-2"),
+            ("loans", "id", "loan-2"),
+            ("loan_payment_schedule", "loan_id", "loan-2"),
+            ("loan_schedule_payments", "loan_id", "loan-2"),
+            ("loan_schedule_payments", "transaction_id", "emi-oct"),
+        ] {
+            let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?"))
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(n, 0, "{table}.{column} = {id} was not rolled back");
+        }
+        // Loan A and its link are exactly as before.
+        let a_link: String = sqlx::query_scalar("SELECT transaction_id FROM loan_schedule_payments WHERE loan_id = 'loan-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(a_link, "emi-sep");
+
+        // No lock or half-open transaction is left: the corrected save goes
+        // through, writing the lender, loan, schedule and the free link.
+        let corrected = loan_b(settled(row("b1", 1, "2026-09-20")), vec![historical_payment("b2", "emi-oct")]);
+        run_create_on(&pool, &corrected, TODAY).await.expect("the corrected loan B is created");
+        assert_eq!(count(&pool, "institutions").await, before.iter().find(|(t, _)| t == "institutions").unwrap().1 + 1);
+        assert_eq!(count(&pool, "loans").await, 2);
+        let b_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loan_payment_schedule WHERE loan_id = 'loan-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(b_rows, 4);
+        assert_integrity(&pool).await;
+    }
+
+    // ---- Interest Rate History, Stage 1 (migration 054) ----------------
+
+    /// Migration 054's own SQL, read from the TypeScript migration so these
+    /// tests can never drift from it.
+    const RATE_HISTORY_MIGRATION: &str = include_str!("../../src/core/database/migrations/054_loan_interest_rate_history.ts");
+
+    async fn add_rate_history_schema(pool: &Pool<Sqlite>) {
+        // 054 references the existing documents table (migration 008).
+        sqlx::query("CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY)")
+            .execute(pool)
+            .await
+            .unwrap();
+        let start = RATE_HISTORY_MIGRATION.find("sql: `").expect("migration sql") + "sql: `".len();
+        let end = start + RATE_HISTORY_MIGRATION[start..].find('`').expect("end of migration sql");
+        for statement in RATE_HISTORY_MIGRATION[start..end].split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
+    }
+
+    type RateRow = (String, String, String, f64, Option<f64>, Option<String>, String);
+
+    async fn rate_rows(pool: &Pool<Sqlite>) -> Vec<RateRow> {
+        sqlx::query(
+            "SELECT id, loan_id, effective_from, rate, previous_rate, rate_type, source FROM loan_interest_rate_history ORDER BY id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.get("id"), r.get("loan_id"), r.get("effective_from"), r.get("rate"), r.get("previous_rate"), r.get("rate_type"), r.get("source")))
+        .collect()
+    }
+
+    fn with_rate_id(mut request: CreateLoanAtomicRequest, id: &str) -> CreateLoanAtomicRequest {
+        request.initial_rate_history_id = Some(id.to_string());
+        request
+    }
+
+    #[tokio::test]
+    async fn a_new_term_loan_records_its_initial_rate_from_its_start_date() {
+        let pool = test_pool().await;
+        add_rate_history_schema(&pool).await;
+
+        run_create(&pool, &with_rate_id(valid_request(), "rate-1")).await.expect("create succeeds");
+
+        assert_eq!(
+            rate_rows(&pool).await,
+            vec![("rate-1".to_string(), "loan-1".to_string(), "2026-09-20".to_string(), 12.0, None, None, "INITIAL".to_string())]
+        );
+        // loans.interest_rate is still the rate, as before.
+        let rate: f64 = sqlx::query_scalar("SELECT interest_rate FROM loans WHERE id = 'loan-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(rate, 12.0);
+    }
+
+    #[tokio::test]
+    async fn the_initial_rate_carries_the_setup_rate_type() {
+        let pool = test_pool().await;
+        add_setup_schema(&pool).await;
+        add_rate_history_schema(&pool).await;
+        let mut request = with_rate_id(valid_request(), "rate-1");
+        request.setup = Some(LoanSetupDetails { rate_type: Some("FLOATING".to_string()), ..Default::default() });
+
+        run_create(&pool, &request).await.expect("create succeeds");
+
+        assert_eq!(rate_rows(&pool).await[0].5.as_deref(), Some("FLOATING"));
+    }
+
+    #[tokio::test]
+    async fn a_new_overdraft_records_its_initial_rate_too() {
+        let pool = test_pool().await;
+        add_overdraft_columns(&pool).await;
+        add_rate_history_schema(&pool).await;
+
+        run_create(&pool, &with_rate_id(overdraft_request(), "rate-od")).await.expect("create succeeds");
+
+        let rows = rate_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].1.as_str(), rows[0].2.as_str(), rows[0].6.as_str()), ("loan-1", "2026-09-20", "INITIAL"));
+    }
+
+    #[tokio::test]
+    async fn without_migration_054_a_loan_is_created_exactly_as_before() {
+        let pool = test_pool().await;
+
+        run_create(&pool, &with_rate_id(valid_request(), "rate-1")).await.expect("create succeeds");
+
+        assert_eq!(count(&pool, "loans").await, 1);
+        let table: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'loan_interest_rate_history'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(table, 0);
+    }
+
+    #[tokio::test]
+    async fn an_older_caller_without_a_rate_id_records_no_history() {
+        let pool = test_pool().await;
+        add_rate_history_schema(&pool).await;
+
+        run_create(&pool, &valid_request()).await.expect("create succeeds");
+
+        assert_eq!(count(&pool, "loans").await, 1);
+        assert!(rate_rows(&pool).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_save_refused_after_the_rate_row_is_written_rolls_the_rate_row_back_with_the_loan() {
+        // The historical-EMI check runs after the initial rate row is inserted.
+        let pool = historical_pool().await;
+        add_rate_history_schema(&pool).await;
+        sqlx::query("INSERT INTO overdraft_transaction_links (id, transaction_id) VALUES ('l2', 'emi-sep')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut rows = four_rows();
+        rows[0] = paid_linked(rows[0].clone(), "emi-sep", "2026-09-21");
+        let request = with_rate_id(historical_request(rows, vec![historical_payment("s1", "emi-sep")]), "rate-1");
+
+        let error = refusal(&pool, &request).await;
+
+        assert!(error.contains("already linked"), "{error}");
+        nothing_written(&pool).await;
+        assert!(rate_rows(&pool).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rate_row_that_cannot_be_written_rolls_back_the_whole_loan() {
+        let pool = test_pool().await;
+        add_rate_history_schema(&pool).await;
+        // A live row with this id already exists, so the insert fails mid-transaction.
+        sqlx::query("INSERT INTO loans (id, currency_id, name, loan_type, principal_amount, interest_rate, interest_type, start_date, outstanding_principal, outstanding_interest, paid_installments, status, created_at, updated_at) VALUES ('other', 'cur-inr', 'Other', 'Home Loan', 1, 1, 'REDUCING', '2026-01-01', 1, 0, 0, 'ACTIVE', 'x', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO loan_interest_rate_history (id, loan_id, effective_from, rate, source) VALUES ('rate-1', 'other', '2026-01-01', 1, 'INITIAL')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let accounts_before = count(&pool, "accounts").await;
+
+        assert!(run_create(&pool, &with_rate_id(valid_request(), "rate-1")).await.is_err());
+
+        let loans: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loans WHERE id = 'loan-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(loans, 0);
+        assert_eq!(count(&pool, "accounts").await, accounts_before);
+        assert_eq!(count(&pool, "loan_payment_schedule").await, 0);
+        assert_eq!(rate_rows(&pool).await.len(), 1);
+
+        // Nothing is left locked: the same loan with a fresh rate id saves.
+        run_create(&pool, &with_rate_id(valid_request(), "rate-2")).await.expect("create succeeds");
+        assert_eq!(rate_rows(&pool).await.len(), 2);
+    }
+
+    // ---------------------------------------------------------- Stage 4
+
+    fn statement_change(id: &str, effective_from: &str, rate: f64) -> StatementRateEntry {
+        StatementRateEntry {
+            id: id.to_string(),
+            effective_from: effective_from.to_string(),
+            rate,
+            rate_type: Some("FLOATING".to_string()),
+            reference: Some("synthetic-statement.pdf, page 2".to_string()),
+            notes: Some("From the lender statement: \"Interest rate changed\"".to_string()),
+            created_at: format!("2026-11-25T00:00:0{}Z", id.len() % 10),
+        }
+    }
+
+    /// A synthetic OD (start 20/09/2026, today 25/11/2026) whose statement
+    /// shows 11% -> 11.5% (01/10) -> 12% (01/11) -> 12.5% (01/01/2027, upcoming).
+    fn od_with_statement_history() -> CreateLoanAtomicRequest {
+        let mut request = with_rate_id(overdraft_request(), "rate-initial");
+        request.loan.interest_rate = 12.0;
+        request.statement_rate_history = Some(StatementRateHistory {
+            initial_rate: 11.0,
+            changes: vec![
+                statement_change("rate-a", "2026-10-01", 11.5),
+                statement_change("rate-b", "2026-11-01", 12.0),
+                statement_change("rate-c", "2027-01-01", 12.5),
+            ],
+        });
+        request
+    }
+
+    async fn statement_pool() -> Pool<Sqlite> {
+        let pool = test_pool().await;
+        add_overdraft_columns(&pool).await;
+        add_rate_history_schema(&pool).await;
+        pool
+    }
+
+    async fn nothing_created(pool: &Pool<Sqlite>, accounts_before: i64) {
+        assert_eq!(count(pool, "loans").await, 0);
+        assert_eq!(count(pool, "loan_payment_schedule").await, 0);
+        assert_eq!(count(pool, "accounts").await, accounts_before);
+        assert!(rate_rows(pool).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_overdraft_saves_its_confirmed_statement_rates_with_the_loan_in_date_order() {
+        let pool = statement_pool().await;
+
+        run_create_on(&pool, &od_with_statement_history(), TODAY).await.expect("create succeeds");
+
+        let rows: Vec<(String, String, f64, Option<f64>, String, Option<String>, Option<String>)> = sqlx::query(
+            "SELECT id, effective_from, rate, previous_rate, source, reference, notes FROM loan_interest_rate_history ORDER BY effective_from",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.get("id"), r.get("effective_from"), r.get("rate"), r.get("previous_rate"), r.get("source"), r.get("reference"), r.get("notes")))
+        .collect();
+        let summary: Vec<(&str, &str, f64, Option<f64>, &str)> = rows.iter().map(|r| (r.0.as_str(), r.1.as_str(), r.2, r.3, r.4.as_str())).collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("rate-initial", "2026-09-20", 11.0, None, "INITIAL"),
+                ("rate-a", "2026-10-01", 11.5, Some(11.0), "STATEMENT_IMPORT"),
+                ("rate-b", "2026-11-01", 12.0, Some(11.5), "STATEMENT_IMPORT"),
+                ("rate-c", "2027-01-01", 12.5, Some(12.0), "STATEMENT_IMPORT"),
+            ]
+        );
+        // The evidence is kept with each change.
+        assert_eq!(rows[1].5.as_deref(), Some("synthetic-statement.pdf, page 2"));
+        assert!(rows[1].6.as_deref().unwrap().contains("Interest rate changed"));
+        // The loan keeps today's rate; no schedule, limit or drawing power is recalculated.
+        let (rate, limit): (f64, f64) = sqlx::query_as("SELECT interest_rate, credit_limit FROM loans WHERE id = 'loan-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!((rate, limit), (12.0, 5_000_000.0));
+        assert_eq!(count(&pool, "loan_payment_schedule").await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_term_loan_cannot_be_created_with_statement_rate_changes() {
+        let pool = test_pool().await;
+        add_rate_history_schema(&pool).await;
+        let accounts_before = count(&pool, "accounts").await;
+        let mut request = with_rate_id(valid_request(), "rate-initial");
+        request.statement_rate_history = Some(StatementRateHistory { initial_rate: 11.0, changes: vec![statement_change("rate-a", "2026-10-01", 12.0)] });
+
+        let error = refusal(&pool, &request).await;
+
+        assert!(error.contains("recorded after it is created"), "{error}");
+        nothing_created(&pool, accounts_before).await;
+    }
+
+    #[tokio::test]
+    async fn without_migration_054_confirmed_statement_rates_are_refused_never_dropped() {
+        let pool = test_pool().await;
+        add_overdraft_columns(&pool).await;
+        let accounts_before = count(&pool, "accounts").await;
+
+        let error = refusal(&pool, &od_with_statement_history()).await;
+
+        assert!(error.contains("migration 054"), "{error}");
+        assert_eq!(count(&pool, "loans").await, 0);
+        assert_eq!(count(&pool, "accounts").await, accounts_before);
+    }
+
+    #[tokio::test]
+    async fn every_statement_rate_rule_is_checked_before_anything_is_written() {
+        let cases: Vec<(&str, Box<dyn Fn(&mut CreateLoanAtomicRequest)>)> = vec![
+            ("date order", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes.swap(0, 1))),
+            ("date order", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[1].effective_from = "2026-10-01".into())),
+            ("not after the loan's start date", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[0].effective_from = "2026-09-20".into())),
+            ("same as the rate before it", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[0].rate = 11.0)),
+            ("valid effective date", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[0].effective_from = "".into())),
+            ("from 0 to 100", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[0].rate = 150.0)),
+            ("Fixed or Floating", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[0].rate_type = Some("VARIABLE".into()))),
+            ("original rate", Box::new(|r| r.statement_rate_history.as_mut().unwrap().initial_rate = -1.0)),
+            ("its own id", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes[1].id = "rate-a".into())),
+            ("rate in force today at 12%", Box::new(|r| r.loan.interest_rate = 12.5)),
+            ("No confirmed rate change", Box::new(|r| r.statement_rate_history.as_mut().unwrap().changes.clear())),
+            ("original rate row has no id", Box::new(|r| r.initial_rate_history_id = None)),
+        ];
+
+        for (expected, change) in cases {
+            let pool = statement_pool().await;
+            let accounts_before = count(&pool, "accounts").await;
+            let mut request = od_with_statement_history();
+            change(&mut request);
+
+            let error = refusal(&pool, &request).await;
+
+            assert!(error.contains(expected), "expected '{expected}', got: {error}");
+            nothing_created(&pool, accounts_before).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_statement_rate_row_that_fails_to_write_rolls_back_the_loan_and_every_rate_row() {
+        let pool = statement_pool().await;
+        // The third change's id is already taken, so its insert fails after
+        // the loan, its INITIAL row and two changes were written.
+        sqlx::query("INSERT INTO loans (id, currency_id, name, loan_type, principal_amount, interest_rate, interest_type, start_date, outstanding_principal, outstanding_interest, paid_installments, status, created_at, updated_at) VALUES ('other', 'cur-inr', 'Other', 'Home Loan', 1, 1, 'REDUCING', '2026-01-01', 1, 0, 0, 'ACTIVE', 'x', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO loan_interest_rate_history (id, loan_id, effective_from, rate, source) VALUES ('rate-c', 'other', '2026-01-01', 1, 'INITIAL')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let accounts_before = count(&pool, "accounts").await;
+
+        assert!(run_create_on(&pool, &od_with_statement_history(), TODAY).await.is_err());
+
+        let loans: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loans WHERE id = 'loan-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(loans, 0);
+        assert_eq!(count(&pool, "accounts").await, accounts_before);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loan_interest_rate_history WHERE loan_id = 'loan-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(rows, 0, "the INITIAL row and the first two changes are rolled back too");
+        let links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM overdraft_accounts WHERE loan_id = 'loan-1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(links, 0);
+    }
+
+    #[tokio::test]
+    async fn an_overdraft_without_statement_rates_is_created_exactly_as_before() {
+        let pool = statement_pool().await;
+
+        run_create_on(&pool, &with_rate_id(overdraft_request(), "rate-od"), TODAY).await.expect("create succeeds");
+
+        let rows = rate_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].3, rows[0].6.as_str()), (12.0, "INITIAL"));
+    }
+
+    #[tokio::test]
+    async fn the_same_live_rate_on_the_same_date_cannot_be_recorded_twice() {
+        let pool = test_pool().await;
+        add_rate_history_schema(&pool).await;
+        run_create(&pool, &with_rate_id(valid_request(), "rate-1")).await.expect("create succeeds");
+
+        let duplicate = sqlx::query("INSERT INTO loan_interest_rate_history (id, loan_id, effective_from, rate, source) VALUES ('dup', 'loan-1', '2026-09-20', 12, 'MANUAL')")
+            .execute(&pool)
+            .await;
+        assert!(duplicate.unwrap_err().to_string().contains("UNIQUE"));
+    }
+
+    // Pre-activation audit M2: one live rate per loan and date, whatever the rate.
+    #[tokio::test]
+    async fn a_different_live_rate_on_a_recorded_date_is_refused_by_the_database() {
+        let pool = test_pool().await;
+        add_rate_history_schema(&pool).await;
+        run_create(&pool, &with_rate_id(valid_request(), "rate-1")).await.expect("create succeeds");
+
+        let conflicting = sqlx::query("INSERT INTO loan_interest_rate_history (id, loan_id, effective_from, rate, source) VALUES ('other', 'loan-1', '2026-09-20', 13.5, 'MANUAL')")
+            .execute(&pool)
+            .await;
+        assert!(conflicting.unwrap_err().to_string().contains("UNIQUE"));
+
+        // Another date is still a valid entry.
+        sqlx::query("INSERT INTO loan_interest_rate_history (id, loan_id, effective_from, rate, previous_rate, source) VALUES ('later', 'loan-1', '2026-10-20', 13.5, 12, 'MANUAL')")
+            .execute(&pool)
+            .await
+            .expect("another date is accepted");
     }
 }

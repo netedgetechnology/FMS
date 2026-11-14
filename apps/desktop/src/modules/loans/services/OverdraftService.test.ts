@@ -18,9 +18,10 @@ import { LoanRepository } from "../repositories/LoanRepository";
 import { OverdraftEntryKind, LoanKind } from "../types";
 import { overdraftRequestFromValues, type OverdraftFormValues } from "../validation";
 import { EMIScheduleGenerator } from "./EMIScheduleGenerator";
+import { LoanPaymentService } from "./LoanPaymentService";
 import { LoanService } from "./LoanService";
-import { LINK_DIALOG_TITLES, canLinkOverdraftChoice, linkDialogWorkflow } from "../components/LinkTransactionToEmiDialog";
-import { LoanTransactionLinkService } from "./LoanTransactionLinkService";
+import { LINK_DIALOG_TITLE, canLinkOverdraftChoice, linkWorkflowFor } from "../components/LinkTransactionToEmiDialog";
+import { LoanTransactionLinkService, NOT_AN_EMI_PAYMENT_REASON } from "./LoanTransactionLinkService";
 import { OverdraftService } from "./OverdraftService";
 
 // ---------------------------------------------------------------------
@@ -132,6 +133,11 @@ const invoke = vi.fn(async (command: string, args: { request: Record<string, any
             const p = request.payment;
             if (db.prepare("SELECT id FROM loan_schedule_payments WHERE transaction_id = ?").get(p.transactionId)) {
                 throw "EMI_PAYMENT_REFUSED: This transaction is already recorded as a loan payment.";
+            }
+            // check_existing_transaction: money out only (Expense / Transfer Out).
+            const existing = db.prepare("SELECT type, transfer_direction FROM transactions WHERE id = ? AND deleted_at IS NULL").get(p.transactionId) as { type: string; transfer_direction: string | null } | undefined;
+            if (!existing || !(existing.type === "expense" || (existing.type === "transfer" && existing.transfer_direction === "OUT"))) {
+                throw "EMI_PAYMENT_REFUSED: Only an outgoing transaction (an Expense or a Transfer Out) can record a loan payment.";
             }
             db.prepare(`INSERT INTO loan_schedule_payments (id, loan_id, schedule_id, transaction_id, payment_date, amount, principal_amount, interest_amount, transaction_linked, settles_installment)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`)
@@ -536,7 +542,7 @@ describe("Overdraft - edits, deletes, restores and links all recalculate from th
         const service = new LoanTransactionLinkService();
 
         expect(await service.getLinkOptions(transferIn)).toMatchObject({
-            refusal: null, suggestedLoanId: id, overdrafts: [{ loanId: id, kinds: [DRAWDOWN], refusal: null }],
+            refusal: null, overdrafts: [{ loanId: id, kinds: [DRAWDOWN], refusal: null }],
         });
         expect((await service.getLinkOptions(transferOut)).overdrafts).toEqual([
             expect.objectContaining({ loanId: id, kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null }),
@@ -552,14 +558,19 @@ describe("Overdraft - edits, deletes, restores and links all recalculate from th
         ]);
     });
 
-    it("a transfer on a bank account the OD is not linked to gets no OD option", async () => {
-        await createOverdraft({ openingUsedAsOf: "2026-01-31" });
+    it("a transfer on a bank account the OD is not linked to: the OD is listed, but refuses it with both accounts named", async () => {
+        const id = await createOverdraft({ openingUsedAsOf: "2026-01-31" });
         const elsewhere = addTransaction({ type: "transfer", transferDirection: "IN", amount: 500_000, date: "2026-09-15", accountId: OTHER_BANK });
 
         expect(await new LoanTransactionLinkService().getLinkOptions(elsewhere)).toMatchObject({
-            overdrafts: [], target: "OVERDRAFT",
-            refusal: "This transaction is on Savings, which no active loan or overdraft uses: ABC Overdraft (Overdraft) is linked only to Operating Account. If Savings really belongs to the overdraft, add it to the overdraft's bank accounts in Edit Loan first - it is never added automatically.",
+            refusal: null,
+            overdrafts: [{
+                loanId: id,
+                refusal: "This transaction is on Savings, which is not one of ABC Overdraft's linked bank accounts (Operating Account). Its Used amount counts only movements on those accounts. If Savings really belongs to ABC Overdraft, add it to the overdraft's bank accounts in Edit Loan first - it is never added automatically.",
+            }],
         });
+        await expect(link(elsewhere, id, DRAWDOWN)).rejects.toThrow("linked bank accounts");
+        expect(linksOf(id)).toEqual([]);
     });
 
     it("the Link dialog offers the OD with only the kinds the direction allows", async () => {
@@ -569,11 +580,11 @@ describe("Overdraft - edits, deletes, restores and links all recalculate from th
         const service = new LoanTransactionLinkService();
 
         expect(await service.getLinkOptions(credit)).toMatchObject({
-            refusal: null, loans: [], suggestedLoanId: id,
-            overdrafts: [{ loanId: id, loanName: "ABC Overdraft", kinds: [DRAWDOWN], refusal: null }],
+            refusal: null, loans: [],
+            overdrafts: [{ loanId: id, loanName: "ABC Overdraft", loanType: "Overdraft", kinds: [DRAWDOWN], refusal: null }],
         });
         expect((await service.getLinkOptions(debit)).overdrafts).toEqual([
-            { loanId: id, loanName: "ABC Overdraft", kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null },
+            { loanId: id, loanName: "ABC Overdraft", loanType: "Overdraft", kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null },
         ]);
     });
 });
@@ -851,10 +862,12 @@ describe("Overdraft alongside Term Loans - no regression", () => {
         ]);
     });
 
-    it("a Term Loan's EMI-only linking is unchanged where no OD exists", async () => {
-        seedTermLoan();
+    it("a Term Loan's EMI-only linking is unchanged where no OD exists: money in is never an EMI", async () => {
+        const term = seedTermLoan();
         const credit = addTransaction({ type: "income", amount: 1_000, date: "2026-07-05" });
-        expect((await new LoanTransactionLinkService().getLinkOptions(credit)).refusal).toContain("outgoing");
+        const o = await new LoanTransactionLinkService().getLinkOptions(credit);
+        expect(o.overdrafts).toEqual([]);
+        expect(o.loans).toEqual([expect.objectContaining({ loanId: term, refusal: expect.stringContaining("outgoing") })]);
     });
 
     it("2. Term Loan + Bank Transfer / Internet & Telecom: never a Link to Loan EMI option, never matched on import", async () => {
@@ -960,13 +973,16 @@ describe("Overdraft with several linked bank accounts - one consolidated positio
         expect((await new AccountRepository().getById(loan.loanAccountId!))!.openingBalance).toBe(-687_000);
     });
 
-    it("a transaction on an account the OD is not linked to is never offered or counted", async () => {
+    it("a transaction on an account the OD is not linked to can never be linked or counted (the OD is listed, refusing it)", async () => {
         addAccounts();
         const id = await createOverdraft(TATA);
         const elsewhere = addTransaction({ type: "income", amount: 10_000, date: "2026-09-01", accountId: UNLINKED });
 
-        expect((await new LoanTransactionLinkService().getLinkOptions(elsewhere)).overdrafts).toEqual([]);
+        expect((await new LoanTransactionLinkService().getLinkOptions(elsewhere)).overdrafts).toEqual([
+            expect.objectContaining({ loanId: id, refusal: expect.stringContaining("is not one of TATA Capital's linked bank accounts") }),
+        ]);
         await expect(link(elsewhere, id, DRAWDOWN)).rejects.toThrow("linked bank accounts");
+        expect(linksOf(id)).toEqual([]);
     });
 
     it("adding another account (Edit OD) makes its transactions linkable; nothing else changes", async () => {
@@ -994,7 +1010,9 @@ describe("Overdraft with several linked bank accounts - one consolidated positio
         await new LoanTransactionLinkService().unlink(on2790);
         await editAccounts(id, [ACCT_3999]);
         expect((await new LoanRepository().getById(id))!.linkedAccountIds).toEqual([ACCT_3999]);
-        expect((await new LoanTransactionLinkService().getLinkOptions(on2790)).overdrafts).toEqual([]);
+        expect((await new LoanTransactionLinkService().getLinkOptions(on2790)).overdrafts).toEqual([
+            expect.objectContaining({ loanId: id, refusal: expect.stringContaining("is not one of TATA Capital's linked bank accounts") }),
+        ]);
     });
 
     it("an OD needs at least one linked account", async () => {
@@ -1156,10 +1174,9 @@ describe("Loan linking - strict category gate", () => {
     });
 });
 
-describe("Link to Loan routing - an Overdraft transaction never gets the Term Loan EMI workflow", () => {
-    // The reported case (fictional ids): TATA Capital OD linked only to
-    // Netedge 3999; a Rs 1,00,000 debit on 23/09/2026 in a loan category.
-    // A Term Loan uses a third account.
+describe("Link Transaction to Loan - every loan is offered; the SELECTED loan decides the link", () => {
+    // Fictional ids. TATA Capital OD linked only to Netedge 3999; a Term
+    // Loan whose EMI payment account is a third account (Salary Account).
     const ACCT_3999 = "acct-netedge-3999";
     const ACCT_2790 = "acct-netedge-2790";
     const ACCT_TERM = "acct-term";
@@ -1174,59 +1191,252 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         insert("accounts", { id: ACCT_TERM, name: "Salary Account", account_type: "SAVINGS", opening_balance: 0 });
     }
 
-    function seedTermLoan(accountId: string): string {
+    function seedTermLoan(accountId: string, id = "term-1", name = "TATA Capital (Term)", status = "ACTIVE"): string {
         const schedule = new EMIScheduleGenerator().generate({
-            loanId: "term-1", principalAmount: 500000, interestRate: 9, interestType: "REDUCING",
+            loanId: id, principalAmount: 500000, interestRate: 9, interestType: "REDUCING",
             tenureMonths: 24, emiAmount: 22842.47, startDate: "2026-06-10", firstInstallmentAmount: null,
         });
         insert("loans", {
-            id: "term-1", account_id: accountId, loan_type: "Car Loan", name: "Car Loan",
+            id, account_id: accountId, loan_type: "Term Loan", name,
             principal_amount: 500000, interest_rate: 9, interest_type: "REDUCING", tenure_months: 24, emi_amount: 22842.47,
             start_date: "2026-06-10", outstanding_principal: 500000, outstanding_interest: 48218.28, paid_installments: 0,
-            currency_id: "cur-inr", status: "ACTIVE",
+            currency_id: "cur-inr", status,
         });
         for (const row of schedule) {
             insert("loan_payment_schedule", {
-                id: row.id, loan_id: "term-1", installment_number: row.installmentNumber, due_date: row.dueDate,
+                id: `${id}-${row.installmentNumber}`, loan_id: id, installment_number: row.installmentNumber, due_date: row.dueDate,
                 principal_amount: row.principalAmount, interest_amount: row.interestAmount, total_amount: row.totalAmount,
                 outstanding_principal: row.outstandingPrincipal, status: row.status,
             });
         }
-        return "term-1";
+        return id;
+    }
+
+    async function facility(name: string, loanType: string, accountId: string): Promise<string> {
+        const id = await createOverdraft({ ...TATA, name, lenderInstitutionName: `${name} Bank`, accountIds: [accountId] });
+        sqlite.db!.prepare("UPDATE loans SET loan_type = ? WHERE id = ?").run(loanType, id);
+        return id;
     }
 
     const options = (id: string) => new LoanTransactionLinkService().getLinkOptions(id);
-    const titleFor = (o: Awaited<ReturnType<typeof options>>) => LINK_DIALOG_TITLES[linkDialogWorkflow(o.target, null)];
+    const txnRow = (id: string) => all("SELECT * FROM transactions WHERE id = ?", id)[0]!;
+    const paymentsOf = () => all("SELECT loan_id, transaction_id, amount FROM loan_schedule_payments");
+    const UNCHANGED = ["account_id", "amount", "transaction_date", "category_id", "subcategory_id", "type", "transfer_direction", "payee", "original_narration", "notes", "reference_number", "status"];
 
-    it("an eligible transaction on the OD's linked account opens the OD workflow, never the EMI one", async () => {
+    it("lists ALL active loans of every type - Term Loan, Overdraft, Cash Credit, Dropline - whatever their accounts; nothing is preselected", async () => {
         addAccounts();
-        const id = await createOverdraft(TATA);
-        const debit = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_3999, narration: "TATA CAPITAL (OD)" });
+        const od = await createOverdraft(TATA);
+        const cc = await facility("SBI CC", "Cash Credit", ACCT_2790);
+        const dod = await facility("HDFC DOD", "Dropline Overdraft", ACCT_TERM);
+        const term = seedTermLoan(ACCT_TERM);
+        seedTermLoan(ACCT_2790, "term-closed", "Closed Car Loan", "CLOSED");
+        const debit = addTransaction({ type: "expense", amount: 22842.47, date: "2026-07-10", accountId: ACCT_3999 });
 
         const o = await options(debit);
-        expect(o).toMatchObject({
-            refusal: null, target: "OVERDRAFT", loans: [], suggestedLoanId: id,
-            overdrafts: [{ loanId: id, loanName: "TATA Capital", kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null }],
-        });
-        expect(titleFor(o)).toBe("Link to Overdraft");
-        expect(LINK_DIALOG_TITLES[linkDialogWorkflow(o.target, "overdraft")]).toBe("Link to Overdraft");
-
-        // Money in on the same account: a Drawdown.
-        const credit = addTransaction({ type: "income", amount: 100_000, date: "2026-09-23", accountId: ACCT_3999 });
-        expect((await options(credit)).overdrafts[0]!.kinds).toEqual([DRAWDOWN]);
+        expect(o.refusal).toBeNull();
+        expect(Object.keys(o).sort()).toEqual(["loans", "overdrafts", "refusal", "transaction"]);
+        expect(o.loans.map(loan => [loan.loanId, loan.loanType, loan.refusal])).toEqual([[term, "Term Loan", null]]);
+        expect(o.overdrafts.map(item => [item.loanId, item.loanType]).sort()).toEqual(
+            [[od, "Overdraft"], [cc, "Cash Credit"], [dod, "Dropline Overdraft"]].sort()
+        );
+        // Only the facility on the transaction's own account can take it; the others say why.
+        expect(o.overdrafts.find(item => item.loanId === od)!.refusal).toBeNull();
+        expect(o.overdrafts.find(item => item.loanId === cc)!.refusal).toContain("is not one of SBI CC's linked bank accounts");
+        expect(o.overdrafts.find(item => item.loanId === dod)!.refusal).toContain("is not one of HDFC DOD's linked bank accounts");
+        // Closed loans are not offered.
+        expect([...o.loans, ...o.overdrafts].some(item => item.loanId === "term-closed")).toBe(false);
+        expect(LINK_DIALOG_TITLE).toBe("Link Transaction to Loan");
     });
 
-    it("the reported row: on Netedge 2790, which the OD is not linked to - explained with the real account names; nothing linked or added", async () => {
+    it("the selected loan, not the transaction's account, decides the workflow", () => {
+        expect(linkWorkflowFor("loan")).toBe("EMI");
+        expect(linkWorkflowFor("overdraft")).toBe("OVERDRAFT");
+        expect(linkWorkflowFor(null)).toBeNull();
+    });
+
+    it("a Term Loan instalment on the OD's account links to the Term Loan - payment accounts differ, no warning or confirmation", async () => {
+        addAccounts();
+        const od = await createOverdraft(TATA);
+        const term = seedTermLoan(ACCT_TERM);
+        const debit = addTransaction({ type: "expense", amount: 22842.47, date: "2026-07-10", accountId: ACCT_3999, narration: "NACH DR TATA CAPITAL LTD 88213" });
+        const before = txnRow(debit);
+        const transactionsBefore = all("SELECT COUNT(*) AS n FROM transactions")[0];
+
+        const o = await options(debit);
+        const loan = o.loans.find(item => item.loanId === term)!;
+        expect(loan).toMatchObject({ refusal: null, loanType: "Term Loan" });
+        expect(loan.installments[0]!.modes).toEqual(["full"]);
+
+        const result = await new LoanTransactionLinkService().link({ transactionId: debit, loanId: term, scheduleId: loan.installments[0]!.scheduleId, mode: "full" });
+        expect(result.schedule.installmentNumber).toBe(1);
+        expect(paymentsOf()).toEqual([{ loan_id: term, transaction_id: debit, amount: 22842.47 }]);
+        expect(all("SELECT status FROM loan_payment_schedule WHERE id = ?", loan.installments[0]!.scheduleId)[0]).toEqual({ status: "PAID" });
+
+        // No new transaction; the linked one keeps every detail.
+        expect(all("SELECT COUNT(*) AS n FROM transactions")[0]).toEqual(transactionsBefore);
+        const after = txnRow(debit);
+        for (const column of UNCHANGED) expect(after[column], column).toEqual(before[column]);
+        // The loan's payment account is not changed; the OD is untouched.
+        expect(all("SELECT account_id FROM loans WHERE id = ?", term)[0]).toEqual({ account_id: ACCT_TERM });
+        expect(linksOf(od)).toEqual([]);
+        expect(await position(od)).toMatchObject({ used: 0, available: 12_500_000 });
+    });
+
+    it("an OD transaction links to the OD: drawdown, repayment and interest move Used / Available exactly as before", async () => {
+        addAccounts();
+        const id = await createOverdraft({ ...TATA, accountIds: [ACCT_3999, ACCT_2790] });
+        seedTermLoan(ACCT_TERM);
+        const service = new LoanTransactionLinkService();
+
+        const draw = addTransaction({ type: "income", amount: 500_000, date: "2026-09-01", accountId: ACCT_3999 });
+        expect((await options(draw)).overdrafts.find(item => item.loanId === id)).toMatchObject({ kinds: [DRAWDOWN], refusal: null });
+        await service.linkOverdraft({ transactionId: draw, loanId: id, entryKind: DRAWDOWN });
+        expect(await position(id)).toMatchObject({ used: 500_000, available: 12_000_000 });
+
+        const repay = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_2790 });
+        const before = txnRow(repay);
+        expect((await options(repay)).overdrafts.find(item => item.loanId === id)).toMatchObject({ kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null });
+        await service.linkOverdraft({ transactionId: repay, loanId: id, entryKind: REPAYMENT });
+        expect(await position(id)).toMatchObject({ used: 400_000, available: 12_100_000 });
+        for (const column of UNCHANGED) expect(txnRow(repay)[column], column).toEqual(before[column]);
+
+        const interest = addTransaction({ type: "expense", amount: 2_500, date: "2026-09-30", accountId: ACCT_3999 });
+        await service.linkOverdraft({ transactionId: interest, loanId: id, entryKind: INTEREST_CHARGE });
+        expect(await position(id)).toMatchObject({ used: 400_000, available: 12_100_000, totalInterestCharges: 2_500 });
+        expect(paymentsOf()).toEqual([]);
+    });
+
+    it("the selected loan's type decides the operation: an OD is never paid as an EMI, a Term Loan never takes an OD movement", async () => {
+        addAccounts();
+        const od = await createOverdraft(TATA);
+        const term = seedTermLoan(ACCT_TERM);
+        const debit = addTransaction({ type: "expense", amount: 22842.47, date: "2026-07-10", accountId: ACCT_3999 });
+        const scheduleId = (await options(debit)).loans[0]!.installments[0]!.scheduleId;
+        const service = new LoanTransactionLinkService();
+
+        await expect(service.link({ transactionId: debit, loanId: od, scheduleId, mode: "full" })).rejects.toThrow("That loan is an overdraft");
+        await expect(service.linkOverdraft({ transactionId: debit, loanId: term, entryKind: REPAYMENT })).rejects.toThrow("is not an overdraft");
+        expect(paymentsOf()).toEqual([]);
+        expect(linksOf(od)).toEqual([]);
+    });
+
+    describe("Issue 2: a Transfer Out can be a Term Loan EMI payment - and stays a Transfer Out", () => {
+        it("a Transfer Out is offered to every Term Loan and linked as an EMI payment; its type, direction and details never change", async () => {
+            addAccounts();
+            const od = await createOverdraft(TATA);
+            const term = seedTermLoan(ACCT_TERM);
+            const transferOut = addTransaction({ type: "transfer", transferDirection: "OUT", amount: 22842.47, date: "2026-07-10", accountId: ACCT_2790, narration: "NEFT DR TATA CAPITAL EMI" });
+            const before = txnRow(transferOut);
+            const transactionsBefore = all("SELECT COUNT(*) AS n FROM transactions")[0];
+
+            const o = await options(transferOut);
+            const loan = o.loans.find(item => item.loanId === term)!;
+            expect(loan).toMatchObject({ refusal: null });
+            expect(loan.installments[0]!.modes).toEqual(["full"]);
+
+            const result = await new LoanTransactionLinkService().link({ transactionId: transferOut, loanId: term, scheduleId: loan.installments[0]!.scheduleId, mode: "full" });
+            expect(result.schedule.installmentNumber).toBe(1);
+            expect(paymentsOf()).toEqual([{ loan_id: term, transaction_id: transferOut, amount: 22842.47 }]);
+            expect(all("SELECT status FROM loan_payment_schedule WHERE id = ?", loan.installments[0]!.scheduleId)[0]).toEqual({ status: "PAID" });
+
+            // Still a Transfer Out, with every other detail; no new transaction, nothing on the OD.
+            expect(txnRow(transferOut)).toMatchObject({ type: "transfer", transfer_direction: "OUT" });
+            for (const column of UNCHANGED) expect(txnRow(transferOut)[column], column).toEqual(before[column]);
+            expect(all("SELECT COUNT(*) AS n FROM transactions")[0]).toEqual(transactionsBefore);
+            expect(linksOf(od)).toEqual([]);
+
+            // One transaction, one payment.
+            expect((await options(transferOut)).refusal).toContain("already recorded as a payment of TATA Capital (Term)");
+            await expect(new LoanTransactionLinkService().link({ transactionId: transferOut, loanId: term, scheduleId: "term-1-2", mode: "full" })).rejects.toThrow("already recorded");
+            expect(paymentsOf()).toHaveLength(1);
+        });
+
+        it("a Transfer In, Income, or a Transfer with no recorded direction is never an EMI payment", async () => {
+            addAccounts();
+            const term = seedTermLoan(ACCT_TERM);
+            const transferIn = addTransaction({ type: "transfer", transferDirection: "IN", amount: 22842.47, date: "2026-07-10", accountId: ACCT_TERM });
+            const income = addTransaction({ type: "income", amount: 22842.47, date: "2026-07-10", accountId: ACCT_TERM });
+            const noDirection = addTransaction({ type: "transfer", transferDirection: null, amount: 22842.47, date: "2026-07-10", accountId: ACCT_TERM });
+
+            for (const txn of [transferIn, income, noDirection]) {
+                const o = await options(txn);
+                expect(o.loans, txn).toEqual([expect.objectContaining({ loanId: term, refusal: NOT_AN_EMI_PAYMENT_REASON, installments: [] })]);
+                await expect(new LoanTransactionLinkService().link({ transactionId: txn, loanId: term, scheduleId: "term-1-1", mode: "full" }), txn).rejects.toThrow(NOT_AN_EMI_PAYMENT_REASON);
+                await expect(
+                    new LoanPaymentService().recordPaymentFromTransaction({ loanId: term, scheduleId: "term-1-1", transactionId: txn, fromAnyAccount: true }),
+                    txn
+                ).rejects.toThrow("Only an outgoing transaction (an Expense or a Transfer Out) can record a loan payment.");
+            }
+            expect(paymentsOf()).toEqual([]);
+        });
+
+        it("OD behaviour is unchanged: a Transfer Out on the OD's account is still a repayment there, a Transfer In a drawdown", async () => {
+            addAccounts();
+            const od = await createOverdraft(TATA);
+            seedTermLoan(ACCT_TERM);
+            const out = addTransaction({ type: "transfer", transferDirection: "OUT", amount: 100_000, date: "2026-09-23", accountId: ACCT_3999 });
+            const into = addTransaction({ type: "transfer", transferDirection: "IN", amount: 300_000, date: "2026-09-20", accountId: ACCT_3999 });
+
+            expect((await options(out)).overdrafts[0]).toMatchObject({ loanId: od, kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null });
+            expect((await options(into)).overdrafts[0]).toMatchObject({ loanId: od, kinds: [DRAWDOWN], refusal: null });
+            await new LoanTransactionLinkService().linkOverdraft({ transactionId: into, loanId: od, entryKind: DRAWDOWN });
+            await new LoanTransactionLinkService().linkOverdraft({ transactionId: out, loanId: od, entryKind: REPAYMENT });
+            expect(await position(od)).toMatchObject({ used: 200_000 });
+            expect(paymentsOf()).toEqual([]);
+        });
+    });
+
+    it("money in: every Term Loan is listed but refuses it (never an EMI); the OD takes it as a drawdown", async () => {
+        addAccounts();
+        const od = await createOverdraft(TATA);
+        const term = seedTermLoan(ACCT_3999);
+        const credit = addTransaction({ type: "income", amount: 22842.47, date: "2026-07-10", accountId: ACCT_3999 });
+
+        const o = await options(credit);
+        expect(o.refusal).toBeNull();
+        expect(o.loans).toEqual([expect.objectContaining({ loanId: term, refusal: NOT_AN_EMI_PAYMENT_REASON, installments: [] })]);
+        await expect(new LoanTransactionLinkService().link({ transactionId: credit, loanId: term, scheduleId: "term-1-1", mode: "full" })).rejects.toThrow(
+            NOT_AN_EMI_PAYMENT_REASON
+        );
+        expect(paymentsOf()).toEqual([]);
+
+        await new LoanTransactionLinkService().linkOverdraft({ transactionId: credit, loanId: od, entryKind: DRAWDOWN });
+        expect(linksOf(od)).toEqual([{ transaction_id: credit, entry_kind: "DRAWDOWN", link_source: "MANUAL" }]);
+    });
+
+    it("duplicate links stay impossible: once linked anywhere, it is refused everywhere until unlinked", async () => {
+        addAccounts();
+        const od = await createOverdraft(TATA);
+        const term = seedTermLoan(ACCT_TERM);
+        const service = new LoanTransactionLinkService();
+
+        const first = addTransaction({ type: "expense", amount: 22842.47, date: "2026-07-10", accountId: ACCT_3999 });
+        const scheduleId = (await options(first)).loans[0]!.installments[0]!.scheduleId;
+        await service.link({ transactionId: first, loanId: term, scheduleId, mode: "full" });
+        expect((await options(first)).refusal).toContain("already recorded as a payment of TATA Capital (Term)");
+        await expect(service.link({ transactionId: first, loanId: term, scheduleId: "term-1-2", mode: "full" })).rejects.toThrow("already recorded");
+        await expect(service.linkOverdraft({ transactionId: first, loanId: od, entryKind: REPAYMENT })).rejects.toThrow();
+
+        const second = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_3999 });
+        await service.linkOverdraft({ transactionId: second, loanId: od, entryKind: REPAYMENT });
+        expect((await options(second)).refusal).toContain("already linked to TATA Capital");
+        await expect(service.link({ transactionId: second, loanId: term, scheduleId: "term-1-2", mode: "partial" })).rejects.toThrow("already linked");
+
+        expect(paymentsOf()).toHaveLength(1);
+        expect(linksOf(od)).toHaveLength(1);
+    });
+
+    it("an OD selected for a transaction off its linked accounts is listed but refused - such a movement would never count towards Used", async () => {
         addAccounts();
         const id = await createOverdraft(TATA);
         const debit = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_2790, narration: "TATA CAPITAL (OD)" });
 
         const o = await options(debit);
-        expect(o).toMatchObject({ target: "OVERDRAFT", loans: [], overdrafts: [] });
-        expect(o.refusal).toContain("This transaction is on Netedge Technology 2790");
-        expect(o.refusal).toContain("TATA Capital (Overdraft) is linked only to Netedge Technology 3999");
-        expect(o.refusal).not.toContain("EMI payment account");
-        expect(titleFor(o)).toBe("Link to Overdraft");
+        expect(o.refusal).toBeNull();
+        expect(o.overdrafts[0]!.refusal).toBe(
+            "This transaction is on Netedge Technology 2790, which is not one of TATA Capital's linked bank accounts (Netedge Technology 3999). Its Used amount counts only movements on those accounts. If Netedge Technology 2790 really belongs to TATA Capital, add it to the overdraft's bank accounts in Edit Loan first - it is never added automatically."
+        );
+        expect(canLinkOverdraftChoice({ saving: false, options: o, overdraft: o.overdrafts[0]!, entryKind: REPAYMENT })).toBe(false);
 
         await expect(link(debit, id, REPAYMENT)).rejects.toThrow("linked bank accounts");
         expect(linksOf(id)).toEqual([]);
@@ -1234,39 +1444,23 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         expect(await position(id)).toMatchObject({ used: 0, available: 12_500_000 });
     });
 
-    it("a Term Loan transaction still opens the EMI workflow", async () => {
+    it("automatic import matching still requires the loan's own payment account", async () => {
         addAccounts();
-        await createOverdraft(TATA);
         const term = seedTermLoan(ACCT_TERM);
-        const debit = addTransaction({ type: "expense", amount: 22842.47, date: "2026-07-10", accountId: ACCT_TERM });
+        const debit = addTransaction({ type: "expense", amount: 22842.47, date: "2026-07-10", accountId: ACCT_3999 });
 
-        const o = await options(debit);
-        expect(o).toMatchObject({ refusal: null, target: "EMI", overdrafts: [], loans: [expect.objectContaining({ loanId: term })] });
-        expect(titleFor(o)).toBe("Link to Loan EMI");
-        expect(LINK_DIALOG_TITLES[linkDialogWorkflow(o.target, "loan")]).toBe("Link to Loan EMI");
+        await expect(new LoanPaymentService().recordPaymentFromTransaction({ loanId: term, scheduleId: "term-1-1", transactionId: debit })).rejects.toThrow(
+            "The transaction is not from this loan's payment account."
+        );
+        expect(paymentsOf()).toEqual([]);
     });
 
-    it("with no Overdraft anywhere, an account no loan uses keeps the Term Loan message", async () => {
+    it("with no active loan at all, it says so", async () => {
         addAccounts();
-        seedTermLoan(ACCT_TERM);
+        seedTermLoan(ACCT_TERM, "term-closed", "Closed Car Loan", "CLOSED");
         const debit = addTransaction({ type: "expense", amount: 1_000, date: "2026-07-10", accountId: ACCT_2790 });
 
-        expect(await options(debit)).toMatchObject({
-            target: "EMI", refusal: "No active loan has this transaction's account as its EMI payment account.",
-        });
-    });
-
-    it("a Term Loan and the OD on the same account: both offered; the OD the transaction names is preselected", async () => {
-        addAccounts();
-        const id = await createOverdraft(TATA);
-        const term = seedTermLoan(ACCT_3999);
-        const named = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_3999, narration: "TATA CAPITAL (OD)" });
-        const unnamed = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-24", accountId: ACCT_3999, narration: "NACH DR 88213" });
-
-        const o = await options(named);
-        expect(o).toMatchObject({ refusal: null, target: "ANY", suggestedLoanId: id, loans: [expect.objectContaining({ loanId: term })] });
-        expect(titleFor(o)).toBe("Link to Loan");
-        expect((await options(unnamed)).suggestedLoanId).toBeNull();
+        expect(await options(debit)).toMatchObject({ loans: [], overdrafts: [], refusal: "There is no active loan to link this transaction to." });
     });
 
     it("Opening Used As Of after the transaction: offered as the OD, refused with the dates explained; the date is never changed", async () => {
@@ -1275,7 +1469,6 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         const debit = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_3999 });
 
         const o = await options(debit);
-        expect(o.target).toBe("OVERDRAFT");
         expect(o.overdrafts[0]!.refusal).toBe(
             "This transaction is dated 2026-09-23, on or before 2026-10-08 - TATA Capital's Opening Used As Of date - so it is treated as already part of the opening used amount and can't count towards Used. The overdraft started on 2026-01-31. If the opening used amount is really as of an earlier date, change Opening Used As Of in Edit Loan first."
         );
@@ -1283,25 +1476,7 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         expect((await new LoanRepository().getById(id))!.openingUsedAsOf).toBe("2026-10-08");
     });
 
-    it("drawdown and repayment through the OD workflow move Used and Available on the consolidated OD", async () => {
-        addAccounts();
-        const id = await createOverdraft({ ...TATA, accountIds: [ACCT_3999, ACCT_2790] });
-        const service = new LoanTransactionLinkService();
-
-        const draw = addTransaction({ type: "income", amount: 500_000, date: "2026-09-01", accountId: ACCT_3999 });
-        await service.linkOverdraft({ transactionId: draw, loanId: id, entryKind: DRAWDOWN });
-        expect(await position(id)).toMatchObject({ used: 500_000, available: 12_000_000 });
-
-        const repay = addTransaction({ type: "expense", amount: 100_000, date: "2026-09-23", accountId: ACCT_2790 });
-        await service.linkOverdraft({ transactionId: repay, loanId: id, entryKind: REPAYMENT });
-        expect(await position(id)).toMatchObject({ used: 400_000, available: 12_100_000 });
-
-        const interest = addTransaction({ type: "expense", amount: 2_500, date: "2026-09-30", accountId: ACCT_3999 });
-        await service.linkOverdraft({ transactionId: interest, loanId: id, entryKind: INTEREST_CHARGE });
-        expect(await position(id)).toMatchObject({ used: 400_000, available: 12_100_000, totalInterestCharges: 2_500 });
-    });
-
-    it("the five loan categories pass; Bank Transfer and ordinary categories never reach the OD workflow", async () => {
+    it("the five loan categories pass; Bank Transfer and ordinary categories are never offered any loan", async () => {
         addAccounts();
         const id = await createOverdraft(TATA);
         for (const [catId, name] of [
@@ -1319,11 +1494,12 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
 
         for (const categoryId of ["cat-bank", "cat-tel", "cat-office", null]) {
             const txn = addTransaction({ type: "income", amount: 1_000, date: "2026-09-23", accountId: ACCT_3999, categoryId });
-            expect(await options(txn)).toMatchObject({ overdrafts: [], refusal: expect.stringContaining("loan category") });
+            expect(await options(txn)).toMatchObject({ loans: [], overdrafts: [], refusal: expect.stringContaining("loan category") });
             await expect(link(txn, id, DRAWDOWN)).rejects.toThrow("loan category");
         }
         expect(linksOf(id)).toEqual([]);
     });
+
     it("opening-date flow: refused while Opening Used As Of is 2026-10-08; linkable once the USER saves 2026-01-31 and reopens", async () => {
         addAccounts();
         const id = await createOverdraft({ ...TATA, openingUsedAsOf: "2026-10-08" });
@@ -1331,8 +1507,6 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         const onStart = addTransaction({ type: "expense", amount: 1_000, date: "2026-01-31", accountId: ACCT_3999 });
         const dayAfter = addTransaction({ type: "expense", amount: 1_000, date: "2026-02-01", accountId: ACCT_3999 });
 
-        // The dialog's state on open: the OD is offered, refused, Link disabled
-        // whatever the user picks.
         let o = await options(debit);
         let od = o.overdrafts[0]!;
         expect(od.refusal).toContain("on or before 2026-10-08");
@@ -1347,8 +1521,8 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         // Reopened: fresh options - no refusal; Link waits for the user's choice.
         o = await options(debit);
         od = o.overdrafts[0]!;
-        expect(o).toMatchObject({ refusal: null, target: "OVERDRAFT", suggestedLoanId: id });
-        expect(od).toEqual({ loanId: id, loanName: "TATA Capital", kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null });
+        expect(o.refusal).toBeNull();
+        expect(od).toEqual({ loanId: id, loanName: "TATA Capital", loanType: "Overdraft", kinds: [REPAYMENT, INTEREST_CHARGE], refusal: null });
         expect(canLinkOverdraftChoice({ saving: false, options: o, overdraft: od, entryKind: null })).toBe(false);
         expect(canLinkOverdraftChoice({ saving: false, options: o, overdraft: od, entryKind: DRAWDOWN })).toBe(false);
         expect(canLinkOverdraftChoice({ saving: false, options: o, overdraft: od, entryKind: REPAYMENT })).toBe(true);
@@ -1358,7 +1532,6 @@ describe("Link to Loan routing - an Overdraft transaction never gets the Term Lo
         expect((await options(onStart)).overdrafts[0]!.refusal).toContain("on or before 2026-01-31");
         expect((await options(dayAfter)).overdrafts[0]!.refusal).toBeNull();
 
-        // Opening options and editing the date created no link.
         expect(linksOf(id)).toEqual([]);
         expect(await position(id)).toMatchObject({ used: 0, available: 12_500_000 });
 

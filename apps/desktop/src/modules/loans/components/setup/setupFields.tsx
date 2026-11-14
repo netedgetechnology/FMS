@@ -15,14 +15,47 @@ import type { SetupIssue } from "../../setup/loanSetupTypes";
 
 // Small building blocks shared by every Add Loan step.
 
-export function StepSection({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+/**
+ * A section of a loan form (Add Loan steps, statement review): ONE boxed
+ * container - subtle blue-grey background, thin border, rounded corners -
+ * wrapping the heading, its description and every field, so each category
+ * reads as a unit and its heading sits clearly above the field labels
+ * (text-xs / text-sm, medium weight). Inputs keep their own white
+ * background and border. Consecutive sections are spaced by their parent.
+ *
+ * `variant="plain"` is the read-only layout of the View Loan dialog
+ * (LoanSetupSummary), matching that dialog's own unboxed sections.
+ */
+export function StepSection({
+    title,
+    hint,
+    variant = "box",
+    children,
+}: {
+    title: string;
+    hint?: string;
+    variant?: "box" | "plain";
+    children: ReactNode;
+}) {
+    if (variant === "plain") {
+        return (
+            <section className="space-y-2.5">
+                <div className="flex items-center gap-2">
+                    <h3 className="text-[13px] font-semibold text-slate-900">{title}</h3>
+                    <div className="h-px flex-1 bg-slate-100" />
+                </div>
+                {hint && <p className="text-xs text-slate-500">{hint}</p>}
+                {children}
+            </section>
+        );
+    }
+
     return (
-        <section className="space-y-2.5">
-            <div className="flex items-center gap-2">
-                <h3 className="text-[13px] font-semibold text-slate-900">{title}</h3>
-                <div className="h-px flex-1 bg-slate-100" />
+        <section className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+            <div className="space-y-1">
+                <h3 className="text-[15px] font-semibold leading-6 text-slate-900">{title}</h3>
+                {hint && <p className="text-xs leading-5 text-slate-500">{hint}</p>}
             </div>
-            {hint && <p className="text-xs text-slate-500">{hint}</p>}
             {children}
         </section>
     );

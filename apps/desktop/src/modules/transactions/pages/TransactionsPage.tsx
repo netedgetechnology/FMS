@@ -44,6 +44,7 @@ import { useTransactions } from "../hooks";
 import { applySavedTransactions } from "../hooks/useTransactions";
 import { TransactionService } from "../services";
 import type { Transaction } from "../types";
+import { matchesAmount, parseAmountQuery } from "../search/amountSearch";
 
 const ROWS_PER_PAGE_OPTIONS: Array<number | "All"> = [
     10,
@@ -152,6 +153,9 @@ export function filterTransactionsForList(
     categoryMap: Map<string, string>
 ): Transaction[] {
     const query = filter.search.trim().toLowerCase();
+    // A query that reads as an amount ("10,004", "₹10,004.00") also
+    // matches transactions of exactly that amount - see amountSearch.ts.
+    const amountQuery = parseAmountQuery(filter.search);
 
     return transactions.filter(transaction => {
         if (
@@ -172,6 +176,13 @@ export function filterTransactionsForList(
         }
 
         if (!query) {
+            return true;
+        }
+
+        if (
+            amountQuery !== null &&
+            matchesAmount(transaction.amount, amountQuery)
+        ) {
             return true;
         }
 

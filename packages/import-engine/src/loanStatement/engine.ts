@@ -601,6 +601,47 @@ function findConflicts(base: FacilityBase): ConflictItem[] {
         });
     }
 
+    // Term-loan arithmetic the document's own figures must satisfy. Each is
+    // reported, never corrected: the customer decides which figure is right.
+    const disbursedGross = money(base, "grossDisbursed");
+    const principalRepaid = money(base, "principalRepaidTotal");
+    if (disbursedGross !== null && principalRepaid !== null && principal !== null && Math.abs(disbursedGross - principalRepaid - principal) > 0.01) {
+        conflicts.push({
+            fieldId: "outstandingPrincipal",
+            message: "The outstanding principal does not equal the amount disbursed less the principal repaid.",
+            values: [
+                { label: "Stated outstanding principal", value: principal, page: firstSource(base, "outstandingPrincipal") },
+                { label: "Disbursed less principal repaid", value: roundMoney(disbursedGross - principalRepaid), page: null },
+            ],
+        });
+    }
+
+    const netPaid = money(base, "netDisbursed");
+    const withheld = money(base, "totalDeductions");
+    if (disbursedGross !== null && netPaid !== null && withheld !== null && Math.abs(netPaid + withheld - disbursedGross) > 0.01) {
+        conflicts.push({
+            fieldId: "netDisbursed",
+            message: "The net amount disbursed plus the deductions does not equal the gross amount disbursed.",
+            values: [
+                { label: "Gross disbursed", value: disbursedGross, page: firstSource(base, "grossDisbursed") },
+                { label: "Net disbursed plus deductions", value: roundMoney(netPaid + withheld), page: null },
+            ],
+        });
+    }
+
+    for (const row of base.disbursements) {
+        if (row.gross !== null && row.net !== null && row.deductions !== null && Math.abs(row.net + row.deductions - row.gross) > 0.01) {
+            conflicts.push({
+                fieldId: "netDisbursed",
+                message: `The disbursement${row.date ? ` of ${row.date}` : ""} does not add up: net plus deductions is not the gross amount.`,
+                values: [
+                    { label: "Gross", value: row.gross, page: row.page },
+                    { label: "Net plus deductions", value: roundMoney(row.net + row.deductions), page: row.page },
+                ],
+            });
+        }
+    }
+
     const gross = money(base, "grossDisbursed");
     const sanctioned = money(base, "sanctionedAmount");
     if (gross !== null && sanctioned !== null && gross > sanctioned + 0.01 && base.ledgerSummary.repaymentCount === 0) {

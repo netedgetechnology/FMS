@@ -26,7 +26,6 @@ import type { Transaction } from "@/modules/transactions/types";
 import {
     LoanTransactionLinkService,
     type LoanLinkMode,
-    type LoanLinkTarget,
     type TransactionLinkOptions,
 } from "../services/LoanTransactionLinkService";
 import { OVERDRAFT_ENTRY_KIND_LABELS, OverdraftEntryKind } from "../types";
@@ -39,36 +38,21 @@ import { emiPaymentErrorMessage } from "./emiPaymentErrorMessage";
 // full payment, a partial one, or the lender's full instalment for less
 // than the calculated EMI is always the user's explicit choice.
 //
-// The same dialog links a transaction to an Overdraft (Link to Overdraft):
-// there the user says only what it is - a Drawdown, a Repayment or an
-// Interest / Charge. No EMI, no instalment.
+// One universal dialog (Link Transaction to Loan): every active loan of
+// every type is listed, nothing is preselected, and the loan the user
+// selects decides what follows. A Term Loan: an EMI instalment and how the
+// amount counts. An Overdraft / Dropline / Cash Credit: only what it is -
+// a Drawdown, a Repayment or an Interest / Charge. No EMI, no instalment.
 // ---------------------------------------------------------------------
 
-/**
- * Which workflow the dialog shows - the user's choice when made, else the
- * transaction's account (see LoanLinkTarget). An Overdraft transaction is
- * never shown as a Term Loan EMI.
- */
-export function linkDialogWorkflow(
-    target: LoanLinkTarget | null,
-    selected: "loan" | "overdraft" | null
-): LoanLinkTarget {
-    if (selected === "overdraft") {
-        return "OVERDRAFT";
-    }
+export type LinkWorkflow = "EMI" | "OVERDRAFT";
 
-    if (selected === "loan") {
-        return "EMI";
-    }
-
-    return target ?? "ANY";
+/** What the SELECTED loan makes the link - nothing until one is selected. */
+export function linkWorkflowFor(selected: "loan" | "overdraft" | null): LinkWorkflow | null {
+    return selected === "overdraft" ? "OVERDRAFT" : selected === "loan" ? "EMI" : null;
 }
 
-export const LINK_DIALOG_TITLES: Record<LoanLinkTarget, string> = {
-    EMI: "Link to Loan EMI",
-    OVERDRAFT: "Link to Overdraft",
-    ANY: "Link to Loan",
-};
+export const LINK_DIALOG_TITLE = "Link Transaction to Loan";
 
 /**
  * Whether Link is enabled for an Overdraft: nothing refuses the
@@ -102,6 +86,8 @@ export function canLinkEmiChoice(state: {
     mode: LoanLinkMode | null;
     needsDuplicateConfirmation: boolean;
     confirmedNotDuplicate: boolean;
+    /** Why the selected loan cannot take this transaction (e.g. money in), or null. */
+    loanRefusal?: string | null;
 }): boolean {
     return (
         !state.saving &&
@@ -111,6 +97,7 @@ export function canLinkEmiChoice(state: {
         !!state.installment &&
         !!state.mode &&
         state.installment.modes.includes(state.mode) &&
+        !state.loanRefusal &&
         (!state.needsDuplicateConfirmation || state.confirmedNotDuplicate)
     );
 }
@@ -233,16 +220,8 @@ export function LinkTransactionToEmiDialog({
                     return;
                 }
 
+                // Nothing is preselected: the user chooses the loan.
                 setOptions(loaded);
-
-                const choices = [...loaded.loans, ...loaded.overdrafts];
-                const initialLoan =
-                    choices.find(loan => loan.loanId === loaded.suggestedLoanId) ??
-                    (choices.length === 1 ? choices[0] : undefined);
-
-                if (initialLoan) {
-                    setLoanId(initialLoan.loanId);
-                }
             })
             .catch(error => {
                 if (!cancelled) {
@@ -324,11 +303,8 @@ export function LinkTransactionToEmiDialog({
         [OverdraftEntryKind.INTEREST_CHARGE]: "Interest or a bank charge on the overdraft. Shown separately - the used amount does not change.",
     };
 
-    const workflow = linkDialogWorkflow(
-        options?.target ?? null,
-        overdraft ? "overdraft" : loan ? "loan" : null
-    );
-    const title = LINK_DIALOG_TITLES[workflow];
+    // The SELECTED loan decides the workflow - never the transaction's account.
+    const workflow = linkWorkflowFor(overdraft ? "overdraft" : loan ? "loan" : null);
 
     const needsDuplicateConfirmation =
         (loan?.possibleDuplicates.length ?? 0) > 0;
@@ -350,6 +326,7 @@ export function LinkTransactionToEmiDialog({
             mode,
             needsDuplicateConfirmation,
             confirmedNotDuplicate,
+            loanRefusal: loan?.refusal ?? null,
         });
 
     async function handleLinkOverdraft() {
@@ -449,7 +426,7 @@ export function LinkTransactionToEmiDialog({
             >
                 <DialogHeader className={LINK_DIALOG_LAYOUT.header}>
                     <DialogTitle className="text-xl font-semibold tracking-tight text-slate-900">
-                        {title}
+                        {LINK_DIALOG_TITLE}
                     </DialogTitle>
 
                     <DialogDescription className="mt-1 text-sm leading-6 text-slate-500">
@@ -457,7 +434,7 @@ export function LinkTransactionToEmiDialog({
                             ? "Record this existing transaction as an overdraft movement - a drawdown, a repayment or an interest / charge."
                             : workflow === "EMI"
                               ? "Record this existing transaction as a loan EMI payment."
-                              : "Record this existing transaction as a loan EMI payment or an overdraft movement."}{" "}
+                              : "Choose the loan to link this existing transaction to - any loan, whatever its account."}{" "}
                         No new transaction is created - this one is kept
                         exactly as it is.
                     </DialogDescription>
@@ -501,10 +478,11 @@ export function LinkTransactionToEmiDialog({
                                 >
                                     <SelectTrigger id="linkEmiLoan" className={LINK_DIALOG_LAYOUT.selectTrigger}>
                                         <SelectValue placeholder="Select loan" className={LINK_DIALOG_LAYOUT.selectText}>
-                                            {loan?.loanName ??
-                                                (overdraft
-                                                    ? `${overdraft.loanName} (Overdraft)`
-                                                    : "Select loan")}
+                                            {loan
+                                                ? `${loan.loanName} (${loan.loanType})`
+                                                : overdraft
+                                                  ? `${overdraft.loanName} (${overdraft.loanType})`
+                                                  : "Select loan"}
                                         </SelectValue>
                                     </SelectTrigger>
                                     <SelectContent>
@@ -512,18 +490,18 @@ export function LinkTransactionToEmiDialog({
                                             <SelectItem
                                                 key={item.loanId}
                                                 value={item.loanId}
-                                                label={item.loanName}
+                                                label={`${item.loanName} (${item.loanType})`}
                                             >
-                                                {item.loanName}
+                                                {item.loanName} ({item.loanType})
                                             </SelectItem>
                                         ))}
                                         {options.overdrafts.map(item => (
                                             <SelectItem
                                                 key={item.loanId}
                                                 value={item.loanId}
-                                                label={`${item.loanName} (Overdraft)`}
+                                                label={`${item.loanName} (${item.loanType})`}
                                             >
-                                                {item.loanName} (Overdraft)
+                                                {item.loanName} ({item.loanType})
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -574,7 +552,13 @@ export function LinkTransactionToEmiDialog({
                                 </fieldset>
                             )}
 
-                            {loan && (
+                            {loan?.refusal && (
+                                <p className={LINK_DIALOG_LAYOUT.notice}>
+                                    {loan.refusal}
+                                </p>
+                            )}
+
+                            {loan && !loan.refusal && (
                                 <div>
                                     <label
                                         htmlFor="linkEmiInstallment"
@@ -710,7 +694,7 @@ export function LinkTransactionToEmiDialog({
                         onClick={handleLink}
                         className="h-9 cursor-pointer rounded-lg bg-slate-900 px-5 text-sm font-medium text-white shadow-sm transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {saving ? "Linking..." : workflow === "OVERDRAFT" ? "Link" : "Link Payment"}
+                        {saving ? "Linking..." : workflow === "EMI" ? "Link Payment" : "Link"}
                     </button>
                 </div>
             </DialogContent>

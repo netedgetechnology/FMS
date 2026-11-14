@@ -73,7 +73,7 @@ export function LoanSetupSummary({ loan }: { loan: Loan }) {
     return (
         <>
             {terms.length > 0 && (
-                <StepSection title="Lender Terms">
+                <StepSection variant="plain" title="Lender Terms">
                     <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                         {terms.map(([label, value]) => (
                             <div key={label} className="min-w-0 space-y-1">
@@ -86,7 +86,7 @@ export function LoanSetupSummary({ loan }: { loan: Loan }) {
             )}
 
             {disbursements.length > 0 && (
-                <StepSection title={`Disbursements - gross ${formatMoney(gross)}, net ${formatMoney(net)}`}>
+                <StepSection variant="plain" title={`Disbursements - gross ${formatMoney(gross)}, net ${formatMoney(net)}`}>
                     <table className="w-full text-xs">
                         <thead className="text-slate-400">
                             <tr>
@@ -113,7 +113,7 @@ export function LoanSetupSummary({ loan }: { loan: Loan }) {
             )}
 
             {expenses.length > 0 && (
-                <StepSection title={`Initial Expenses - ${formatMoney(expenseTotal)}`}>
+                <StepSection variant="plain" title={`Initial Expenses - ${formatMoney(expenseTotal)}`}>
                     <table className="w-full text-xs">
                         <thead className="text-slate-400">
                             <tr>

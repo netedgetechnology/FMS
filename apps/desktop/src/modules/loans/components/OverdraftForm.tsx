@@ -52,6 +52,11 @@ export interface OverdraftFormProps {
     drawingPowerSchedule?: readonly DrawingPowerStep[] | null;
     /** What the facility was saved as (Overdraft, Cash Credit...). */
     facilityLabel?: string;
+    /**
+     * Editing a saved facility: its interest rate is read-only here and is
+     * changed with Record rate change (Interest Rate History), never overwritten.
+     */
+    rateLocked?: boolean;
     loading?: boolean;
     submitLabel?: string;
     onCancel?(): void;
@@ -84,6 +89,7 @@ export function OverdraftForm({
     defaultValues,
     drawingPowerSchedule = null,
     facilityLabel = "Overdraft",
+    rateLocked = false,
     loading = false,
     submitLabel = "Save Overdraft",
     onCancel,
@@ -387,8 +393,17 @@ export function OverdraftForm({
                             min="0"
                             step="0.01"
                             placeholder="e.g. 10.50"
+                            readOnly={rateLocked}
+                            aria-readonly={rateLocked || undefined}
+                            tabIndex={rateLocked ? -1 : undefined}
+                            className={rateLocked ? "bg-slate-50 text-slate-600" : undefined}
                             {...register("interestRate", { valueAsNumber: true })}
                         />
+                        {rateLocked && (
+                            <p className="mt-1 text-xs text-slate-500" data-rate-locked="true">
+                                Changed with Record rate change in the loan's details, which keeps the rate history with its effective date and source.
+                            </p>
+                        )}
                     </FormField>
 
                     {!dropline && (

@@ -1,10 +1,14 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { migrations } from "@/core/database/migrations/registry";
+import { LoanInterestRateHistoryMigration } from "@/core/database/migrations/054_loan_interest_rate_history";
 
 import { LoanRepository } from "../repositories/LoanRepository";
+import { InterestRateHistoryRepository } from "../repositories/InterestRateHistoryRepository";
 import { LoanSetupRepository } from "../repositories/LoanSetupRepository";
 import { LoanKind, OverdraftEntryKind } from "../types";
 import { parseLenderScheduleCsv, validateLenderSchedule } from "../setup/lenderSchedule";
@@ -19,6 +23,13 @@ import { unmarkedSchedulePreview, validateStep } from "../setup/loanSetupWizard"
 import { LoanService } from "./LoanService";
 import { LoanTransactionLinkService } from "./LoanTransactionLinkService";
 import { OverdraftService } from "./OverdraftService";
+import { analyseLoanStatement, documentFromItems } from "@financeos/import-engine";
+import { createReviewState, setConfirmed, updateDisbursement } from "../statementImport/statementReview";
+import { reviewToDraft } from "../statementImport/statementToDraft";
+import { compareWithStatement } from "../statementImport/statementReconciliation";
+import { emptyStatementCompletion, statementLoanDraft, statementSaveIssues, type StatementCompletion } from "../statementImport/statementLoanSetup";
+import { entriesFromDraft, historicalSummary } from "../setup/historicalInstalments";
+import { formatMoney } from "../setup/loanSetupAccounting";
 
 // ---------------------------------------------------------------------
 // The Add Loan setup workflow end to end: the real LoanService,
@@ -95,6 +106,21 @@ const invoke = vi.fn(async (command: string, args: { request: Record<string, any
     if (paidCount !== request.loan.paidInstallments) refuse("paid count mismatch");
     db.exec("BEGIN");
     try {
+        // loan_create.rs: a Term Loan's lender account number on a live loan
+        // is refused inside the transaction; a new lender institution is
+        // inserted in it.
+        const number = request.loan.loanAccountNumber?.trim();
+        if (!request.overdraft && number) {
+            const existing = db.prepare(
+                "SELECT name FROM loans WHERE deleted_at IS NULL AND loan_account_number IS NOT NULL AND lower(trim(loan_account_number)) = lower(?) LIMIT 1"
+            ).get(number) as { name: string } | undefined;
+            if (existing) refuse(`A loan with account number ${number} already exists ("${existing.name}"). Nothing was saved, so the same loan is not added twice.`);
+        }
+        const institution = request.newLenderInstitution;
+        if (institution) {
+            db.prepare("INSERT INTO institutions (id, name, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+                .run(institution.id, institution.name, institution.institutionType, institution.createdAt, institution.updatedAt);
+        }
         const a = request.loanAccount;
         db.prepare(
             `INSERT INTO accounts (id, institution_id, business_entity_id, currency_id, name, account_type, opening_balance, description, is_active, created_at, updated_at)
@@ -108,6 +134,14 @@ const invoke = vi.fn(async (command: string, args: { request: Record<string, any
         ).run(l.id, l.accountId, l.lenderInstitutionId, l.loanType, l.name, l.loanAccountNumber, l.principalAmount, l.interestRate, l.interestType, l.tenureMonths, l.emiAmount,
             l.firstInstallmentAmount, l.startDate, l.maturityDate, l.outstandingPrincipal, l.outstandingInterest, l.paidInstallments, l.currencyId, l.status, l.notes, l.createdAt, l.updatedAt);
         db.prepare("UPDATE loans SET loan_account_id = ? WHERE id = ?").run(a.id, l.id);
+        // loan_create.rs record_initial_rate: the initial Interest Rate History
+        // row, only once migration 054's table exists.
+        const rateTable = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'loan_interest_rate_history'").get() as { n: number };
+        if (request.initialRateHistoryId && rateTable.n > 0) {
+            db.prepare(
+                "INSERT INTO loan_interest_rate_history (id, loan_id, effective_from, rate, previous_rate, rate_type, source, created_at) VALUES (?, ?, ?, ?, NULL, ?, 'INITIAL', ?)"
+            ).run(request.initialRateHistoryId, l.id, l.startDate.slice(0, 10), l.interestRate, request.setup?.rateType ?? null, l.createdAt);
+        }
         for (const s of request.schedule) {
             db.prepare(
                 `INSERT INTO loan_payment_schedule (id, loan_id, installment_number, due_date, principal_amount, interest_amount, total_amount, outstanding_principal, status, paid_date, paid_amount, transaction_id, settled_before_finwea, created_at, updated_at)
@@ -222,9 +256,21 @@ function snapshotTransactions() {
     return all("SELECT * FROM transactions ORDER BY id");
 }
 
+/** Applies migration 054 to this test's in-memory database (built at 053 - see beforeEach). */
+function applyRateHistoryMigration() {
+    for (const statement of LoanInterestRateHistoryMigration.sql.split(";").map(part => part.trim()).filter(Boolean)) sqlite.db!.exec(statement);
+}
+
+function rateRows() {
+    return all("SELECT loan_id, effective_from, rate, previous_rate, rate_type, source, superseded_at FROM loan_interest_rate_history ORDER BY loan_id, effective_from");
+}
+
 beforeEach(() => {
     const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
-    for (const migration of migrations) {
+    // Built at 053, as an existing database is before 054: the rate-history
+    // tests opt in with applyRateHistoryMigration(), so the pre-054 paths
+    // (a database not yet migrated) stay covered now that 054 is registered.
+    for (const migration of migrations.filter(item => item.version < LoanInterestRateHistoryMigration.version)) {
         for (const statement of migration.sql.split(";").map(s => s.trim()).filter(Boolean)) {
             if (!/^PRAGMA\s+foreign_keys\s*=\s*ON\s*$/i.test(statement)) db.exec(statement);
         }
@@ -344,6 +390,7 @@ describe("Add Loan - Term Loan with disbursement and initial expenses", () => {
 
         const second = await termDraft();
         second.name = "Duplicate";
+        second.loanAccountNumber = "TXLNA0999000000000099";
         await expect(new LoanService().create(draftToCreateRequest(second))).rejects.toThrow(/already used by a loan disbursement/);
 
         expect(count("loans")).toBe(loansBefore);
@@ -377,6 +424,53 @@ describe("Add Loan - Term Loan with disbursement and initial expenses", () => {
         await expect(service.create(request)).rejects.toThrow(/already linked to a loan, an overdraft or another loan expense/);
         expect(count("loans")).toBe(0);
         expect(count("loan_payment_schedule")).toBe(0);
+    });
+
+    it("refuses the same loan twice (a statement imported again): same lender account number, nothing written", async () => {
+        await new LoanService().create(draftToCreateRequest(await termDraft()));
+        const snapshot = ["loans", "accounts", "institutions", "loan_payment_schedule", "loan_disbursements", "loan_initial_expenses"].map(count);
+        const transactions = snapshotTransactions();
+
+        const again = await termDraft();
+        again.loanAccountNumber = "  txlna0999000000000017 ";
+        again.lenderName = "A lender FinWea has not seen";
+        await expect(new LoanService().create(draftToCreateRequest(again))).rejects.toThrow(/account number txlna0999000000000017 already exists/);
+
+        expect(["loans", "accounts", "institutions", "loan_payment_schedule", "loan_disbursements", "loan_initial_expenses"].map(count)).toEqual(snapshot);
+        expect(snapshotTransactions()).toEqual(transactions);
+    });
+
+    it("the atomic command refuses the duplicate itself, even when the service check is bypassed", async () => {
+        await new LoanService().create(draftToCreateRequest(await termDraft()));
+        const loansBefore = count("loans");
+        const draft = await termDraft();
+        draft.disbursements = [];
+        draft.expenses = [];
+        draft.principalAmount = 750_000;
+        const service = new LoanService();
+        Object.defineProperty(service, "refuseDuplicateLoanAccountNumber", { value: async () => {} });
+
+        await expect(service.create(draftToCreateRequest(draft))).rejects.toThrow(/already exists/);
+        expect(count("loans")).toBe(loansBefore);
+    });
+
+    it("a refused save leaves no new lender institution behind; a successful one creates it with the loan", async () => {
+        const institutionsBefore = count("institutions");
+        const draft = await termDraft();
+        draft.lenderName = "Brand New Lender";
+        const service = new LoanService();
+        Object.defineProperty(service, "verifySetup", { value: async () => {} });
+        insert("loan_schedule_payments", { id: "pay-1", loan_id: "x", schedule_id: "y", transaction_id: "credit-net", payment_date: "2026-02-05", amount: 1, principal_amount: 1, interest_amount: 0 });
+
+        await expect(service.create(draftToCreateRequest(draft))).rejects.toThrow(/already linked/);
+        expect(count("institutions")).toBe(institutionsBefore);
+        expect(count("loans")).toBe(0);
+
+        sqlite.db!.prepare("DELETE FROM loan_schedule_payments WHERE id = 'pay-1'").run();
+        const id = await new LoanService().create(draftToCreateRequest(draft));
+        expect(count("institutions")).toBe(institutionsBefore + 1);
+        const [loan] = all("SELECT i.name FROM loans l JOIN institutions i ON i.id = l.lender_institution_id WHERE l.id = ?", id);
+        expect(loan!.name).toBe("Brand New Lender");
     });
 
     it("stores an imported lender schedule exactly as given, including its opening principal", async () => {
@@ -694,5 +788,413 @@ describe("Add Loan - a loan already running before FinWea (historical instalment
         await expect(new LoanService().delete(id)).rejects.toThrow(/recorded payments/);
         expect(invoke).not.toHaveBeenCalledWith("delete_loan_atomic", expect.anything());
         expect(all("SELECT deleted_at FROM loans WHERE id = ?", id)[0]!.deleted_at).toBeNull();
+    });
+});
+
+// ---------------------------------------------------------------------
+// The whole Term Loan statement workflow: a lender PDF (the synthetic
+// reference statement, as positioned text) -> engine -> customer review ->
+// Add Loan draft -> the customer's links -> one atomic save. Only synthetic
+// figures; no real statement is read.
+// ---------------------------------------------------------------------
+describe("Term Loan from a lender PDF statement, end to end", () => {
+    const EMI = 8_199;
+    const MONTHS = ["03", "04", "05", "06", "07", "08", "09", "10", "11"];
+    const TABLES = ["loans", "accounts", "institutions", "loan_payment_schedule", "loan_schedule_payments", "loan_disbursements", "loan_initial_expenses", "transactions"];
+    const counts = () => TABLES.map(count);
+
+    function statement() {
+        const path = join(__dirname, "../../../../../../packages/import-engine/src/tests/loanStatement/fixtures/term-reference.tokens.json");
+        const tokens = JSON.parse(readFileSync(path, "utf8")) as Array<Array<[number, number, number, number, string]>>;
+        const analysis = analyseLoanStatement(documentFromItems(tokens.map(page => page.map(([x, y, width, height, text]) => ({ x, y, width, height, text })))));
+        expect(analysis.status).toBe("OK");
+        return analysis.facilities[0]!;
+    }
+
+    beforeEach(() => {
+        // "Today" is 10/11/2026: the statement's nine instalments (05/03 .. 05/11) are due.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-11-10T12:00:00"));
+        addTransaction("stmt-net", { type: "transfer", direction: "IN", amount: 712_182, date: "2026-02-11", categoryId: LOAN_CATEGORY });
+        MONTHS.forEach(month => addTransaction(`stmt-emi-${month}`, { type: "expense", amount: EMI, date: `2026-${month}-05` }));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    /** What the customer adds on the wizard steps: name, accounts, links. */
+    async function completedDraft(): Promise<LoanSetupDraft> {
+        const { draft } = reviewToDraft(setConfirmed(createReviewState(statement(), "term.pdf"), true));
+        const full = { ...emptyLoanSetupDraft(LoanKind.TERM_LOAN, "INR"), ...draft, name: "Synthetic LAP", currencyId: "INR", linkedAccountId: BANK } as LoanSetupDraft;
+        full.disbursements = full.disbursements.map(row => ({ ...row, destinationAccountId: BANK }));
+        full.disbursements[0]!.transaction = await summary("stmt-net");
+        full.historicalCount = MONTHS.length;
+        full.historical = await Promise.all(MONTHS.map(async month => ({ resolution: "LINKED" as const, transaction: await summary(`stmt-emi-${month}`) })));
+        return full;
+    }
+
+    it("reading, reviewing and cancelling a statement writes nothing and calls no command", () => {
+        const before = counts();
+        const review = createReviewState(statement(), "term.pdf");
+
+        expect(review.selectedType).toBe("TERM_LOAN");
+        expect(() => reviewToDraft(review)).toThrow(/Tick the confirmation/);
+        expect(counts()).toEqual(before);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("saves the confirmed statement as one loan: principal, deducted charges, linked payout and linked EMIs, with no new transaction", async () => {
+        const transactionsBefore = snapshotTransactions();
+        const draft = await completedDraft();
+        for (const step of ["basics", "disbursement", "expenses", "repayment", "schedule", "review"] as const) {
+            expect(validateStep(draft, step), step).toEqual([]);
+        }
+
+        const id = await new LoanService().create(draftToCreateRequest(draft));
+
+        // Transactions are linked, never created or changed.
+        expect(snapshotTransactions()).toEqual(transactionsBefore);
+
+        const [loan] = all("SELECT loan_account_number, principal_amount, emi_amount, start_date, schedule_source, paid_installments FROM loans WHERE id = ?", id);
+        expect(loan).toEqual({ loan_account_number: "XLOAN0000000000000001", principal_amount: 750_000, emi_amount: EMI, start_date: "2026-01-31", schedule_source: "GENERATED", paid_installments: 9 });
+
+        // Gross liability, net payout linked to its bank credit, charges withheld once.
+        expect(all("SELECT gross_amount, deductions_amount, net_amount, transaction_id FROM loan_disbursements WHERE loan_id = ?", id)).toEqual([
+            { gross_amount: 750_000, deductions_amount: 37_818, net_amount: 712_182, transaction_id: "stmt-net" },
+        ]);
+        const expenses = all<{ total_amount: number; settlement: string; transaction_id: string | null }>("SELECT total_amount, settlement, transaction_id FROM loan_initial_expenses WHERE loan_id = ?", id);
+        expect(expenses.reduce((sum, row) => sum + row.total_amount, 0)).toBeCloseTo(37_818, 2);
+        expect(expenses.every(row => row.settlement === "DEDUCTED_FROM_DISBURSEMENT" && row.transaction_id === null)).toBe(true);
+
+        // Each EMI debit is one real payment against its own instalment, split as the schedule says.
+        const payments = all<{ transaction_id: string; amount: number; principal_amount: number; interest_amount: number }>(
+            "SELECT p.transaction_id, p.amount, p.principal_amount, p.interest_amount FROM loan_schedule_payments p JOIN loan_payment_schedule s ON s.id = p.schedule_id WHERE p.loan_id = ? ORDER BY s.installment_number",
+            id
+        );
+        expect(payments.map(row => row.transaction_id)).toEqual(MONTHS.map(month => `stmt-emi-${month}`));
+        for (const row of payments) {
+            expect(row.amount).toBe(EMI);
+            expect(Math.round((row.principal_amount + row.interest_amount) * 100) / 100).toBe(EMI);
+        }
+
+        // Outstanding = principal less the principal of the nine paid instalments.
+        const schedule = all<{ principal_amount: number; outstanding_principal: number; status: string }>(
+            "SELECT principal_amount, outstanding_principal, status FROM loan_payment_schedule WHERE loan_id = ? ORDER BY installment_number",
+            id
+        );
+        const repaid = schedule.slice(0, 9).reduce((sum, row) => sum + row.principal_amount, 0);
+        const stored = (await new LoanRepository().getById(id))!;
+        expect(stored.outstandingPrincipal).toBeCloseTo(750_000 - repaid, 2);
+        expect(schedule[8]!.outstanding_principal).toBeCloseTo(750_000 - repaid, 2);
+        expect(schedule.filter(row => row.status === "PAID")).toHaveLength(9);
+    });
+
+    it("compares the statement's position with the loan and explains each difference without changing either", async () => {
+        const result = reviewToDraft(setConfirmed(createReviewState(statement(), "term.pdf"), true));
+        expect(result.statementFacts).toEqual({
+            fileName: "term.pdf",
+            asOf: "2026-11-09",
+            grossDisbursed: 750_000,
+            emiAmount: EMI,
+            instalmentsPaid: 9,
+            principalRepaidTotal: 15_093,
+            outstandingPrincipal: 734_907,
+        });
+
+        const draft = await completedDraft();
+        const schedule = unmarkedSchedulePreview(draft).schedule;
+        const checks = compareWithStatement(result.statementFacts!, {
+            principal: 750_000,
+            schedule,
+            resolved: historicalSummary(entriesFromDraft(schedule, draft.historical)).linked,
+        });
+        const byId = Object.fromEntries(checks.map(check => [check.id, check]));
+
+        expect(byId.principal!.agrees).toBe(true);
+        expect(byId.emi!.agrees).toBe(true);
+        expect(byId.instalmentsResolved!.agrees).toBe(true);
+        expect(byId.instalmentsDue).toMatchObject({ finwea: "9 due", agrees: true });
+        // Reported either way; a difference carries an explanation.
+        for (const key of ["principalRepaid", "outstanding"] as const) {
+            expect(byId[key]!.statement).toBe(key === "outstanding" ? formatMoney(734_907) : formatMoney(15_093));
+            expect(byId[key]!.agrees === (byId[key]!.explanation === null)).toBe(true);
+        }
+        // Neither the draft nor the statement figures were touched.
+        expect(draft.principalAmount).toBe(750_000);
+        expect(draft.emiAmount).toBe(EMI);
+        expect(result.statementFacts!.outstandingPrincipal).toBe(734_907);
+    });
+
+    it("importing the same statement again is refused and leaves everything as it was", async () => {
+        await new LoanService().create(draftToCreateRequest(await completedDraft()));
+        const before = counts();
+        const links = all("SELECT * FROM loan_schedule_payments ORDER BY id");
+
+        const again = await completedDraft();
+        // Even with no links at all, the loan itself is the duplicate.
+        again.disbursements[0]!.transaction = null;
+        again.historicalCount = 0;
+        again.historical = [];
+        await expect(new LoanService().create(draftToCreateRequest(again))).rejects.toThrow(/XLOAN0000000000000001 already exists/);
+
+        expect(counts()).toEqual(before);
+        expect(all("SELECT * FROM loan_schedule_payments ORDER BY id")).toEqual(links);
+    });
+
+    it("re-using an EMI debit already linked to another loan is refused, and nothing of the new loan is written", async () => {
+        await new LoanService().create(draftToCreateRequest(await completedDraft()));
+        const before = counts();
+
+        const other = await completedDraft();
+        other.loanAccountNumber = "XLOAN0000000000000002";
+        other.disbursements[0]!.transaction = null;
+        await expect(new LoanService().create(draftToCreateRequest(other))).rejects.toThrow(/already used|already linked/);
+
+        expect(counts()).toEqual(before);
+    });
+
+    it("a write failure part-way through the save rolls back the whole loan", async () => {
+        const before = counts();
+        const draft = await completedDraft();
+        // A trigger makes a late setup write fail inside the transaction.
+        sqlite.db!.exec("CREATE TRIGGER fail_expense BEFORE INSERT ON loan_initial_expenses BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;");
+
+        await expect(new LoanService().create(draftToCreateRequest(draft))).rejects.toThrow(/simulated disk failure/);
+        expect(counts()).toEqual(before);
+        sqlite.db!.exec("DROP TRIGGER fail_expense");
+    });
+
+    // ---- Saved straight from Statement Review (no Add Loan wizard) ----
+
+    /** What the customer adds on Statement Review: only what a statement cannot give. */
+    async function reviewCompletion(): Promise<StatementCompletion> {
+        return {
+            ...emptyStatementCompletion(),
+            name: "Synthetic LAP",
+            currencyId: "INR",
+            linkedAccountId: BANK,
+            disbursements: { "d-0": { destinationAccountId: BANK, transaction: await summary("stmt-net") } },
+            historicalCount: MONTHS.length,
+            historical: await Promise.all(MONTHS.map(async month => ({ resolution: "LINKED" as const, transaction: await summary(`stmt-emi-${month}`) }))),
+        };
+    }
+
+    function fromReview(completion: StatementCompletion, review = createReviewState(statement(), "term.pdf")) {
+        // The review's own confirmation tick is NOT set: the one final confirmation replaces it.
+        const loan = statementLoanDraft(review, completion);
+        if (loan.status !== "READY") throw new Error(loan.blockers.join("; "));
+        return loan.draft;
+    }
+
+    it("Statement Review alone completes and saves the loan in one atomic write, the same as the wizard did", async () => {
+        const transactionsBefore = snapshotTransactions();
+        const draft = fromReview(await reviewCompletion());
+
+        expect(statementSaveIssues(draft, await new LoanService().getAll())).toEqual([]);
+        // Nothing is written until the save itself.
+        expect(invoke).not.toHaveBeenCalled();
+
+        const id = await new LoanService().create(draftToCreateRequest(draft));
+
+        expect(invoke).toHaveBeenCalledTimes(1);
+        expect(snapshotTransactions()).toEqual(transactionsBefore);
+        const [loan] = all("SELECT name, loan_account_number, principal_amount, emi_amount, start_date, paid_installments FROM loans WHERE id = ?", id);
+        expect(loan).toEqual({ name: "Synthetic LAP", loan_account_number: "XLOAN0000000000000001", principal_amount: 750_000, emi_amount: EMI, start_date: "2026-01-31", paid_installments: 9 });
+        expect(all("SELECT net_amount, transaction_id FROM loan_disbursements WHERE loan_id = ?", id)).toEqual([{ net_amount: 712_182, transaction_id: "stmt-net" }]);
+        expect(all("SELECT transaction_id FROM loan_schedule_payments WHERE loan_id = ? ORDER BY payment_date", id).map(row => (row as { transaction_id: string }).transaction_id)).toEqual(
+            MONTHS.map(month => `stmt-emi-${month}`)
+        );
+    });
+
+    it("cancelling Statement Review writes nothing, whatever the customer filled in", async () => {
+        const before = counts();
+        fromReview(await reviewCompletion());
+
+        expect(counts()).toEqual(before);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("the same statement reviewed again is refused before the save, and by the save itself", async () => {
+        await new LoanService().create(draftToCreateRequest(fromReview(await reviewCompletion())));
+        const before = counts();
+
+        const again = fromReview({ ...(await reviewCompletion()), disbursements: { "d-0": { destinationAccountId: BANK, transaction: null } }, historicalCount: 0, historical: [] });
+        expect(statementSaveIssues(again, await new LoanService().getAll()).map(issue => issue.field)).toContain("loanAccountNumber");
+        await expect(new LoanService().create(draftToCreateRequest(again))).rejects.toThrow(/XLOAN0000000000000001 already exists/);
+
+        expect(counts()).toEqual(before);
+    });
+
+    it("a charge paid separately is saved linked to its existing bank debit, unchanged, and that debit cannot be used twice", async () => {
+        // The 20,000 charge was paid from the bank, not withheld: 17,818 was
+        // withheld, so the bank received 7,32,182. Synthetic debits only.
+        addTransaction("stmt-net-2", { type: "transfer", direction: "IN", amount: 732_182, date: "2026-02-11", categoryId: LOAN_CATEGORY });
+        addTransaction("stmt-iho", { type: "expense", amount: 20_000, date: "2026-01-31", categoryId: FEE_CATEGORY });
+        const transactionsBefore = snapshotTransactions();
+        const review = updateDisbursement(createReviewState(statement(), "term.pdf"), "d-0", { deductions: 17_818 });
+        const completion: StatementCompletion = {
+            ...(await reviewCompletion()),
+            disbursements: { "d-0": { destinationAccountId: BANK, transaction: await summary("stmt-net-2") } },
+            charges: { "c-8": { settlement: "PAID_SEPARATELY", paymentAccountId: BANK, transaction: await summary("stmt-iho") } },
+        };
+        const draft = fromReview(completion, review);
+
+        expect(statementSaveIssues(draft, await new LoanService().getAll())).toEqual([]);
+        const id = await new LoanService().create(draftToCreateRequest(draft));
+
+        expect(snapshotTransactions()).toEqual(transactionsBefore);
+        const separately = all<{ total_amount: number; settlement: string; transaction_id: string | null; payment_account_id: string | null }>(
+            "SELECT total_amount, settlement, transaction_id, payment_account_id FROM loan_initial_expenses WHERE loan_id = ? AND settlement = 'PAID_SEPARATELY'",
+            id
+        );
+        expect(separately).toEqual([{ total_amount: 20_000, settlement: "PAID_SEPARATELY", transaction_id: "stmt-iho", payment_account_id: BANK }]);
+        const deducted = all<{ total_amount: number }>("SELECT total_amount FROM loan_initial_expenses WHERE loan_id = ? AND settlement = 'DEDUCTED_FROM_DISBURSEMENT'", id);
+        expect(deducted.reduce((sum, row) => sum + row.total_amount, 0)).toBeCloseTo(17_818, 2);
+
+        // The same debit for another loan's charge is refused, and nothing of it is written.
+        const before = counts();
+        const other = fromReview({ ...completion, disbursements: { "d-0": { destinationAccountId: BANK, transaction: null } }, historicalCount: 0, historical: [] }, review);
+        other.loanAccountNumber = "XLOAN0000000000000002";
+        await expect(new LoanService().create(draftToCreateRequest(other))).rejects.toThrow(/already used|already linked/);
+        expect(counts()).toEqual(before);
+    });
+
+    it("Additional Loan Details are saved when given, and nothing else changes", async () => {
+        const draft = fromReview({ ...(await reviewCompletion()), purpose: "Synthetic working capital", gracePeriodMonths: 1 });
+        const id = await new LoanService().create(draftToCreateRequest(draft));
+
+        const [loan] = all("SELECT loan_purpose, grace_period_months, principal_amount, emi_amount FROM loans WHERE id = ?", id);
+        expect(loan).toEqual({ loan_purpose: "Synthetic working capital", grace_period_months: 1, principal_amount: 750_000, emi_amount: EMI });
+    });
+
+    it("a loan saved from Statement Review records its initial rate in the same save (migration 054)", async () => {
+        applyRateHistoryMigration();
+        const id = await new LoanService().create(draftToCreateRequest(fromReview(await reviewCompletion())));
+
+        // The statement's original rate (10.5%) from the disbursement date; floating per the statement.
+        expect(rateRows()).toEqual([{ loan_id: id, effective_from: "2026-01-31", rate: 10.5, previous_rate: null, rate_type: "FLOATING", source: "INITIAL", superseded_at: null }]);
+        expect(all("SELECT interest_rate FROM loans WHERE id = ?", id)).toEqual([{ interest_rate: 10.5 }]);
+    });
+
+    it("a failure inside the save from Statement Review rolls back everything", async () => {
+        const before = counts();
+        sqlite.db!.exec("CREATE TRIGGER fail_payment BEFORE INSERT ON loan_schedule_payments BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;");
+
+        await expect(new LoanService().create(draftToCreateRequest(fromReview(await reviewCompletion())))).rejects.toThrow(/simulated disk failure/);
+        expect(counts()).toEqual(before);
+        sqlite.db!.exec("DROP TRIGGER fail_payment");
+    });
+});
+
+// ---------------------------------------------------------------------
+// Interest Rate History, Stage 1: migration 054 + the initial rate row,
+// written with the loan in create_loan_atomic. Synthetic loans only.
+// ---------------------------------------------------------------------
+describe("Interest Rate History - the initial rate of a new loan", () => {
+    const TABLES = ["loans", "accounts", "institutions", "loan_payment_schedule", "loan_schedule_payments", "loan_disbursements", "loan_initial_expenses", "transactions"];
+    const counts = () => TABLES.map(count);
+
+    async function overdraft() {
+        const draft = emptyLoanSetupDraft(LoanKind.OVERDRAFT, "INR");
+        Object.assign(draft, {
+            name: "Synthetic OD",
+            lenderName: "Synthetic Lender",
+            loanAccountNumber: "SYN-OD-0001",
+            interestRate: 11.25,
+            startDate: "2026-02-15",
+            creditLimit: 1_000_000,
+            openingUsed: 0,
+            openingUsedAsOf: "2026-02-15",
+            odAccountIds: [BANK],
+        });
+        return await new LoanService().create(draftToCreateRequest(draft));
+    }
+
+    it("a manually entered Term Loan records its rate from its start date, with its rate type", async () => {
+        applyRateHistoryMigration();
+        const id = await new LoanService().create(draftToCreateRequest(await termDraft()));
+
+        expect(rateRows()).toEqual([{ loan_id: id, effective_from: "2026-02-05", rate: 10.5, previous_rate: null, rate_type: "FLOATING", source: "INITIAL", superseded_at: null }]);
+        // Nothing else about the loan changes: its rate stays on the loan too.
+        expect((await new LoanRepository().getById(id))!).toMatchObject({ interestRate: 10.5, emiAmount: 8_290.49 });
+    });
+
+    it("an Overdraft records its initial rate too", async () => {
+        applyRateHistoryMigration();
+        const id = await overdraft();
+
+        expect(rateRows()).toEqual([{ loan_id: id, effective_from: "2026-02-15", rate: 11.25, previous_rate: null, rate_type: "FIXED", source: "INITIAL", superseded_at: null }]);
+    });
+
+    it("is read back with no end date, as the rate in effect from the start date only", async () => {
+        applyRateHistoryMigration();
+        const id = await new LoanService().create(draftToCreateRequest(await termDraft()));
+        const repository = new InterestRateHistoryRepository();
+
+        expect(await repository.isAvailable()).toBe(true);
+        expect(await repository.findByLoan(id)).toMatchObject([{ loanId: id, effectiveFrom: "2026-02-05", effectiveUntil: null, rate: 10.5, source: "INITIAL" }]);
+        expect((await repository.findInEffectOn(id, "2026-08-01"))?.rate).toBe(10.5);
+        expect(await repository.findInEffectOn(id, "2026-02-04")).toBeNull();
+    });
+
+    it("a failure inside the save leaves no rate row, with the rest of the loan", async () => {
+        applyRateHistoryMigration();
+        const before = counts();
+        // A late setup write fails after the rate row has been inserted.
+        sqlite.db!.exec("CREATE TRIGGER fail_expense BEFORE INSERT ON loan_initial_expenses BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;");
+
+        await expect(new LoanService().create(draftToCreateRequest(await termDraft()))).rejects.toThrow(/simulated disk failure/);
+
+        expect(counts()).toEqual(before);
+        expect(rateRows()).toEqual([]);
+        sqlite.db!.exec("DROP TRIGGER fail_expense");
+    });
+
+    it("a refused duplicate loan writes no rate row", async () => {
+        applyRateHistoryMigration();
+        await new LoanService().create(draftToCreateRequest(await termDraft()));
+        const rows = rateRows();
+
+        const again = await termDraft();
+        again.disbursements[0]!.transaction = null;
+        again.expenses = again.expenses.filter(e => e.settlement !== "PAID_SEPARATELY");
+        await expect(new LoanService().create(draftToCreateRequest(again))).rejects.toThrow(/already exists/);
+
+        expect(rateRows()).toEqual(rows);
+    });
+
+    it("on a database not yet at 054, a loan is created exactly as before, and no history is read", async () => {
+        const id = await new LoanService().create(draftToCreateRequest(await termDraft()));
+
+        expect(all("SELECT name FROM sqlite_master WHERE name = 'loan_interest_rate_history'")).toEqual([]);
+        expect((await new LoanRepository().getById(id))!.interestRate).toBe(10.5);
+        expect(await new InterestRateHistoryRepository().isAvailable()).toBe(false);
+        expect(await new InterestRateHistoryRepository().findByLoan(id)).toEqual([]);
+    });
+
+    it("an existing loan gets no history when 054 is applied later, and is otherwise untouched", async () => {
+        const id = await new LoanService().create(draftToCreateRequest(await termDraft()));
+        const loanBefore = all("SELECT * FROM loans WHERE id = ?", id);
+        const scheduleBefore = all("SELECT * FROM loan_payment_schedule WHERE loan_id = ? ORDER BY installment_number", id);
+
+        applyRateHistoryMigration();
+
+        expect(rateRows()).toEqual([]);
+        expect(await new InterestRateHistoryRepository().findByLoan(id)).toEqual([]);
+        expect(all("SELECT * FROM loans WHERE id = ?", id)).toEqual(loanBefore);
+        expect(all("SELECT * FROM loan_payment_schedule WHERE loan_id = ? ORDER BY installment_number", id)).toEqual(scheduleBefore);
+    });
+
+    it("every create sends a fresh rate-row id, so two loans never collide", async () => {
+        applyRateHistoryMigration();
+        await new LoanService().create(draftToCreateRequest(await termDraft()));
+        await overdraft();
+
+        const ids = invoke.mock.calls.map(([, args]) => (args as { request: { initialRateHistoryId?: string } }).request.initialRateHistoryId);
+        expect(ids).toHaveLength(2);
+        expect(ids.every(id => typeof id === "string" && id.length > 0)).toBe(true);
+        expect(new Set(ids).size).toBe(2);
+        expect(rateRows()).toHaveLength(2);
     });
 });

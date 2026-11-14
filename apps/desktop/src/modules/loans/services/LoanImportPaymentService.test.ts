@@ -87,9 +87,9 @@ const invoke = vi.fn(async (command: string, args: { request: Record<string, any
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
                     .run(t.id, t.accountId, t.payee, t.type, t.amount, t.transactionDate, t.notes, t.status, t.paymentMethod, t.isImported ? 1 : 0, t.createdAt, t.updatedAt);
             } else {
-                const existing = db.prepare("SELECT type, amount FROM transactions WHERE id = ? AND deleted_at IS NULL").get(payment.transactionId) as { type: string; amount: number } | undefined;
+                const existing = db.prepare("SELECT type, transfer_direction, amount FROM transactions WHERE id = ? AND deleted_at IS NULL").get(payment.transactionId) as { type: string; transfer_direction: string | null; amount: number } | undefined;
                 if (!existing) throw `${REFUSED}The linked transaction was not found.`;
-                if (existing.type !== "expense") throw `${REFUSED}Only an outgoing (expense) transaction can record a loan payment.`;
+                if (!(existing.type === "expense" || (existing.type === "transfer" && existing.transfer_direction === "OUT"))) throw `${REFUSED}Only an outgoing transaction (an Expense or a Transfer Out) can record a loan payment.`;
                 if (Math.abs(existing.amount - payment.amount) > 0.005) throw `${REFUSED}The payment amount does not match the linked transaction.`;
             }
             db.prepare(`INSERT INTO loan_schedule_payments (id, loan_id, schedule_id, transaction_id, payment_date, amount, principal_amount, interest_amount, transaction_linked, settles_installment)
@@ -808,14 +808,24 @@ describe("Link Existing Transaction to EMI, and learning from it", () => {
         expect(july.loanPayments?.applied ?? []).toEqual([]);
     });
 
-    it("cannot link a transaction from another account, or an income", async () => {
+    it("a transaction from another account links to the loan the user chooses; an income can never be an EMI", async () => {
         seedLoan(REGULAR);
         await importStatement([{ transactionDate: "2026-02-10", amount: 22842.47, description: "NACH DR CONTOSO" }], OTHER_BANK);
         await importStatement([{ transactionDate: "2026-02-11", amount: 100, type: "income", description: "NEFT CR SOMEONE" }]);
         const [otherAccount, income] = liveTransactions();
 
-        expect((await new LoanTransactionLinkService().getLinkOptions(otherAccount!.id)).refusal).toContain("No active loan");
-        expect((await new LoanTransactionLinkService().getLinkOptions(income!.id)).refusal).toContain("outgoing");
+        // Another account: offered like any loan, and linked by the user's choice alone.
+        const offered = await new LoanTransactionLinkService().getLinkOptions(otherAccount!.id);
+        expect(offered.refusal).toBeNull();
+        expect(offered.loans[0]).toMatchObject({ loanId: REGULAR.id, refusal: null });
+        const scheduleId = offered.loans[0]!.installments[0]!.scheduleId;
+        await new LoanTransactionLinkService().link({ transactionId: otherAccount!.id, loanId: REGULAR.id, scheduleId, mode: "full" });
+        expect(all("SELECT transaction_id FROM loan_schedule_payments")).toEqual([{ transaction_id: otherAccount!.id }]);
+
+        // Money in: the loan is listed, but refuses it.
+        const incomeOptions = await new LoanTransactionLinkService().getLinkOptions(income!.id);
+        expect(incomeOptions.refusal).toBeNull();
+        expect(incomeOptions.loans[0]!.refusal).toContain("outgoing");
     });
 });
 

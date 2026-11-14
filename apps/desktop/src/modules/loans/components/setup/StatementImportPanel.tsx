@@ -39,17 +39,38 @@ import {
     type StatementReviewState,
 } from "../../statementImport/statementReview";
 import { reviewToDraft, type StatementDraftResult } from "../../statementImport/statementToDraft";
+import { savesDirectly } from "../../statementImport/statementLoanSetup";
+import type { CreateLoanRequest } from "../../types";
 import { ChoiceSelect, Field, IssueList, NumberField, SmallButton, StepSection, SummaryGrid, formatDisplayDate } from "./setupFields";
+import { StatementLoanSetup } from "./StatementLoanSetup";
+import { StatementRateProposals } from "./StatementRateProposals";
+import { editOriginalRate, editRateProposal } from "../../statementImport/statementReview";
+import { hasRateProposals, rateReviewIssues, type ConfirmedStatementRates } from "../../statementImport/statementRateProposals";
 
 // ---------------------------------------------------------------------
-// Add Loan from a lender statement: read, classify, show the customer
-// everything with its source, and only after they confirm hand a draft to
-// the normal Add Loan wizard. This panel saves nothing.
+// Add Loan from a lender statement: read, classify and show the customer
+// everything with its source. A Term Loan is completed and saved from this
+// review itself (StatementLoanSetup - the one confirmation, the atomic
+// save); other routes (Overdraft) still hand a draft to the Add Loan
+// wizard. Nothing is written before that final confirmation.
 // ---------------------------------------------------------------------
 
 export interface StatementImportPanelProps {
     onContinue(result: StatementDraftResult, fileName: string): void;
     onCancel(): void;
+    /**
+     * Term Loan: save straight from the review (no second pass through the
+     * wizard). `rateChanges`: the statement's confirmed rate changes, to be
+     * recorded after creation through the reviewed Record Rate Change workflow.
+     */
+    onSaveTermLoan?(request: CreateLoanRequest, rateChanges?: ConfirmedStatementRates | null): Promise<void> | void;
+    saving?: boolean;
+    /**
+     * Interest rate history (migration 054) is available, so the statement's
+     * rate changes can be corrected and saved. Decided by the caller: this
+     * panel reads nothing from the database.
+     */
+    rateHistoryAvailable?: boolean;
 }
 
 const PROVENANCE_STYLES = {
@@ -207,7 +228,9 @@ function LedgerPreview({ facility }: { facility: FacilityExtraction }) {
                     { label: "Rows read", value: transactions.length },
                     { label: "Balance checks", value: check ? `${check.checkedRows - check.mismatches} of ${check.checkedRows} agree` : "-" },
                     { label: "Drawdowns", value: `${summary.drawdownCount} / ${formatMoney(summary.drawdownTotal)}` },
-                    { label: "Principal repaid", value: `${summary.repaymentCount} / ${formatMoney(summary.repaymentTotal)}` },
+                    // Repayment receipts are whole EMIs / payments (principal and
+                    // interest together) - not the principal repaid.
+                    { label: "Total repayments", value: `${summary.repaymentCount} / ${formatMoney(summary.repaymentTotal)}` },
                     { label: "Interest charged", value: formatMoney(summary.interestChargedTotal) },
                     { label: "Interest paid", value: formatMoney(summary.interestPaidTotal) },
                     { label: "Other charges", value: formatMoney(summary.otherChargesTotal) },
@@ -250,7 +273,7 @@ function ExtensionPreview({ state }: { state: StatementReviewState }) {
         return (
             <StepSection title="Official repayment schedule">
                 <p className="text-xs text-slate-600">
-                    {extension.schedule.length} instalments from {formatDisplayDate(extension.schedule[0]!.dueDate)} to {formatDisplayDate(extension.schedule[extension.schedule.length - 1]!.dueDate)}. It is checked again on the Schedule step.
+                    {extension.schedule.length} instalments from {formatDisplayDate(extension.schedule[0]!.dueDate)} to {formatDisplayDate(extension.schedule[extension.schedule.length - 1]!.dueDate)}. It is shown for checking only; import the lender's CSV under Repayment Schedule to use a lender schedule.
                 </p>
             </StepSection>
         );
@@ -283,27 +306,39 @@ function ExtensionPreview({ state }: { state: StatementReviewState }) {
     return null;
 }
 
-function RateHistory({ facility }: { facility: FacilityExtraction }) {
-    if (facility.rateHistory.length === 0) return null;
-
-    return (
-        <StepSection title="Interest rate history">
-            <ul className="space-y-0.5 text-xs text-slate-600">
-                {facility.rateHistory.map((change, index) => (
-                    <li key={index}>{change.effectiveDate ? formatDisplayDate(change.effectiveDate) : "No date"}: {change.rate}% (page {change.page})</li>
-                ))}
-            </ul>
-        </StepSection>
-    );
-}
-
-export function ReviewView({ state, setState, onContinue, onBack, warnings = [] }: { state: StatementReviewState; setState(next: StatementReviewState): void; onContinue(): void; onBack(): void; warnings?: readonly string[] }) {
+export function ReviewView({
+    state,
+    setState,
+    onContinue,
+    onBack,
+    warnings = [],
+    onSaveTermLoan,
+    saving = false,
+    rateHistoryAvailable = false,
+}: {
+    state: StatementReviewState;
+    setState(next: StatementReviewState): void;
+    onContinue(): void;
+    onBack(): void;
+    warnings?: readonly string[];
+    onSaveTermLoan?(request: CreateLoanRequest, rateChanges?: ConfirmedStatementRates | null): Promise<void> | void;
+    saving?: boolean;
+    /** Migration 054 applied: rate changes can be corrected and saved. */
+    rateHistoryAvailable?: boolean;
+}) {
     const route = state.selectedType ? routeForType(state.selectedType, state.droplineEnabled) : null;
     const missing = missingForSelection(state);
     const sections = reviewSections(state);
     const findings = reconciliationFindings(state);
-    const blockers = reviewBlockers(state);
+    // Unresolved proposed rate changes stop Continue (only when they can be saved).
+    const rateBlocking = rateHistoryAvailable && hasRateProposals(state.rates) ? rateReviewIssues(state.rates).blocking : [];
+    const blockers = [
+        ...reviewBlockers(state),
+        ...(rateBlocking.length > 0 ? [`${rateBlocking.length} issue(s) in the interest rate changes need your attention - resolve or leave out each one marked above.`] : []),
+    ];
     const isWizardRoute = route?.kind === "WIZARD";
+    // A Term Loan is completed and saved right here, below the review.
+    const direct = Boolean(onSaveTermLoan) && savesDirectly(state);
 
     return (
         <div className="space-y-4">
@@ -395,30 +430,39 @@ export function ReviewView({ state, setState, onContinue, onBack, warnings = [] 
                 </StepSection>
             )}
 
-            <RateHistory facility={state.facility} />
+            <StatementRateProposals
+                review={state.rates}
+                available={rateHistoryAvailable}
+                onChange={(key, change) => setState(editRateProposal(state, key, change))}
+                onOriginalRateChange={rate => setState(editOriginalRate(state, rate))}
+            />
             <ExtensionPreview state={state} />
             <LedgerPreview facility={state.facility} />
 
-            {isWizardRoute && (
+            {direct && onSaveTermLoan && <StatementLoanSetup review={state} saving={saving} onSave={onSaveTermLoan} onBack={onBack} rateHistoryAvailable={rateHistoryAvailable} />}
+
+            {isWizardRoute && !direct && (
                 <label className="flex items-start gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700">
                     <Checkbox checked={state.confirmed} onCheckedChange={checked => setState(setConfirmed(state, checked === true))} />
                     <span>I have checked the loan type and these details. Use them to fill the Add Loan form, where I can still change them. Nothing is saved yet.</span>
                 </label>
             )}
 
-            {blockers.length > 0 && <IssueList tone="warning" issues={blockers.map(message => ({ field: "blocker", message }))} />}
+            {!direct && blockers.length > 0 && <IssueList tone="warning" issues={blockers.map(message => ({ field: "blocker", message }))} />}
 
-            <div className="flex justify-between gap-3 border-t border-slate-100 pt-4">
-                <button type="button" onClick={onBack} className="h-10 rounded-xl border border-slate-200 px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Cancel review</button>
-                <button type="button" disabled={blockers.length > 0} onClick={onContinue} className="h-10 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
-                    Continue to Add Loan
-                </button>
-            </div>
+            {!direct && (
+                <div className="flex justify-between gap-3 border-t border-slate-100 pt-4">
+                    <button type="button" onClick={onBack} className="h-10 rounded-xl border border-slate-200 px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Cancel review</button>
+                    <button type="button" disabled={blockers.length > 0} onClick={onContinue} className="h-10 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+                        Continue to Add Loan
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
 
-export function StatementImportPanel({ onContinue, onCancel }: StatementImportPanelProps) {
+export function StatementImportPanel({ onContinue, onCancel, onSaveTermLoan, saving = false, rateHistoryAvailable = false }: StatementImportPanelProps) {
     const inputRef = useRef<HTMLInputElement | null>(null);
     const [file, setFile] = useState<File | null>(null);
     const [password, setPassword] = useState("");
@@ -468,10 +512,15 @@ export function StatementImportPanel({ onContinue, onCancel }: StatementImportPa
                 state={review}
                 warnings={analysis?.warnings ?? []}
                 setState={setReview}
+                onSaveTermLoan={onSaveTermLoan}
+                saving={saving}
+                rateHistoryAvailable={rateHistoryAvailable}
                 onBack={() => (multiple ? setReview(null) : (setReview(null), setAnalysis(null)))}
                 onContinue={() => {
                     try {
-                        onContinue(reviewToDraft(review), review.fileName);
+                        const result = reviewToDraft(review);
+                        // Without rate history nothing about rates is carried on (as before).
+                        onContinue({ ...result, rateHistory: rateHistoryAvailable ? result.rateHistory : null }, review.fileName);
                     } catch (error) {
                         setProblem(getErrorMessage(error, "The review is not complete."));
                     }

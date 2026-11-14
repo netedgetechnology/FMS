@@ -589,6 +589,28 @@ export function validateStep(draft: LoanSetupDraft, step: SetupStep, today: stri
 }
 
 /** The request LoanService.create saves - loan, schedule terms and setup. */
+/**
+ * A Term Loan whose lender account number is already on a live loan is the
+ * same loan again (for example, its statement imported twice). Shown on
+ * Basic Details so it is caught before the rest of the setup; the save
+ * itself refuses it too (LoanService.create and create_loan_atomic).
+ */
+export function duplicateLoanIssues(
+    draft: LoanSetupDraft,
+    existing: ReadonlyArray<{ name: string; loanAccountNumber?: string | null; deletedAt?: string | null }>
+): SetupIssue[] {
+    if (draft.loanKind !== LoanKind.TERM_LOAN) return [];
+
+    const number = normalizeLoanAccountNumber(draft.loanAccountNumber)?.toLowerCase();
+    if (!number) return [];
+
+    const match = existing.find(loan => !loan.deletedAt && normalizeLoanAccountNumber(loan.loanAccountNumber)?.toLowerCase() === number);
+
+    return match
+        ? [{ field: "loanAccountNumber", message: `A loan with account number ${draft.loanAccountNumber.trim()} already exists ("${match.name}"). Saving would add the same loan twice - open that loan instead, or correct the account number.` }]
+        : [];
+}
+
 export function draftToCreateRequest(draft: LoanSetupDraft): CreateLoanRequest {
     const setup = draftToDetails(draft);
     const isOd = draft.loanKind === LoanKind.OVERDRAFT;

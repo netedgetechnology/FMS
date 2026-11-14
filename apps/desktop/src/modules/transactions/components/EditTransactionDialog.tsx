@@ -12,6 +12,7 @@ import {
 import { OverdraftService } from "@/modules/loans/services/OverdraftService";
 
 import { TransactionService } from "../services";
+import { savedTypeLabel } from "../services/transactionTyping";
 import type { Transaction } from "../types";
 import type { TransactionFormValues } from "../validation";
 
@@ -37,6 +38,12 @@ export interface EditTransactionDialogProps {
  * restores Income / Expense), so the list must show the stored row, not
  * the form values. Throws, reading nothing back, when the save fails.
  */
+/** The success message, naming the saved type as read back from the record. */
+export function updatedMessage(updated: Pick<Transaction, "type" | "transferDirection"> | null | undefined): string {
+    const label = savedTypeLabel(updated);
+    return label ? `Transaction updated - saved as ${label}.` : "Transaction updated successfully.";
+}
+
 export async function saveTransactionEdit(
     service: Pick<TransactionService, "update" | "getById">,
     transaction: Transaction,
@@ -170,7 +177,9 @@ export function EditTransactionDialog({
 
             await onSuccess?.(updated);
 
-            toast.success("Transaction updated successfully.");
+            // Name what was really saved (read back), so a Type the
+            // category overrode is never reported as saved.
+            toast.success(updatedMessage(updated));
 
             onOpenChange(false);
         } catch (error) {

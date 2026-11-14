@@ -49,6 +49,7 @@ import { LoanAccountNumberMigration } from "./050_loan_account_number";
 import { LoanSetupMigration } from "./051_loan_setup";
 import { HistoricalInstalmentSettlementMigration } from "./052_historical_instalment_settlement";
 import { DroplineDrawingPowerScheduleMigration } from "./053_dropline_drawing_power_schedule";
+import { LoanInterestRateHistoryMigration } from "./054_loan_interest_rate_history";
 
 // Version 43 is retired: a since-removed migration (transfer links) was
 // applied to some development databases, and MigrationEngine skips any
@@ -105,5 +106,6 @@ export const migrations = [
     LoanSetupMigration,
     HistoricalInstalmentSettlementMigration,
     DroplineDrawingPowerScheduleMigration,
+    LoanInterestRateHistoryMigration,
 ];
 

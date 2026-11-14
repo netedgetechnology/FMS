@@ -87,15 +87,17 @@ describe("Transactions - Link to Loan icon for Overdraft transactions", () => {
 
     it("shows no icon for a transfer on an account no Overdraft is linked to", () => {
         expect(linkButtonFor(render(rows, [OD_ACCOUNT]), "elsewhere")).toBeUndefined();
-        // Without any Overdraft, transfers and credits have no icon - as before.
+        // Without any Overdraft, money in has no icon - as before; a Transfer
+        // Out does, because it can be a Term Loan EMI payment (like an Expense).
         const none = render(rows, []);
-        for (const id of ["in", "out", "credit", "elsewhere"]) {
+        for (const id of ["in", "credit", "elsewhere"]) {
             expect(linkButtonFor(none, id), id).toBeUndefined();
         }
+        expect(linkButtonFor(none, "out")).toContain('title="Link to Loan"');
     });
 
-    it("a Term Loan expense row keeps its Link to Loan EMI icon", () => {
+    it("a Term Loan expense row keeps its Link to Loan icon", () => {
         const html = render([transaction("emi", OTHER_ACCOUNT, "expense")], [OD_ACCOUNT]);
-        expect(linkButtonFor(html, "emi")).toContain('title="Link to Loan EMI"');
+        expect(linkButtonFor(html, "emi")).toContain('title="Link to Loan"');
     });
 });

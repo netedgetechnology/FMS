@@ -3,12 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useCurrencies } from "@/modules/currencies";
 import { useDisplaySettings } from "@/core/formatting/useDisplaySettings";
 import { AccountService } from "@/modules/accounts/services";
+import { LoanService } from "../../services/LoanService";
 import type { Account } from "@/modules/accounts/types";
 
 import { LoanKind, type CreateLoanRequest } from "../../types";
 import {
     SETUP_STEP_LABELS,
     draftToCreateRequest,
+    duplicateLoanIssues,
     emptyLoanSetupDraft,
     stepsFor,
     validateStep,
@@ -19,6 +21,16 @@ import { BasicsStep, DisbursementStep, ExpensesStep, OverdraftStep, RepaymentSte
 import { ReviewStep } from "./ReviewStep";
 import { ScheduleStep } from "./ScheduleStep";
 import { IssueList } from "./setupFields";
+import type { StatementFacts } from "../../statementImport/statementReconciliation";
+import {
+    hasRateProposals,
+    overdraftStatementRateHistoryFor,
+    rateReviewIssues,
+    type RateLoanContext,
+    type StatementRateReview,
+} from "../../statementImport/statementRateProposals";
+import { localToday } from "../../setup/historicalInstalments";
+import { StatementRateConfirmation } from "./StatementRateProposals";
 
 // ---------------------------------------------------------------------
 // Add Loan - the complete setup, one step at a time. The steps adapt to
@@ -34,6 +46,15 @@ export interface AddLoanWizardProps {
     kindLocked?: boolean;
     /** The currency a lender statement states, when FinWea has it. */
     preferredCurrencyCode?: string | null;
+    /** A Term Loan filled from a lender statement: its figures, checked on Review. */
+    statementFacts?: StatementFacts | null;
+    /**
+     * Overdraft / Cash Credit / Dropline filled from a lender statement: its
+     * rate changes as reviewed there (Stage 4). Confirmed with their own
+     * tick on Review and saved with the loan; null when there are none or
+     * rate history is not available.
+     */
+    statementRates?: { review: StatementRateReview; fileName: string } | null;
     onSubmit(request: CreateLoanRequest): Promise<void> | void;
     onCancel(): void;
 }
@@ -53,7 +74,11 @@ const SHARED_FIELDS = [
     "notes",
 ] as const satisfies ReadonlyArray<keyof LoanSetupDraft>;
 
-export function AddLoanWizard({ loading, initialDraft, kindLocked = false, preferredCurrencyCode = null, onSubmit, onCancel }: AddLoanWizardProps) {
+function issuesFor(draft: LoanSetupDraft, step: SetupStep, existingLoans: Parameters<typeof duplicateLoanIssues>[1]): SetupIssue[] {
+    return [...validateStep(draft, step), ...(step === "basics" || step === "review" ? duplicateLoanIssues(draft, existingLoans) : [])];
+}
+
+export function AddLoanWizard({ loading, initialDraft, kindLocked = false, preferredCurrencyCode = null, statementFacts = null, statementRates = null, onSubmit, onCancel }: AddLoanWizardProps) {
     const { currencies } = useCurrencies();
     const { defaultCurrency } = useDisplaySettings();
     const [accounts, setAccounts] = useState<Account[]>([]);
@@ -65,6 +90,14 @@ export function AddLoanWizard({ loading, initialDraft, kindLocked = false, prefe
     const [attempted, setAttempted] = useState<Set<SetupStep>>(new Set());
     const [confirmed, setConfirmed] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [existingLoans, setExistingLoans] = useState<Array<{ name: string; loanAccountNumber?: string | null }>>([]);
+    const [ratesConfirmed, setRatesConfirmed] = useState(false);
+
+    // Only an Overdraft-kind loan saves a statement's rate changes with itself
+    // (a statement Term Loan is saved from Statement Review, never here).
+    const showRates = Boolean(statementRates && draft.loanKind === LoanKind.OVERDRAFT && hasRateProposals(statementRates.review));
+    const rateContext: RateLoanContext = { loanKind: LoanKind.OVERDRAFT, startDate: draft.startDate || null, loanRate: draft.interestRate, today: localToday() };
+    const ratesReady = !showRates || (ratesConfirmed && rateReviewIssues(statementRates!.review, rateContext).blocking.length === 0);
 
     const steps = stepsFor(draft.loanKind);
     const step = steps[Math.min(stepIndex, steps.length - 1)]!;
@@ -75,6 +108,10 @@ export function AddLoanWizard({ loading, initialDraft, kindLocked = false, prefe
             .getAll()
             .then(result => mounted && setAccounts(result))
             .catch(error => console.error("Failed to load accounts for Add Loan:", error));
+        new LoanService()
+            .getAll()
+            .then(result => mounted && setExistingLoans(result))
+            .catch(error => console.error("Failed to load loans for Add Loan:", error));
         return () => {
             mounted = false;
         };
@@ -91,11 +128,14 @@ export function AddLoanWizard({ loading, initialDraft, kindLocked = false, prefe
 
     // Problems are shown once the user has tried to leave the step, and
     // then follow every change so they disappear as they are fixed.
-    const issues: SetupIssue[] = useMemo(() => (attempted.has(step) ? validateStep(draft, step) : []), [attempted, draft, step]);
+    // Plus, on Basic Details and Review, a loan that already exists.
+    const stepIssues = (at: SetupStep): SetupIssue[] => issuesFor(draft, at, existingLoans);
+    const issues: SetupIssue[] = useMemo(() => (attempted.has(step) ? issuesFor(draft, step, existingLoans) : []), [attempted, draft, step, existingLoans]);
 
     function update(change: Partial<LoanSetupDraft> | ((draft: LoanSetupDraft) => Partial<LoanSetupDraft>)) {
         setSaveError(null);
         setConfirmed(false);
+        setRatesConfirmed(false);
         setDraft(current => ({ ...current, ...(typeof change === "function" ? change(current) : change) }));
     }
 
@@ -116,18 +156,21 @@ export function AddLoanWizard({ loading, initialDraft, kindLocked = false, prefe
 
     function goNext() {
         setAttempted(current => new Set(current).add(step));
-        if (validateStep(draft, step).length === 0) {
+        if (stepIssues(step).length === 0) {
             setStepIndex(index => Math.min(index + 1, steps.length - 1));
         }
     }
 
     async function save() {
         setAttempted(current => new Set(current).add("review"));
-        if (validateStep(draft, "review").length > 0 || !confirmed) return;
+        if (stepIssues("review").length > 0 || !confirmed || !ratesReady) return;
 
         let request: CreateLoanRequest;
         try {
             request = draftToCreateRequest(draft);
+            // Every change left out: nothing from the statement is sent (M1).
+            const history = showRates ? overdraftStatementRateHistoryFor(statementRates!.review, rateContext, statementRates!.fileName) : null;
+            if (history) request = { ...request, statementRateHistory: history };
         } catch (error) {
             setSaveError(error instanceof Error ? error.message : String(error));
             return;
@@ -167,7 +210,10 @@ export function AddLoanWizard({ loading, initialDraft, kindLocked = false, prefe
             {step === "repayment" && <RepaymentStep {...stepProps} />}
             {step === "schedule" && <ScheduleStep {...stepProps} />}
             {step === "overdraft" && <OverdraftStep {...stepProps} />}
-            {step === "review" && <ReviewStep draft={draft} accounts={accounts} issues={issues} confirmed={confirmed} onConfirmedChange={setConfirmed} />}
+            {step === "review" && showRates && (
+                <StatementRateConfirmation review={statementRates!.review} context={rateContext} confirmed={ratesConfirmed} onConfirmedChange={setRatesConfirmed} termLoan={false} />
+            )}
+            {step === "review" && <ReviewStep draft={draft} accounts={accounts} issues={issues} confirmed={confirmed} onConfirmedChange={setConfirmed} statementFacts={statementFacts} />}
 
             {step !== "review" && issues.length > 0 && <IssueList issues={issues} />}
             {saveError && <IssueList issues={[{ field: "save", message: saveError }]} />}
@@ -195,7 +241,7 @@ export function AddLoanWizard({ loading, initialDraft, kindLocked = false, prefe
                     {step === "review" ? (
                         <button
                             type="button"
-                            disabled={loading || !confirmed}
+                            disabled={loading || !confirmed || !ratesReady}
                             onClick={() => void save()}
                             className="h-10 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                         >

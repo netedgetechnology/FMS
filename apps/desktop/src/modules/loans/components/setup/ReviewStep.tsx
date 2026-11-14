@@ -15,6 +15,7 @@ import { INTEREST_METHOD_LABELS, type LoanSetupDraft, type SetupIssue } from "..
 import { draftDrawingPower, draftToDetails, schedulePreview, termPrincipal } from "../../setup/loanSetupWizard";
 import { entriesFromDetails, historicalSummary } from "../../setup/historicalInstalments";
 import { ScheduleTable } from "./ScheduleStep";
+import { compareWithStatement, type StatementFacts } from "../../statementImport/statementReconciliation";
 import { IssueList, StepSection, SummaryGrid, formatDisplayDate } from "./setupFields";
 
 export function ReviewStep({
@@ -23,12 +24,20 @@ export function ReviewStep({
     issues,
     confirmed,
     onConfirmedChange,
+    statementFacts = null,
+    showSummary = true,
 }: {
     draft: LoanSetupDraft;
     accounts: readonly Account[];
     issues: readonly SetupIssue[];
     confirmed: boolean;
     onConfirmedChange(value: boolean): void;
+    statementFacts?: StatementFacts | null;
+    /**
+     * The terms summary and schedule table. Statement Review turns them off:
+     * the review itself and its schedule section already show every term.
+     */
+    showSummary?: boolean;
 }) {
     const isOd = draft.loanKind === LoanKind.OVERDRAFT;
     const details = useMemo(() => draftToDetails(draft), [draft]);
@@ -44,6 +53,16 @@ export function ReviewStep({
             return { value: null, error: error instanceof Error ? error.message : String(error) };
         }
     }, [draft, isOd]);
+
+    const statementChecks =
+        !isOd && statementFacts && preview.value
+            ? compareWithStatement(statementFacts, {
+                  principal: termPrincipal(draft),
+                  schedule: preview.value.schedule,
+                  resolved: historical.linked + historical.settledBeforeFinwea,
+                  scheduleSource: draft.scheduleMethod,
+              })
+            : [];
 
     const transactions = new Map(
         [...draft.disbursements.map(d => d.transaction), ...draft.expenses.map(e => e.transaction)]
@@ -88,6 +107,10 @@ export function ReviewStep({
             message: `${historical.settledBeforeFinwea} instalment${historical.settledBeforeFinwea === 1 ? " is" : "s are"} declared "Settled before FinWea": marked paid with no bank transaction and no payment record, and labelled that way - never as a linked payment.`,
         });
     }
+    // Shown directly under the Statement Check table, not with these warnings.
+    const statementDifferences: SetupIssue[] = statementChecks.flatMap(check =>
+        !check.agrees && check.explanation ? [{ field: `statement.${check.id}`, message: `${check.label}: ${check.explanation}` }] : []
+    );
     const unlinkedPaid = details.expenses.filter(e => e.settlement === "PAID_SEPARATELY" && !e.transactionId).length;
     if (unlinkedPaid > 0) {
         warnings.push({
@@ -109,49 +132,77 @@ export function ReviewStep({
         <div className="space-y-4">
             <IssueList issues={issues} />
 
-            <StepSection title={`${LOAN_KIND_LABELS[draft.loanKind]} - ${draft.name || "Unnamed"}`}>
-                {isOd ? (
-                    <SummaryGrid
-                        items={[
-                            { label: "Sanctioned limit", value: formatMoney(Number(draft.creditLimit ?? 0)) },
-                            { label: "Drawing power", value: draft.drawingPower === null ? "Same as limit" : formatMoney(draft.drawingPower) },
-                            { label: "Opening used", value: formatMoney(Number(draft.openingUsed ?? 0)) },
-                            { label: "Opening date", value: formatDisplayDate(draft.openingUsedAsOf) },
-                            { label: "Available", value: odPosition ? formatMoney(odPosition.available) : "-" },
-                            { label: "Interest rate", value: `${draft.interestRate ?? 0}% ${draft.rateType === "FLOATING" ? "floating" : "fixed"}` },
-                            { label: "Linked accounts", value: draft.odAccountIds.map(id => accountName(id)).join(", ") || "-" },
-                            { label: "Initial expenses", value: formatMoney(totals.expensesTotal) },
-                            { label: "Account number", value: draft.loanAccountNumber || "-" },
-                        ]}
-                    />
-                ) : (
-                    <SummaryGrid
-                        items={[
-                            { label: "Sanctioned", value: draft.sanctionedAmount ? formatMoney(draft.sanctionedAmount) : "-" },
-                            { label: "Gross disbursed", value: formatMoney(totals.grossDisbursed || termPrincipal(draft)) },
-                            { label: "Lender deductions", value: formatMoney(totals.totalDeductions) },
-                            { label: "Net received", value: details.disbursements.length ? formatMoney(totals.netReceived) : "-" },
-                            { label: "Initial expenses", value: formatMoney(totals.expensesTotal) },
-                            { label: "Interest", value: `${draft.interestRate ?? 0}% ${draft.rateType === "FLOATING" ? "floating" : "fixed"}` },
-                            { label: "Method", value: INTEREST_METHOD_LABELS[draft.interestMethod] },
-                            { label: "Tenure", value: preview.value ? `${preview.value.tenureMonths} months` : "-" },
-                            { label: "EMI", value: preview.value ? formatMoney(preview.value.emiAmount) : "-" },
-                            { label: "First EMI", value: formatDisplayDate(preview.value?.schedule[0]?.dueDate) },
-                            { label: "Opening principal", value: formatMoney(termPrincipal(draft)) },
-                            { label: "Projected outstanding", value: preview.value ? formatMoney(preview.value.outstandingPrincipal) : "-" },
-                            { label: "Schedule", value: draft.scheduleMethod === "LENDER_CSV" ? "Lender CSV" : "Generated" },
-                            { label: "Historical EMIs linked", value: historical.linked },
-                            { label: "Settled before FinWea", value: historical.settledBeforeFinwea },
-                            { label: "EMI account", value: accountName(draft.linkedAccountId || null) },
-                            { label: "Account number", value: draft.loanAccountNumber || "-" },
-                        ]}
-                    />
-                )}
-            </StepSection>
+            {showSummary && (
+                <StepSection title={`${LOAN_KIND_LABELS[draft.loanKind]} - ${draft.name || "Unnamed"}`}>
+                    {isOd ? (
+                        <SummaryGrid
+                            items={[
+                                { label: "Sanctioned limit", value: formatMoney(Number(draft.creditLimit ?? 0)) },
+                                { label: "Drawing power", value: draft.drawingPower === null ? "Same as limit" : formatMoney(draft.drawingPower) },
+                                { label: "Opening used", value: formatMoney(Number(draft.openingUsed ?? 0)) },
+                                { label: "Opening date", value: formatDisplayDate(draft.openingUsedAsOf) },
+                                { label: "Available", value: odPosition ? formatMoney(odPosition.available) : "-" },
+                                { label: "Interest rate", value: `${draft.interestRate ?? 0}% ${draft.rateType === "FLOATING" ? "floating" : "fixed"}` },
+                                { label: "Linked accounts", value: draft.odAccountIds.map(id => accountName(id)).join(", ") || "-" },
+                                { label: "Initial expenses", value: formatMoney(totals.expensesTotal) },
+                                { label: "Account number", value: draft.loanAccountNumber || "-" },
+                            ]}
+                        />
+                    ) : (
+                        <SummaryGrid
+                            items={[
+                                { label: "Sanctioned", value: draft.sanctionedAmount ? formatMoney(draft.sanctionedAmount) : "-" },
+                                { label: "Gross disbursed", value: formatMoney(totals.grossDisbursed || termPrincipal(draft)) },
+                                { label: "Lender deductions", value: formatMoney(totals.totalDeductions) },
+                                { label: "Net received", value: details.disbursements.length ? formatMoney(totals.netReceived) : "-" },
+                                { label: "Initial expenses", value: formatMoney(totals.expensesTotal) },
+                                { label: "Interest", value: `${draft.interestRate ?? 0}% ${draft.rateType === "FLOATING" ? "floating" : "fixed"}` },
+                                { label: "Method", value: INTEREST_METHOD_LABELS[draft.interestMethod] },
+                                { label: "Tenure", value: preview.value ? `${preview.value.tenureMonths} months` : "-" },
+                                { label: "EMI", value: preview.value ? formatMoney(preview.value.emiAmount) : "-" },
+                                { label: "First EMI", value: formatDisplayDate(preview.value?.schedule[0]?.dueDate) },
+                                { label: "Opening principal", value: formatMoney(termPrincipal(draft)) },
+                                { label: "Projected outstanding", value: preview.value ? formatMoney(preview.value.outstandingPrincipal) : "-" },
+                                { label: "Schedule", value: draft.scheduleMethod === "LENDER_CSV" ? "Lender CSV" : "Generated" },
+                                { label: "Historical EMIs linked", value: historical.linked },
+                                { label: "Settled before FinWea", value: historical.settledBeforeFinwea },
+                                { label: "EMI account", value: accountName(draft.linkedAccountId || null) },
+                                { label: "Account number", value: draft.loanAccountNumber || "-" },
+                            ]}
+                        />
+                    )}
+                </StepSection>
+            )}
 
-            {!isOd && (
+            {showSummary && !isOd && (
                 <StepSection title="Repayment Schedule">
                     {preview.error ? <IssueList issues={[{ field: "schedule", message: preview.error }]} /> : preview.value && <ScheduleTable schedule={preview.value.schedule} limit={6} />}
+                </StepSection>
+            )}
+
+            {statementChecks.length > 0 && statementFacts && (
+                <StepSection title="Statement Check" hint={`${statementFacts.fileName} compared with the loan about to be saved. Nothing is changed on either side; differences are explained under the table.`}>
+                    <table className="w-full text-xs">
+                        <thead className="text-slate-400">
+                            <tr>
+                                <th className="px-2 py-1 text-left font-medium">Figure</th>
+                                <th className="px-2 py-1 text-right font-medium">Statement</th>
+                                <th className="px-2 py-1 text-right font-medium">FinWea</th>
+                                <th className="px-2 py-1 text-right font-medium">Result</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {statementChecks.map(check => (
+                                <tr key={check.id} className="border-t border-slate-50">
+                                    <td className="px-2 py-1 text-slate-700">{check.label}</td>
+                                    <td className="px-2 py-1 text-right">{check.statement}</td>
+                                    <td className="px-2 py-1 text-right">{check.finwea}</td>
+                                    <td className={`px-2 py-1 text-right font-medium ${check.agrees ? "text-emerald-700" : "text-amber-700"}`}>{check.agrees ? "Matches" : "Differs"}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {statementDifferences.length > 0 && <IssueList issues={statementDifferences} tone="warning" />}
                 </StepSection>
             )}
 

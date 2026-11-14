@@ -96,6 +96,16 @@ describe("Transactions Landmark icon - category gate", () => {
         expect(showsLoanLinkIcon(row("c-prin", "expense"), sets)).toBe(true);
     });
 
+    it("1b. a Transfer Out in a loan category -> icon (it can be an EMI payment); a Transfer In or no direction off an OD account -> none", () => {
+        const transfer = (direction: "IN" | "OUT" | null, accountId = "acct-term") => ({ ...row("c-prin", "transfer", accountId), transferDirection: direction });
+        expect(showsLoanLinkIcon(transfer("OUT"), sets)).toBe(true);
+        expect(showsLoanLinkIcon(transfer("IN"), sets)).toBe(false);
+        expect(showsLoanLinkIcon(transfer(null), sets)).toBe(false);
+        expect(showsLoanLinkIcon(row("c-prin", "income"), sets)).toBe(false);
+        // On an OD account money in still shows it (a drawdown), as before.
+        expect(showsLoanLinkIcon(transfer("IN", OD_ACCOUNT), sets)).toBe(true);
+    });
+
     it("2. Term Loan account + Bank Transfer -> no icon", () => {
         expect(showsLoanLinkIcon(row("c-bank", "expense"), sets)).toBe(false);
         expect(showsLoanLinkIcon(row("c-bank", "transfer"), sets)).toBe(false);

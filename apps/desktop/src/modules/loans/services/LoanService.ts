@@ -35,6 +35,7 @@ import {
     isOverdraft,
 } from "../types";
 import { normalizeLoanAccountNumber } from "../validation/loanSchema";
+import { directRateEditRefusal } from "../setup/interestRateHistory";
 
 // ---------------------------------------------------------------------
 // Data-integrity rules enforced here (Loans Phase 1 - data integrity and
@@ -107,6 +108,35 @@ import { normalizeLoanAccountNumber } from "../validation/loanSchema";
 // reversePayment for how a payment gets removed from the ledger in
 // the first place.
 // ---------------------------------------------------------------------
+
+/**
+ * Stage 4: the create request's statement rate history - ids and save
+ * times for each confirmed change, in date order (kept distinct, so rows
+ * on one save never tie). Absent when the customer confirmed none.
+ */
+export function statementRateHistoryRequest(
+    history: CreateLoanRequest["statementRateHistory"],
+    now: string,
+    newId: () => string = () => crypto.randomUUID()
+): CreateLoanAtomicRequest["statementRateHistory"] {
+    if (!history) return undefined;
+    const base = Date.parse(now);
+
+    return {
+        initialRate: history.originalRate,
+        changes: [...history.changes]
+            .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))
+            .map((change, index) => ({
+                id: newId(),
+                effectiveFrom: change.effectiveFrom,
+                rate: change.rate,
+                rateType: change.rateType,
+                reference: change.reference,
+                notes: change.notes,
+                createdAt: Number.isNaN(base) ? now : new Date(base + index + 1).toISOString(),
+            })),
+    };
+}
 
 export class LoanService {
     private readonly repository = new LoanRepository();
@@ -252,10 +282,18 @@ export class LoanService {
         };
     }
 
-    /** A setup refusal from the Rust command, as the plain message it carries. */
+    /**
+     * Every new loan - Term Loan or Overdraft, typed in or from a lender
+     * statement - is saved here, with its initial Interest Rate History row
+     * (migration 054) in the same transaction.
+     * A setup refusal from the Rust command comes back as the plain message it carries.
+     */
     private async createAtomicWithSetup(request: CreateLoanAtomicRequest): Promise<void> {
         try {
-            await this.repository.createAtomic(request);
+            await this.repository.createAtomic({
+                ...request,
+                initialRateHistoryId: request.initialRateHistoryId ?? crypto.randomUUID(),
+            });
         } catch (error) {
             const match = String(error instanceof Error ? error.message : error).match(
                 /LOAN_SETUP_REFUSED: (.*)$/s
@@ -385,6 +423,67 @@ export class LoanService {
         return accountId?.trim() || null;
     }
 
+    private async refuseDuplicateLoanAccountNumber(
+        loanAccountNumber: string | null | undefined
+    ): Promise<void> {
+        const number = normalizeLoanAccountNumber(loanAccountNumber);
+
+        if (!number) return;
+
+        const existing =
+            await this.repository.findLiveByLoanAccountNumber(number);
+
+        if (existing.length > 0) {
+            throw new Error(
+                `A loan with account number ${number} already exists ("${existing[0]!.name}"). Nothing was saved, so the same loan is not added twice.`
+            );
+        }
+    }
+
+    /**
+     * The lender institution for a new Term Loan: an existing one, or one
+     * to create - returned, not written, so create_loan_atomic inserts it
+     * in the loan's own transaction.
+     */
+    private async prepareLenderInstitution(
+        institutionName: string | null | undefined,
+        institutionId: string | null | undefined,
+        now: string
+    ): Promise<{
+        id: string | null;
+        pending: NonNullable<CreateLoanAtomicRequest["newLenderInstitution"]> | null;
+    }> {
+        if (institutionId) {
+            return { id: institutionId, pending: null };
+        }
+
+        const name = institutionName?.trim();
+
+        if (!name) {
+            return { id: null, pending: null };
+        }
+
+        const existing =
+            await this.institutionRepository.getByName(name);
+
+        if (existing) {
+            return { id: existing.id, pending: null };
+        }
+
+        const id = crypto.randomUUID();
+
+        return {
+            id,
+            pending: {
+                id,
+                name,
+                institutionType: "Financial Institution",
+                createdAt: now,
+                updatedAt: now,
+            },
+        };
+    }
+
     private async resolveLenderInstitutionId(
         institutionName?: string | null,
         institutionId?: string | null
@@ -435,13 +534,28 @@ export class LoanService {
             return await this.createOverdraft(request);
         }
 
+        // A Term Loan is never created with a statement's rate changes: its
+        // schedule would not reflect them. They go through the reviewed
+        // Record Rate Change workflow (Keep EMI / Keep Tenure) after creation.
+        if (request.statementRateHistory) {
+            throw new Error("A Term Loan's statement rate changes are recorded after it is created, through Record rate change (Keep EMI / Keep Tenure).");
+        }
+
         const now = new Date().toISOString();
 
-        const lenderInstitutionId =
-            await this.resolveLenderInstitutionId(
-                request.lenderInstitutionName,
-                request.lenderInstitutionId
-            );
+        // The same lender account number on a live loan is this loan again
+        // (e.g. its statement imported twice). create_loan_atomic repeats
+        // this check inside its transaction.
+        await this.refuseDuplicateLoanAccountNumber(request.loanAccountNumber);
+
+        // A new lender institution is only prepared here; it is written in
+        // the same transaction as the loan, so a refused save leaves none.
+        const lender = await this.prepareLenderInstitution(
+            request.lenderInstitutionName,
+            request.lenderInstitutionId,
+            now
+        );
+        const lenderInstitutionId = lender.id;
 
         const loanAccountId = crypto.randomUUID();
 
@@ -594,6 +708,7 @@ export class LoanService {
         loan.paidInstallments = paidInstalmentCount(schedule);
 
         await this.createAtomicWithSetup({
+            ...(lender.pending ? { newLenderInstitution: lender.pending } : {}),
             loanAccount: {
                 id: loanAccount.id,
                 institutionId: loanAccount.institutionId,
@@ -846,6 +961,9 @@ export class LoanService {
                 status: request.status,
             },
             setup: setup ? this.atomicSetup(setup) : undefined,
+            // Stage 4: a statement's confirmed rate changes, recorded (never
+            // recalculated) in the same transaction; re-checked in Rust.
+            statementRateHistory: statementRateHistoryRequest(request.statementRateHistory, now),
         });
 
         return loanId;
@@ -887,6 +1005,17 @@ export class LoanService {
             throw new Error(
                 "The number of paid instalments comes from the EMI schedule and can't be edited. Record, link or reverse EMI payments from the EMI schedule instead."
             );
+        }
+
+        // Interest Rate History (Stage 3.1): an edit never changes an
+        // existing loan's rate - Term Loan, Overdraft, Cash Credit or
+        // Dropline alike. A rate change is recorded with its effective date
+        // and source (InterestRateChangeService -> record_rate_change_atomic),
+        // so the history is never bypassed. The OD command refuses it too.
+        const rateRefusal = directRateEditRefusal(existing.interestRate, request.interestRate, isOverdraft(existing));
+
+        if (rateRefusal) {
+            throw new Error(rateRefusal);
         }
 
         // A caller that doesn't send it (undefined) keeps the saved number;

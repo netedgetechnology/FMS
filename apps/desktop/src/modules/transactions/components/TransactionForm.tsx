@@ -42,6 +42,7 @@ import {
     derivationSideFor,
     directionChecks,
     finalTyping,
+    transferCategoryTypeNotice,
     initialDebitCreditSide,
     sideOf,
     typeForSelectedCategory,
@@ -428,6 +429,13 @@ export function TransactionForm({
         typingUnchanged,
     });
     const blocked = checks.blocking.length > 0;
+    // Income / Expense chosen on a Transfer category: said plainly, before
+    // saving - the Type field alone would still show the user's choice.
+    const typeNotice = transferCategoryTypeNotice({
+        chosenType: transactionType,
+        saved,
+        categoryName: selectedCategoryForType?.name,
+    });
     const directionLabel = (direction: string | null | undefined) =>
         direction === "IN" ? "In" : direction === "OUT" ? "Out" : null;
 
@@ -549,13 +557,21 @@ export function TransactionForm({
                                         </p>
                                     )}
 
-                                    {saved.type === "transfer" &&
+                                    {typeNotice && (
+                                        <p
+                                            role="status"
+                                            data-type-override="true"
+                                            className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-medium leading-4 text-amber-800"
+                                        >
+                                            {typeNotice}
+                                        </p>
+                                    )}
+
+                                    {!typeNotice &&
+                                        saved.type === "transfer" &&
                                         directionLabel(saved.transferDirection) && (
                                             <p className="text-xs leading-4 text-slate-500">
-                                                {saved.type !== transactionType
-                                                    ? `${selectedCategoryForType?.name ?? "This category"} is a Transfer category, so this will be saved as `
-                                                    : "Will be saved as "}
-                                                Transfer{" "}
+                                                Will be saved as Transfer{" "}
                                                 {directionLabel(saved.transferDirection)}
                                                 {saved.transferDirection === "IN"
                                                     ? " - adds to this account's balance."

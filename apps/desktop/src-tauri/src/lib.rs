@@ -9,6 +9,7 @@ mod loan_delete;
 mod loan_payment;
 mod loan_setup;
 mod overdraft_update;
+mod rate_change;
 mod storage;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -41,6 +42,7 @@ pub fn run() {
             loan_payment::record_emi_payment_atomic,
             loan_payment::reverse_emi_payment_atomic,
             overdraft_update::update_overdraft_atomic,
+            rate_change::record_rate_change_atomic,
             category_import::create_categories_atomic,
             category_import::save_category_csv_template,
         ])

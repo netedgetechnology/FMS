@@ -234,6 +234,7 @@ export function EditLoanDialog({
                     <OverdraftForm
                         drawingPowerSchedule={droplineSteps}
                         facilityLabel={loan.loanType?.trim() || "Overdraft"}
+                        rateLocked
                         defaultValues={{
                             name: loan.name,
                             loanAccountNumber: loan.loanAccountNumber ?? "",

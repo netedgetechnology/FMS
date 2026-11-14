@@ -1,4 +1,6 @@
 import { LoanRepository } from "../repositories/LoanRepository";
+import { InterestRateHistoryRepository } from "../repositories/InterestRateHistoryRepository";
+import { scheduleGenerationRateIssue } from "../setup/interestRateHistory";
 import { LoanPaymentScheduleRepository } from "../repositories/LoanPaymentScheduleRepository";
 import { LoanSchedulePaymentRepository } from "../repositories/LoanSchedulePaymentRepository";
 import { EMIScheduleGenerator } from "./EMIScheduleGenerator";
@@ -156,6 +158,9 @@ export class EMIScheduleService {
     private readonly paymentRepository =
         new LoanSchedulePaymentRepository();
 
+    private readonly rateHistoryRepository =
+        new InterestRateHistoryRepository();
+
     async getSchedule(
         loanId: string
     ): Promise<LoanPaymentSchedule[]> {
@@ -239,6 +244,17 @@ export class EMIScheduleService {
             throw new Error(
                 "An EMI schedule already exists for this loan."
             );
+        }
+
+        // Interest Rate History (Stage 3.1): one stored rate must still
+        // describe the loan (empty history until migration 054 is applied).
+        const rateIssue = scheduleGenerationRateIssue(
+            loan.interestRate,
+            await this.rateHistoryRepository.findByLoan(loanId)
+        );
+
+        if (rateIssue) {
+            throw new Error(rateIssue);
         }
 
         const {

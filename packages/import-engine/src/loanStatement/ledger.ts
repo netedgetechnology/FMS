@@ -518,7 +518,7 @@ export function buildRateTable(tables: readonly StatementTable[]): RateChange[] 
 
             return rate === null
                 ? []
-                : [{ effectiveDate: row.date || null, rate, previousRate: null, page: row.page, raw: Object.values(row.cells).join(" ") }];
+                : [{ effectiveDate: row.date || null, rate, previousRate: null, page: row.page, raw: Object.values(row.cells).join(" "), origin: "TABLE", datesInText: row.date ? [row.date] : [] }];
         });
 }
 
@@ -536,6 +536,10 @@ export function revisionsFromText(
     const rates: RateChange[] = [];
     const limits: LimitChange[] = [];
 
+    // Every date printed on a line, as read - evidence for the review (more
+    // than one: the effective date is ambiguous).
+    const datesOn = (text: string): string[] => [...new Set((text.match(DATE_IN_TEXT) ?? []).map(found => parseDateValue(found, dates)).filter((value): value is string => value !== null))];
+
     for (const { page, text } of lines) {
         const fromTo = RATE_FROM_TO.exec(text);
         if (fromTo) {
@@ -546,7 +550,7 @@ export function revisionsFromText(
             const dateText = printedDates[printedDates.length - 1];
 
             if (next !== null) {
-                rates.push({ effectiveDate: dateText ? parseDateValue(dateText, dates) : null, rate: next, previousRate: previous, page, raw: text });
+                rates.push({ effectiveDate: dateText ? parseDateValue(dateText, dates) : null, rate: next, previousRate: previous, page, raw: text, origin: "TEXT", datesInText: datesOn(text) });
             }
             continue;
         }
@@ -554,7 +558,7 @@ export function revisionsFromText(
         const rate = RATE_REVISION.exec(text);
         if (rate) {
             const value = parseRate(rate[1]!);
-            if (value !== null) rates.push({ effectiveDate: parseDateValue(rate[2]!, dates), rate: value, previousRate: null, page, raw: text });
+            if (value !== null) rates.push({ effectiveDate: parseDateValue(rate[2]!, dates), rate: value, previousRate: null, page, raw: text, origin: "TEXT", datesInText: datesOn(text) });
             continue;
         }
 
